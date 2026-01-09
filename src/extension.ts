@@ -1,20 +1,23 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import { TextDecoder } from 'node:util';
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
 
 const OUTPUT_CHANNEL_NAME = 'LM Tools';
+const LOG_CHANNEL_NAME = 'LM Tools MCP';
 const DUMP_COMMAND_ID = 'lm-tools-dump';
 const START_COMMAND_ID = 'lm-tools-mcp.start';
 const STOP_COMMAND_ID = 'lm-tools-mcp.stop';
 const CONFIGURE_COMMAND_ID = 'lm-tools-mcp.configureTools';
+const TAKE_OVER_COMMAND_ID = 'lm-tools-mcp.takeOver';
 const CONFIG_SECTION = 'lmToolsMcp';
 const CONFIG_DISABLED_TOOLS = 'tools.disabled';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const DEFAULT_MAX_CHARS = 2000;
+const CONTROL_STOP_PATH = '/mcp-control/stop';
 
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'summary' | 'full';
@@ -40,10 +43,16 @@ interface McpServerState {
   port: number;
 }
 
+type OwnershipState = 'owner' | 'inUse' | 'off';
+
 let serverState: McpServerState | undefined;
+let statusBarItem: vscode.StatusBarItem | undefined;
+let logChannel: vscode.LogOutputChannel | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+  logChannel = vscode.window.createOutputChannel(LOG_CHANNEL_NAME, { log: true });
+  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const dumpCommand = vscode.commands.registerCommand(DUMP_COMMAND_ID, () => {
     outputChannel.clear();
     outputChannel.show(true);
@@ -58,6 +67,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const configureCommand = vscode.commands.registerCommand(CONFIGURE_COMMAND_ID, () => {
     void configureExposedTools();
   });
+  const takeOverCommand = vscode.commands.registerCommand(TAKE_OVER_COMMAND_ID, () => {
+    void handleTakeOverCommand(outputChannel);
+  });
   const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration(CONFIG_SECTION)) {
       return;
@@ -68,10 +80,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     outputChannel,
+    logChannel,
+    statusBarItem,
     dumpCommand,
     startCommand,
     stopCommand,
     configureCommand,
+    takeOverCommand,
     configWatcher,
     { dispose: () => { void stopMcpServer(outputChannel); } },
   );
@@ -80,6 +95,9 @@ export function activate(context: vscode.ExtensionContext): void {
   if (config.autoStart) {
     void startMcpServer(outputChannel);
   }
+
+  void refreshStatusBar();
+  logInfo('Extension activated.');
 }
 
 export function deactivate(): void {
@@ -211,46 +229,104 @@ async function configureExposedTools(): Promise<void> {
   void vscode.window.showInformationMessage(`Disabled ${disabled.length} LM tool(s) from MCP.`);
 }
 
+async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
+  const config = getServerConfig();
+  if (serverState && serverState.host === config.host && serverState.port === config.port) {
+    void vscode.window.showInformationMessage('MCP server is already running in this VS Code instance.');
+    return;
+  }
+
+  const stopResult = await requestRemoteStop(config.host, config.port);
+  if (!stopResult) {
+    logWarn('No remote MCP server responded to stop request (or it is not updated yet).');
+  }
+
+  const started = await startMcpServerWithRetry(channel, config.host, config.port, 6, 400);
+  if (!started) {
+    void vscode.window.showWarningMessage('Failed to take over MCP server. Port may still be in use.');
+  }
+}
+
+async function handleTakeOverCommand(channel: vscode.OutputChannel): Promise<void> {
+  const state = await getOwnershipState();
+  if (state === 'owner') {
+    void vscode.window.showInformationMessage('This VS Code instance already owns the MCP server.');
+    return;
+  }
+
+  const selection = await vscode.window.showWarningMessage(
+    'This VS Code instance does not own the MCP server. Take over control?',
+    { modal: true },
+    'Take Over',
+  );
+  if (selection !== 'Take Over') {
+    return;
+  }
+
+  await takeOverMcpServer(channel);
+}
+
 async function reconcileServerState(channel: vscode.OutputChannel): Promise<void> {
   const config = getServerConfig();
   if (!config.autoStart) {
     await stopMcpServer(channel);
+    await refreshStatusBar();
     return;
   }
 
   if (!serverState) {
     await startMcpServer(channel);
+    await refreshStatusBar();
     return;
   }
 
   if (serverState.host !== config.host || serverState.port !== config.port) {
     await stopMcpServer(channel);
     await startMcpServer(channel);
+    await refreshStatusBar();
   }
 }
 
-async function startMcpServer(channel: vscode.OutputChannel): Promise<void> {
+async function startMcpServer(channel: vscode.OutputChannel, override?: { host: string; port: number }): Promise<boolean> {
   if (serverState) {
-    channel.appendLine(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
-    return;
+    logInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
+    updateStatusBar('owner');
+    return true;
   }
 
-  const { host, port } = getServerConfig();
+  const config = override ?? getServerConfig();
+  const { host, port } = config;
   const server = http.createServer((req, res) => {
     void handleMcpHttpRequest(req, res, channel);
   });
 
-  await new Promise<void>((resolve) => {
+  const started = await new Promise<boolean>((resolve) => {
     server.once('error', (error) => {
-      channel.appendLine(`Failed to start MCP server: ${String(error)}`);
-      resolve();
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'EADDRINUSE') {
+        logWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
+        logWarn('Use "LM Tools MCP: Take Over Server" to reclaim the port.');
+        updateStatusBar('inUse');
+      } else {
+        logError(`Failed to start MCP server: ${String(error)}`);
+        updateStatusBar('off');
+      }
+      try {
+        server.close();
+      } catch {
+        // Ignore close errors.
+      }
+      resolve(false);
     });
     server.listen(port, host, () => {
       serverState = { server, host, port };
-      channel.appendLine(`MCP server listening at http://${host}:${port}/mcp`);
-      resolve();
+      logInfo(`MCP server listening at http://${host}:${port}/mcp`);
+      updateStatusBar('owner');
+      resolve(true);
     });
   });
+
+  return started;
 }
 
 async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
@@ -262,10 +338,11 @@ async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
   serverState = undefined;
   await new Promise<void>((resolve) => {
     server.close(() => {
-      channel.appendLine(`MCP server stopped at http://${host}:${port}/mcp`);
+      logInfo(`MCP server stopped at http://${host}:${port}/mcp`);
       resolve();
     });
   });
+  await refreshStatusBar();
 }
 
 async function handleMcpHttpRequest(
@@ -274,7 +351,17 @@ async function handleMcpHttpRequest(
   channel: vscode.OutputChannel,
 ): Promise<void> {
   const requestUrl = getRequestUrl(req);
-  if (!requestUrl || requestUrl.pathname !== '/mcp') {
+  if (!requestUrl) {
+    respondJson(res, 400, { error: 'Bad Request' });
+    return;
+  }
+
+  if (requestUrl.pathname === CONTROL_STOP_PATH) {
+    await handleControlStop(req, res, channel);
+    return;
+  }
+
+  if (requestUrl.pathname !== '/mcp') {
     respondJson(res, 404, { error: 'Not Found' });
     return;
   }
@@ -290,7 +377,7 @@ async function handleMcpHttpRequest(
     sessionIdGenerator: undefined,
   });
   transport.onerror = (error) => {
-    channel.appendLine(`MCP transport error: ${String(error)}`);
+    logError(`MCP transport error: ${String(error)}`);
   };
 
   try {
@@ -301,7 +388,7 @@ async function handleMcpHttpRequest(
     });
     await transport.handleRequest(req, res);
   } catch (error) {
-    channel.appendLine(`MCP request failed: ${String(error)}`);
+    logError(`MCP request failed: ${String(error)}`);
     if (!res.headersSent) {
       respondJson(res, 500, {
         jsonrpc: '2.0',
@@ -310,6 +397,79 @@ async function handleMcpHttpRequest(
       });
     }
   }
+}
+
+async function handleControlStop(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  channel: vscode.OutputChannel,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    respondJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  respondJson(res, 200, { ok: true });
+  logInfo('Received MCP take-over request, shutting down server.');
+  setImmediate(() => {
+    void stopMcpServer(channel);
+  });
+}
+
+async function startMcpServerWithRetry(
+  channel: vscode.OutputChannel,
+  host: string,
+  port: number,
+  attempts: number,
+  delayMs: number,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const started = await startMcpServer(channel, { host, port });
+    if (started) {
+      return true;
+    }
+    await delay(delayMs);
+  }
+
+  return false;
+}
+
+function requestRemoteStop(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = http.request(
+      {
+        host,
+        port,
+        path: CONTROL_STOP_PATH,
+        method: 'POST',
+      },
+      (response) => {
+        response.resume();
+        const ok = response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300;
+        resolve(ok);
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      request.destroy(new Error('Timeout'));
+    }, 1500);
+
+    request.on('error', () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
+    request.on('close', () => {
+      clearTimeout(timeout);
+    });
+    request.end();
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function createMcpServer(channel: vscode.OutputChannel): McpServer {
@@ -396,7 +556,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
         return toolErrorResult(`Unsupported action: ${args.action}`);
       } catch (error) {
-        channel.appendLine(`Tool invocation error: ${String(error)}`);
+        logError(`Tool invocation error: ${String(error)}`);
         return toolErrorResult(`Tool execution failed: ${String(error)}`);
       }
     },
@@ -702,6 +862,87 @@ function isToolDisabled(name: string): boolean {
 function getLanguageModelNamespace(): typeof vscode.lm | undefined {
   const possibleLm = (vscode as { lm?: typeof vscode.lm }).lm;
   return possibleLm;
+}
+
+async function getOwnershipState(): Promise<OwnershipState> {
+  if (serverState) {
+    return 'owner';
+  }
+
+  const config = getServerConfig();
+  const available = await isPortAvailable(config.host, config.port);
+  return available ? 'off' : 'inUse';
+}
+
+function updateStatusBar(state: OwnershipState): void {
+  if (!statusBarItem) {
+    return;
+  }
+
+  const config = getServerConfig();
+  statusBarItem.command = TAKE_OVER_COMMAND_ID;
+  if (state === 'owner') {
+    statusBarItem.text = '$(debug-disconnect) MCP: Owner';
+    statusBarItem.tooltip = `This VS Code instance owns MCP (${config.host}:${config.port}).`;
+    statusBarItem.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
+  } else if (state === 'inUse') {
+    statusBarItem.text = '$(lock) MCP: In Use';
+    statusBarItem.tooltip = `MCP port is in use (${config.host}:${config.port}). Click to take over.`;
+    statusBarItem.color = new vscode.ThemeColor('statusBarItem.warningForeground');
+  } else {
+    statusBarItem.text = '$(circle-slash) MCP: Off';
+    statusBarItem.tooltip = `MCP server is not running (${config.host}:${config.port}). Click to take over.`;
+    statusBarItem.color = undefined;
+  }
+  statusBarItem.show();
+}
+
+function logInfo(message: string): void {
+  if (logChannel) {
+    logChannel.info(message);
+    return;
+  }
+  console.info(message);
+}
+
+function logWarn(message: string): void {
+  if (logChannel) {
+    logChannel.warn(message);
+    return;
+  }
+  console.warn(message);
+}
+
+function logError(message: string): void {
+  if (logChannel) {
+    logChannel.error(message);
+    logChannel.show(true);
+    return;
+  }
+  console.error(message);
+}
+
+async function refreshStatusBar(): Promise<void> {
+  const state = await getOwnershipState();
+  updateStatusBar(state);
+}
+
+function isPortAvailable(host: string, port: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const tester = http.createServer();
+    tester.once('error', (error) => {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'EADDRINUSE') {
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+    tester.once('listening', () => {
+      tester.close(() => resolve(true));
+    });
+    tester.listen(port, host);
+  });
 }
 
 function formatTags(tags: readonly string[]): string {

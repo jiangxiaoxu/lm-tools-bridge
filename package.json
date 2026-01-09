@@ -14,7 +14,8 @@
     "onCommand:lm-tools-dump",
     "onCommand:lm-tools-mcp.start",
     "onCommand:lm-tools-mcp.stop",
-    "onCommand:lm-tools-mcp.configureTools"
+    "onCommand:lm-tools-mcp.configureTools",
+    "onCommand:lm-tools-mcp.takeOver"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -34,6 +35,10 @@
       {
         "command": "lm-tools-mcp.configureTools",
         "title": "LM Tools MCP: Configure Exposed Tools"
+      },
+      {
+        "command": "lm-tools-mcp.takeOver",
+        "title": "LM Tools MCP: Take Over Server"
       }
     ],
     "configuration": {

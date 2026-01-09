@@ -46,6 +46,19 @@ The extension starts a local MCP Streamable HTTP server and exposes a single too
 
 Run `LM Tools MCP: Configure Exposed Tools` from the Command Palette to enable/disable tools. Use the reset option to enable all tools again.
 
+### Take over MCP server
+
+When multiple VS Code instances are open, use `LM Tools MCP: Take Over Server` to stop the existing MCP server on the port and start it in the current instance.
+
+### Status bar indicator
+
+The status bar shows the MCP ownership state:
+- `MCP: Owner` (this instance hosts the port)
+- `MCP: In Use` (another instance hosts the port)
+- `MCP: Off` (no server running)
+
+Click the status bar item to take over when not owning the port.
+
 ## Development
 
 - Build once: `npm run compile`

@@ -10,7 +10,11 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:lm-tools-dump"
+    "onStartupFinished",
+    "onCommand:lm-tools-dump",
+    "onCommand:lm-tools-mcp.start",
+    "onCommand:lm-tools-mcp.stop",
+    "onCommand:lm-tools-mcp.configureTools"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -18,13 +22,59 @@
       {
         "command": "lm-tools-dump",
         "title": "lm-tools-dump"
+      },
+      {
+        "command": "lm-tools-mcp.start",
+        "title": "LM Tools MCP: Start Server"
+      },
+      {
+        "command": "lm-tools-mcp.stop",
+        "title": "LM Tools MCP: Stop Server"
+      },
+      {
+        "command": "lm-tools-mcp.configureTools",
+        "title": "LM Tools MCP: Configure Exposed Tools"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "LM Tools MCP",
+      "properties": {
+        "lmToolsMcp.server.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the MCP server on startup."
+        },
+        "lmToolsMcp.server.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host address for the MCP server (use localhost/loopback)."
+        },
+        "lmToolsMcp.server.port": {
+          "type": "number",
+          "default": 48123,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port for the MCP server."
+        },
+        "lmToolsMcp.tools.disabled": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "List of LM tool names disabled from MCP exposure."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.19",

@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+
+# build
+out/
+dist/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# VS Code
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# environment
+.env
+.env.*
+
+# coverage
+coverage/
+
+# artifacts
+*.tgz
+*.vsix
+
+# OS
+.DS_Store
+Thumbs.db

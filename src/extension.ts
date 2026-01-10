@@ -5,13 +5,13 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
 
-const OUTPUT_CHANNEL_NAME = 'LM Tools';
-const LOG_CHANNEL_NAME = 'LM Tools MCP';
-const DUMP_COMMAND_ID = 'lm-tools-dump';
-const START_COMMAND_ID = 'lm-tools-mcp.start';
-const STOP_COMMAND_ID = 'lm-tools-mcp.stop';
-const TAKE_OVER_COMMAND_ID = 'lm-tools-mcp.takeOver';
-const CONFIG_SECTION = 'lmToolsMcp';
+const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
+const LOG_CHANNEL_NAME = 'lm-tools-bridge';
+const DUMP_COMMAND_ID = 'lm-tools-bridge.dump';
+const START_COMMAND_ID = 'lm-tools-bridge.start';
+const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
+const TAKE_OVER_COMMAND_ID = 'lm-tools-bridge.takeOver';
+const CONFIG_SECTION = 'lmToolsBridge';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
@@ -104,7 +104,7 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   globalState = context.globalState;
   toolInvocationTokenRequired = new Set(
-    globalState.get<string[]>('lmToolsMcp.toolInvocationTokenRequired', []),
+    globalState.get<string[]>('lmToolsBridge.toolInvocationTokenRequired', []),
   );
   const dumpCommand = vscode.commands.registerCommand(DUMP_COMMAND_ID, () => {
     outputChannel.clear();
@@ -271,7 +271,7 @@ async function startMcpServer(channel: vscode.OutputChannel, override?: { host: 
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'EADDRINUSE') {
         logWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
-        logWarn('Use "LM Tools MCP: Take Over Server" to reclaim the port.');
+        logWarn('Use "LM Tools Bridge: Take Over Server" to reclaim the port.');
         updateStatusBar('inUse');
       } else {
         logError(`Failed to start MCP server: ${String(error)}`);
@@ -990,7 +990,7 @@ function markToolRequiresToken(name: string | undefined): void {
   toolInvocationTokenRequired.add(name);
   if (globalState) {
     void globalState.update(
-      'lmToolsMcp.toolInvocationTokenRequired',
+      'lmToolsBridge.toolInvocationTokenRequired',
       Array.from(toolInvocationTokenRequired),
     );
   }

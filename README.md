@@ -1,4 +1,4 @@
-# LM Tools Dump
+# LM Tools Bridge
 
 VS Code extension that exposes MCP tools backed by the VS Code Language Model API.
 
@@ -7,8 +7,8 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 1. Open the extension in VS Code.
 2. Run `npm install`.
 3. Press `F5` to launch the Extension Development Host.
-4. (Optional) In the Extension Development Host, press `Ctrl+Shift+P` and run `lm-tools-dump`.
-5. Check Output -> `LM Tools`.
+4. (Optional) In the Extension Development Host, press `Ctrl+Shift+P` and run `lm-tools-bridge.dump`.
+5. Check Output -> `LM Tools Bridge`.
 
 ## MCP Server
 
@@ -103,18 +103,18 @@ Note: `action` is **only** for `vscodeLmToolkit` itself. The `input` field is fo
 
 ### Settings
 
-- `lmToolsMcp.server.autoStart` (default: true)
-- `lmToolsMcp.server.host` (default: 127.0.0.1)
-- `lmToolsMcp.server.port` (default: 48123)
-- `lmToolsMcp.chat.modelId` (default: gpt-5-mini)
-- `lmToolsMcp.chat.modelFamily` (default: gpt-5-mini)
-- `lmToolsMcp.chat.maxIterations` (default: 6)
-- `lmToolsMcp.tools.disabled` (default: [])
+- `lmToolsBridge.server.autoStart` (default: true)
+- `lmToolsBridge.server.host` (default: 127.0.0.1)
+- `lmToolsBridge.server.port` (default: 48123)
+- `lmToolsBridge.chat.modelId` (default: gpt-5-mini)
+- `lmToolsBridge.chat.modelFamily` (default: gpt-5-mini)
+- `lmToolsBridge.chat.maxIterations` (default: 6)
+- `lmToolsBridge.tools.disabled` (default: [])
 
 
 ### Take over MCP server
 
-When multiple VS Code instances are open, use `LM Tools MCP: Take Over Server` to stop the existing MCP server on the port and start it in the current instance.
+When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server` to stop the existing MCP server on the port and start it in the current instance.
 
 ### Status bar indicator
 
@@ -127,7 +127,7 @@ Click the status bar item to take over when not owning the port.
 
 ### Logs
 
-Check Output -> `LM Tools MCP` for MCP server logs.
+Check Output -> `LM Tools Bridge` for MCP server logs.
 
 ### Consent notes
 

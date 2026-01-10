@@ -1,7 +1,7 @@
 {
-  "name": "lm-tools-dump",
-  "displayName": "lm-tools-dump",
-  "publisher": "local",
+  "name": "lm-tools-bridge",
+  "displayName": "lm-tools-bridge",
+  "publisher": "jiangxiaoxu",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.95.0"
@@ -10,63 +10,59 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:lm-tools-dump",
-    "onCommand:lm-tools-mcp.start",
-    "onCommand:lm-tools-mcp.stop",
-    "onCommand:lm-tools-mcp.takeOver"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "lm-tools-dump",
-        "title": "lm-tools-dump"
+        "command": "lm-tools-bridge.dump",
+        "title": "lm-tools-bridge.dump"
       },
       {
-        "command": "lm-tools-mcp.start",
-        "title": "LM Tools MCP: Start Server"
+        "command": "lm-tools-bridge.start",
+        "title": "LM Tools Bridge: Start Server"
       },
       {
-        "command": "lm-tools-mcp.stop",
-        "title": "LM Tools MCP: Stop Server"
+        "command": "lm-tools-bridge.stop",
+        "title": "LM Tools Bridge: Stop Server"
       },
       {
-        "command": "lm-tools-mcp.takeOver",
-        "title": "LM Tools MCP: Take Over Server"
+        "command": "lm-tools-bridge.takeOver",
+        "title": "LM Tools Bridge: Take Over Server"
       }
     ],
     "configuration": {
-      "title": "LM Tools MCP",
+      "title": "LM Tools Bridge",
       "properties": {
-        "lmToolsMcp.server.autoStart": {
+        "lmToolsBridge.server.autoStart": {
           "type": "boolean",
           "default": true,
           "description": "Automatically start the MCP server on startup."
         },
-        "lmToolsMcp.server.host": {
+        "lmToolsBridge.server.host": {
           "type": "string",
           "default": "127.0.0.1",
           "description": "Host address for the MCP server (use localhost/loopback)."
         },
-        "lmToolsMcp.server.port": {
+        "lmToolsBridge.server.port": {
           "type": "number",
           "default": 48123,
           "minimum": 1,
           "maximum": 65535,
           "description": "Port for the MCP server."
         },
-        "lmToolsMcp.chat.modelId": {
+        "lmToolsBridge.chat.modelId": {
           "type": "string",
           "default": "gpt-5-mini",
           "description": "Preferred model ID for Language Model API."
         },
-        "lmToolsMcp.chat.modelFamily": {
+        "lmToolsBridge.chat.modelFamily": {
           "type": "string",
           "default": "gpt-5-mini",
           "description": "Fallback model family if modelId is not found."
         },
-        "lmToolsMcp.chat.maxIterations": {
+        "lmToolsBridge.chat.maxIterations": {
           "type": "number",
           "default": 6,
           "minimum": 1,

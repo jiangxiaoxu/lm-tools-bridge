@@ -10,25 +10,72 @@ const LOG_CHANNEL_NAME = 'LM Tools MCP';
 const DUMP_COMMAND_ID = 'lm-tools-dump';
 const START_COMMAND_ID = 'lm-tools-mcp.start';
 const STOP_COMMAND_ID = 'lm-tools-mcp.stop';
-const CONFIGURE_COMMAND_ID = 'lm-tools-mcp.configureTools';
 const TAKE_OVER_COMMAND_ID = 'lm-tools-mcp.takeOver';
 const CONFIG_SECTION = 'lmToolsMcp';
-const CONFIG_DISABLED_TOOLS = 'tools.disabled';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
-const DEFAULT_MAX_CHARS = 2000;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
+const HEALTH_PATH = '/mcp/health';
+const ALLOWED_TOOL_NAMES = new Set([
+  'copilot_searchCodebase',
+  'copilot_searchWorkspaceSymbols',
+  'copilot_listCodeUsages',
+  'copilot_getVSCodeAPI',
+  'copilot_findFiles',
+  'copilot_findTextInFiles',
+  'copilot_readFile',
+  'copilot_listDirectory',
+  'copilot_getErrors',
+  'copilot_readProjectStructure',
+  'copilot_getChangedFiles',
+  'copilot_testFailure',
+  'copilot_findTestFiles',
+  'copilot_getDocInfo',
+  'copilot_getSearchResults',
+  'get_terminal_output',
+  'terminal_selection',
+  'terminal_last_command',
+]);
 
+type ChatRole = 'system' | 'user' | 'assistant';
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'summary' | 'full';
+
+interface ChatMessageInput {
+  role: ChatRole;
+  content: string;
+  name?: string;
+}
+
+interface ChatToolInput {
+  messages: ChatMessageInput[];
+  modelId?: string;
+  modelFamily?: string;
+  maxIterations?: number;
+  toolMode?: 'auto' | 'required';
+  justification?: string;
+  modelOptions?: Record<string, unknown>;
+}
 
 interface ToolkitInput {
   action: ToolAction;
   name?: string;
   detail?: ToolDetail;
-  input?: Record<string, unknown>;
-  maxChars?: number;
+  input?: unknown;
   includeBinary?: boolean;
+}
+
+interface ChatConfig {
+  modelId?: string;
+  modelFamily?: string;
+  maxIterations: number;
+}
+
+interface ChatRunOptions {
+  maxIterations: number;
+  toolMode: vscode.LanguageModelChatToolMode;
+  justification?: string;
+  modelOptions?: Record<string, unknown>;
 }
 
 interface ServerConfig {
@@ -48,11 +95,17 @@ type OwnershipState = 'owner' | 'inUse' | 'off';
 let serverState: McpServerState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
+let globalState: vscode.Memento | undefined;
+let toolInvocationTokenRequired = new Set<string>();
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
   logChannel = vscode.window.createOutputChannel(LOG_CHANNEL_NAME, { log: true });
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  globalState = context.globalState;
+  toolInvocationTokenRequired = new Set(
+    globalState.get<string[]>('lmToolsMcp.toolInvocationTokenRequired', []),
+  );
   const dumpCommand = vscode.commands.registerCommand(DUMP_COMMAND_ID, () => {
     outputChannel.clear();
     outputChannel.show(true);
@@ -63,9 +116,6 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const stopCommand = vscode.commands.registerCommand(STOP_COMMAND_ID, () => {
     void stopMcpServer(outputChannel);
-  });
-  const configureCommand = vscode.commands.registerCommand(CONFIGURE_COMMAND_ID, () => {
-    void configureExposedTools();
   });
   const takeOverCommand = vscode.commands.registerCommand(TAKE_OVER_COMMAND_ID, () => {
     void handleTakeOverCommand(outputChannel);
@@ -85,7 +135,6 @@ export function activate(context: vscode.ExtensionContext): void {
     dumpCommand,
     startCommand,
     stopCommand,
-    configureCommand,
     takeOverCommand,
     configWatcher,
     { dispose: () => { void stopMcpServer(outputChannel); } },
@@ -112,13 +161,7 @@ export function deactivate(): void {
 }
 
 function dumpLmTools(channel: vscode.OutputChannel): void {
-  const lm = getLanguageModelNamespace();
-  if (!lm) {
-    channel.appendLine('vscode.lm is not available in this VS Code version.');
-    return;
-  }
-
-  const tools = lm.tools;
+  const tools = getAllAllowedToolsSnapshot();
   if (tools.length === 0) {
     channel.appendLine('No tools found in vscode.lm.tools.');
     return;
@@ -151,83 +194,6 @@ function getServerConfig(): ServerConfig {
   };
 }
 
-function getDisabledTools(): string[] {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const disabled = config.get<string[]>(CONFIG_DISABLED_TOOLS, []);
-  return Array.isArray(disabled) ? disabled.filter((name) => typeof name === 'string') : [];
-}
-
-async function setDisabledTools(disabled: string[]): Promise<void> {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  await config.update(CONFIG_DISABLED_TOOLS, disabled, vscode.ConfigurationTarget.Global);
-}
-
-async function configureExposedTools(): Promise<void> {
-  const lm = getLanguageModelNamespace();
-  if (!lm) {
-    void vscode.window.showWarningMessage('vscode.lm is not available in this VS Code version.');
-    return;
-  }
-
-  const tools = lm.tools;
-  if (tools.length === 0) {
-    void vscode.window.showInformationMessage('No tools found in vscode.lm.tools.');
-    return;
-  }
-
-  const disabledSet = new Set(getDisabledTools());
-  const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
-
-  items.push({
-    label: '$(refresh) Reset (enable all)',
-    description: 'Clear disabled list',
-    alwaysShow: true,
-    isReset: true,
-  });
-  items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
-
-  for (const tool of tools) {
-    items.push({
-      label: tool.name,
-      description: tool.description,
-      detail: tool.tags.length > 0 ? tool.tags.join(', ') : undefined,
-      picked: !disabledSet.has(tool.name),
-      toolName: tool.name,
-    });
-  }
-
-  const selections = await vscode.window.showQuickPick(items, {
-    canPickMany: true,
-    title: 'Configure exposed LM tools',
-    placeHolder: 'Select tools to expose to MCP',
-    matchOnDescription: true,
-    matchOnDetail: true,
-  });
-
-  if (!selections) {
-    return;
-  }
-
-  const shouldReset = selections.some((item) => item.isReset);
-  if (shouldReset) {
-    await setDisabledTools([]);
-    void vscode.window.showInformationMessage('All LM tools are enabled for MCP.');
-    return;
-  }
-
-  const selectedNames = new Set(
-    selections
-      .map((item) => item.toolName)
-      .filter((name): name is string => typeof name === 'string'),
-  );
-
-  const disabled = tools
-    .map((tool) => tool.name)
-    .filter((name) => !selectedNames.has(name));
-
-  await setDisabledTools(disabled);
-  void vscode.window.showInformationMessage(`Disabled ${disabled.length} LM tool(s) from MCP.`);
-}
 
 async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
   const config = getServerConfig();
@@ -355,9 +321,15 @@ async function handleMcpHttpRequest(
     respondJson(res, 400, { error: 'Bad Request' });
     return;
   }
+  logInfo(`MCP HTTP ${req.method ?? 'UNKNOWN'} ${requestUrl.pathname} from ${req.socket.remoteAddress ?? 'unknown'}`);
 
   if (requestUrl.pathname === CONTROL_STOP_PATH) {
     await handleControlStop(req, res, channel);
+    return;
+  }
+
+  if (requestUrl.pathname === HEALTH_PATH) {
+    await handleHealth(req, res);
     return;
   }
 
@@ -475,7 +447,7 @@ function delay(ms: number): Promise<void> {
 function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const server = new McpServer(
     {
-      name: 'vscode-lm-toolkit',
+      name: 'vscode-lm-chat',
       version: '0.1.0',
     },
     {
@@ -483,162 +455,307 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
-  const actionSchema = z.enum(['listTools', 'getToolInfo', 'invokeTool']);
-  const detailSchema = z.enum(['names', 'summary', 'full']);
-
+  const toolActionSchema = z.enum(['listTools', 'getToolInfo', 'invokeTool'])
+    .describe('Action for vscodeLmToolkit only. Valid values: listTools | getToolInfo | invokeTool.');
+  const toolDetailSchema = z.enum(['names', 'summary', 'full'])
+    .describe('Detail level for listTools/getToolInfo.');
   const toolkitSchema: z.ZodTypeAny = z.object({
-    action: actionSchema,
-    name: z.string().min(1).optional(),
-    detail: detailSchema.optional(),
-    input: z.record(z.unknown()).optional(),
-    maxChars: z.number().int().min(0).optional(),
-    includeBinary: z.boolean().optional(),
-  });
+    action: toolActionSchema,
+    name: z.string()
+      .describe('Target tool name. Required for getToolInfo/invokeTool.')
+      .optional(),
+    detail: toolDetailSchema.optional(),
+    input: z.object({}).passthrough()
+      .describe('Target tool input object. See lm-tools://schema/{name}.')
+      .optional(),
+    includeBinary: z.boolean()
+      .describe('Include base64 for binary data parts in tool results.')
+      .optional(),
+  }).strict().describe('Toolkit wrapper for listing/inspecting/invoking copilot_ tools.');
 
   // @ts-expect-error TS2589: Deep instantiation from SDK tool generics.
   server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
     'vscodeLmToolkit',
     {
-      description: 'Access vscode.lm.tools and invoke a specific tool.',
+      description: 'List, inspect, and invoke copilot_ tools from vscode.lm.tools.',
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {
       try {
+        logInfo(`vscodeLmToolkit request: ${formatLogPayload(args)}`);
         const lm = getLanguageModelNamespace();
         if (!lm) {
           return toolErrorResult('vscode.lm is not available in this VS Code version.');
         }
-        const disabledSet = new Set(getDisabledTools());
-        const exposedTools = lm.tools.filter((tool) => !disabledSet.has(tool.name));
+
+        const tools = getAllAllowedToolsSnapshot();
+        const detail: ToolDetail = args.detail ?? 'summary';
 
         if (args.action === 'listTools') {
-          const detail = args.detail ?? 'names';
-          const payload = listToolsPayload(exposedTools, detail);
-          return toolSuccessResult(payload);
+          logInfo(`vscodeLmToolkit action=listTools detail=${detail}`);
+          return toolSuccessResult(listToolsPayload(tools, detail));
         }
 
         if (!args.name) {
-          return toolErrorResult('Missing required field: name.');
+          return toolErrorResult('Tool name is required for this action. Valid actions: listTools | getToolInfo | invokeTool.');
         }
 
-        if (disabledSet.has(args.name)) {
-          return toolErrorResult(`Tool is disabled by configuration: ${args.name}`);
-        }
-
-        const tool = lm.tools.find((candidate) => candidate.name === args.name);
+        const tool = tools.find((candidate) => candidate.name === args.name);
         if (!tool) {
-          return toolErrorResult(`Tool not found: ${args.name}`);
+          return toolErrorResult(`Tool not found or disabled: ${args.name}`);
         }
 
         if (args.action === 'getToolInfo') {
-          const detail = args.detail ?? 'full';
-          const payload = toolInfoPayload(tool, detail);
-          return toolSuccessResult(payload);
+          logInfo(`vscodeLmToolkit action=getToolInfo name=${tool.name} detail=${detail}`);
+          return toolSuccessResult(toolInfoPayload(tool, detail));
         }
 
-        if (args.action === 'invokeTool') {
-          if (!args.input || typeof args.input !== 'object' || Array.isArray(args.input)) {
-            return toolErrorResult('Missing or invalid input object for invokeTool.');
-          }
-
-          const maxChars = args.maxChars ?? DEFAULT_MAX_CHARS;
-          const includeBinary = args.includeBinary ?? false;
-          const result = await lm.invokeTool(tool.name, {
-            toolInvocationToken: undefined,
-            input: args.input,
-          });
-          const serialized = serializeToolResult(result, { maxChars, includeBinary });
-          return toolSuccessResult({
+        const input = args.input ?? {};
+        if (!isPlainObject(input)) {
+          return toolErrorResultPayload({
+            error: 'Tool input must be an object (not a JSON string). Use lm-tools://schema/{name} for the expected shape.',
             name: tool.name,
-            content: serialized,
+            inputSchema: tool.inputSchema ?? null,
           });
         }
+        logInfo(`vscodeLmToolkit invoking tool ${tool.name} with input: ${formatLogPayload(input)}`);
+        const result = await lm.invokeTool(tool.name, {
+          input,
+          toolInvocationToken: undefined,
+        });
+        const includeBinary = args.includeBinary ?? false;
+        const serialized = serializeToolResult(result, { includeBinary });
+        logInfo(`vscodeLmToolkit tool result (${tool.name}): ${formatLogPayload(serialized)}`);
 
-        return toolErrorResult(`Unsupported action: ${args.action}`);
+        return toolSuccessResult({
+          name: tool.name,
+          result: serialized,
+        });
       } catch (error) {
-        logError(`Tool invocation error: ${String(error)}`);
-        return toolErrorResult(`Tool execution failed: ${String(error)}`);
+        const message = String(error);
+        logError(`Toolkit tool error: ${message}`);
+        if (message.includes('toolInvocationToken')) {
+          markToolRequiresToken(args.name);
+          return toolErrorResultPayload({
+            error: message,
+            name: args.name,
+            requiresToolInvocationToken: true,
+            hint: 'This tool requires a chat toolInvocationToken and cannot be invoked directly via vscodeLmToolkit.',
+            inputSchema: args.name
+              ? getAllAllowedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
+              : null,
+          });
+        }
+        return toolErrorResultPayload({
+          error: message,
+          name: args.name,
+          inputSchema: args.name
+            ? getAllAllowedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
+            : null,
+        });
+      }
+    },
+  );
+
+  const messageSchema = z.object({
+    role: z.enum(['system', 'user', 'assistant']),
+    content: z.string(),
+    name: z.string().optional(),
+  });
+  const toolModeSchema = z.enum(['auto', 'required']);
+  const chatSchema: z.ZodTypeAny = z.object({
+    messages: z.array(messageSchema).min(1),
+    modelId: z.string().optional(),
+    modelFamily: z.string().optional(),
+    maxIterations: z.number().int().min(1).max(20).optional(),
+    toolMode: toolModeSchema.optional(),
+    justification: z.string().optional(),
+    modelOptions: z.record(z.unknown()).optional(),
+  });
+
+  server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
+    'vscodeLmChat',
+    {
+      description: 'Run a chat request via VS Code Language Model API with tool calling.',
+      inputSchema: chatSchema,
+    },
+    async (args: ChatToolInput) => {
+      try {
+        logInfo(`vscodeLmChat request: ${formatChatLogPayload(args)}`);
+        const lm = getLanguageModelNamespace();
+        if (!lm) {
+          return toolErrorResult('vscode.lm is not available in this VS Code version.');
+        }
+
+        const chatModel = await selectChatModel(lm, args.modelId, args.modelFamily);
+        if (!chatModel) {
+          return toolErrorResult('No matching chat model found. Check modelId/modelFamily settings.');
+        }
+        logInfo(`vscodeLmChat using model id=${chatModel.id} family=${chatModel.family}`);
+
+        const messages = args.messages.map((message) => {
+          const role = message.role === 'assistant'
+            ? vscode.LanguageModelChatMessageRole.Assistant
+            : vscode.LanguageModelChatMessageRole.User;
+          const name = message.role === 'system' ? message.name ?? 'system' : message.name;
+          return new vscode.LanguageModelChatMessage(role, message.content, name);
+        });
+        const maxIterations = args.maxIterations ?? getChatConfig().maxIterations;
+        const toolMode = vscode.LanguageModelChatToolMode.Auto;
+        const tools = getAllAllowedToolsSnapshot();
+        logInfo(`vscodeLmChat tools available (${tools.length}): ${tools.map((tool) => tool.name).join(', ')}`);
+
+        const result = await runChatWithTools(lm, chatModel, messages, tools, {
+          maxIterations,
+          toolMode,
+          justification: args.justification,
+          modelOptions: args.modelOptions,
+        });
+
+        logInfo(`vscodeLmChat result: ${formatLogPayload(result)}`);
+        return toolSuccessResult(result);
+      } catch (error) {
+        logError(`Chat tool error: ${String(error)}`);
+        return toolErrorResult(`Chat execution failed: ${String(error)}`);
       }
     },
   );
 
   server.registerResource(
-    'lm-tools-names',
+    'lmToolsNames',
     'lm-tools://names',
-    {
-      description: 'List of available LM tool names.',
-      mimeType: 'application/json',
-    },
+    { description: 'List exposed tool names.' },
     async () => {
-      const tools = getExposedLmToolsSnapshot();
-      return resourceJson('lm-tools://names', { tools: tools.map((tool) => tool.name) });
+      logInfo('Resource read: lm-tools://names');
+      return resourceJson('lm-tools://names', listToolsPayload(getAllAllowedToolsSnapshot(), 'names'));
     },
   );
 
   server.registerResource(
-    'lm-tools-list',
+    'lmToolsList',
     'lm-tools://list',
-    {
-      description: 'List of LM tools (name, description, tags).',
-      mimeType: 'application/json',
-    },
+    { description: 'List exposed tools with descriptions.' },
     async () => {
-      const tools = getExposedLmToolsSnapshot();
-      return resourceJson('lm-tools://list', listToolsPayload(tools, 'summary'));
+      logInfo('Resource read: lm-tools://list');
+      return resourceJson('lm-tools://list', listToolsPayload(getAllAllowedToolsSnapshot(), 'summary'));
     },
   );
 
-  server.registerResource(
-    'lm-tools-tool',
-    new ResourceTemplate('lm-tools://tool/{name}', { list: undefined }),
-    {
-      description: 'LM tool details by name.',
-      mimeType: 'application/json',
+  const toolTemplate = new ResourceTemplate('lm-tools://tool/{name}', {
+    list: () => {
+      logInfo('Resource list: lm-tools://tool/{name}');
+      return {
+        resources: getAllAllowedToolsSnapshot().map((tool) => ({
+          uri: `lm-tools://tool/${tool.name}`,
+          name: tool.name,
+          title: tool.name,
+          description: tool.description,
+        })),
+      };
     },
-    async (_uri, variables) => {
-      const name = readTemplateVariable(variables, 'name');
-      if (!name) {
-        throw new Error('Missing tool name in resource URI.');
-      }
-      const tools = getAllLmToolsSnapshot();
-      if (isToolDisabled(name)) {
-        throw new Error(`Tool is disabled by configuration: ${name}`);
-      }
-      const tool = tools.find((candidate) => candidate.name === name);
-      if (!tool) {
-        throw new Error(`Tool not found: ${name}`);
-      }
+    complete: {
+      name: (value) => {
+        logInfo(`Resource complete: lm-tools://tool/{name} value=${value}`);
+        return getAllAllowedToolsSnapshot()
+          .map((tool) => tool.name)
+          .filter((name) => name.startsWith(value));
+      },
+    },
+  });
 
-      return resourceJson(`lm-tools://tool/${name}`, toolInfoPayload(tool, 'full'));
+  server.registerResource(
+    'lmToolsTool',
+    toolTemplate,
+    { description: 'Read a tool definition by name.' },
+    async (uri, variables) => {
+      const name = readTemplateVariable(variables, 'name');
+      logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);
+      if (!name) {
+        return resourceJson(uri.toString(), { error: 'Tool name is required.' });
+      }
+      const tool = getAllAllowedToolsSnapshot().find((candidate) => candidate.name === name);
+      if (!tool) {
+        return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
+      }
+      return resourceJson(uri.toString(), toolInfoPayload(tool, 'full'));
     },
   );
 
-  server.registerResource(
-    'lm-tools-schema',
-    new ResourceTemplate('lm-tools://schema/{name}', { list: undefined }),
-    {
-      description: 'LM tool input schema by name.',
-      mimeType: 'application/json',
+  const schemaTemplate = new ResourceTemplate('lm-tools://schema/{name}', {
+    list: () => {
+      logInfo('Resource list: lm-tools://schema/{name}');
+      return {
+        resources: getAllAllowedToolsSnapshot().map((tool) => ({
+          uri: `lm-tools://schema/${tool.name}`,
+          name: tool.name,
+          title: tool.name,
+          description: 'Input schema',
+        })),
+      };
     },
-    async (_uri, variables) => {
-      const name = readTemplateVariable(variables, 'name');
-      if (!name) {
-        throw new Error('Missing tool name in resource URI.');
-      }
-      const tools = getAllLmToolsSnapshot();
-      if (isToolDisabled(name)) {
-        throw new Error(`Tool is disabled by configuration: ${name}`);
-      }
-      const tool = tools.find((candidate) => candidate.name === name);
-      if (!tool) {
-        throw new Error(`Tool not found: ${name}`);
-      }
+    complete: {
+      name: (value) => {
+        logInfo(`Resource complete: lm-tools://schema/{name} value=${value}`);
+        return getAllAllowedToolsSnapshot()
+          .map((tool) => tool.name)
+          .filter((name) => name.startsWith(value));
+      },
+    },
+  });
 
-      return resourceJson(`lm-tools://schema/${name}`, { inputSchema: tool.inputSchema ?? null });
+  server.registerResource(
+    'lmToolsSchema',
+    schemaTemplate,
+    { description: 'Read tool input schema by name.' },
+    async (uri, variables) => {
+      const name = readTemplateVariable(variables, 'name');
+      logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);
+      if (!name) {
+        return resourceJson(uri.toString(), { error: 'Tool name is required.' });
+      }
+      const tool = getAllAllowedToolsSnapshot().find((candidate) => candidate.name === name);
+      if (!tool) {
+        return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
+      }
+      return resourceJson(uri.toString(), { name: tool.name, inputSchema: tool.inputSchema ?? null });
     },
   );
 
   return server;
+}
+
+async function handleHealth(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    respondJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  try {
+    const ownership = await getOwnershipState();
+    const toolsSnapshot = getAllAllowedToolsSnapshot();
+    const toolsCount = toolsSnapshot.length;
+    const toolNames = toolsSnapshot.map((tool) => tool.name);
+    const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => ({
+      name: folder.name,
+      path: folder.uri.fsPath,
+    })) ?? [];
+
+    respondJson(res, 200, {
+      ok: true,
+      ownership,
+      tools: toolsCount,
+      toolNames,
+      workspaceFolders,
+      host: serverState?.host ?? null,
+      port: serverState?.port ?? null,
+    });
+  } catch (error) {
+    respondJson(res, 500, { ok: false, error: String(error) });
+  }
 }
 
 function toolSuccessResult(payload: Record<string, unknown>) {
@@ -659,6 +776,18 @@ function toolErrorResult(message: string) {
       {
         type: 'text' as const,
         text: message,
+      },
+    ],
+  };
+}
+
+function toolErrorResultPayload(payload: Record<string, unknown>) {
+  return {
+    isError: true,
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(payload),
       },
     ],
   };
@@ -687,6 +816,9 @@ function listToolsPayload(tools: readonly vscode.LanguageModelToolInformation[],
         name: tool.name,
         description: tool.description,
         tags: tool.tags,
+        toolUri: getToolUri(tool.name),
+        schemaUri: getSchemaUri(tool.name),
+        usageHint: getToolUsageHint(tool),
       })),
     };
   }
@@ -702,6 +834,9 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
       name: tool.name,
       description: tool.description,
       tags: tool.tags,
+      toolUri: getToolUri(tool.name),
+      schemaUri: getSchemaUri(tool.name),
+      usageHint: getToolUsageHint(tool),
     };
   }
 
@@ -716,32 +851,33 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
     description: tool.description,
     tags: tool.tags,
     inputSchema: tool.inputSchema ?? null,
+    toolUri: getToolUri(tool.name),
+    schemaUri: getSchemaUri(tool.name),
+    usageHint: getToolUsageHint(tool),
   };
 }
 
 function serializeToolResult(
   result: vscode.LanguageModelToolResult,
-  options: { maxChars: number; includeBinary: boolean },
+  options: { includeBinary: boolean },
 ): Array<Record<string, unknown>> {
   const parts: Array<Record<string, unknown>> = [];
   for (const part of result.content) {
     if (part instanceof vscode.LanguageModelTextPart) {
-      const truncated = truncateText(part.value, options.maxChars);
       parts.push({
         type: 'text',
-        text: truncated.text,
-        truncated: truncated.truncated || undefined,
+        text: part.value,
       });
       continue;
     }
 
     if (part instanceof vscode.LanguageModelPromptTsxPart) {
-      const serialized = safeStringify(part.value);
-      const truncated = truncateText(serialized, options.maxChars);
+      const plain = extractPromptTsxText(part.value);
+      const plainValue = plain.trim().length > 0 ? plain : safeStringify(part.value);
+
       parts.push({
         type: 'prompt-tsx',
-        text: truncated.text,
-        truncated: truncated.truncated || undefined,
+        text: plainValue,
       });
       continue;
     }
@@ -755,20 +891,11 @@ function serializeToolResult(
 
       const decodedText = decodeTextData(part);
       if (decodedText !== undefined) {
-        const truncated = truncateText(decodedText, options.maxChars);
-        payload.text = truncated.text;
-        if (truncated.truncated) {
-          payload.textTruncated = true;
-        }
+        payload.text = decodedText;
       }
 
       if (options.includeBinary) {
-        const base64 = Buffer.from(part.data).toString('base64');
-        const truncated = truncateText(base64, options.maxChars);
-        payload.dataBase64 = truncated.text;
-        if (truncated.truncated) {
-          payload.dataTruncated = true;
-        }
+        payload.dataBase64 = Buffer.from(part.data).toString('base64');
       }
 
       parts.push(payload);
@@ -776,11 +903,9 @@ function serializeToolResult(
     }
 
     const serialized = safeStringify(part);
-    const truncated = truncateText(serialized, options.maxChars);
     parts.push({
       type: 'unknown',
-      text: truncated.text,
-      truncated: truncated.truncated || undefined,
+      text: serialized,
     });
   }
 
@@ -795,14 +920,6 @@ function decodeTextData(part: vscode.LanguageModelDataPart): string | undefined 
   return undefined;
 }
 
-function truncateText(text: string, maxChars: number): { text: string; truncated: boolean } {
-  if (maxChars <= 0 || text.length <= maxChars) {
-    return { text, truncated: false };
-  }
-
-  return { text: text.slice(0, maxChars), truncated: true };
-}
-
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
@@ -810,6 +927,361 @@ function safeStringify(value: unknown): string {
     return '"[unserializable]"';
   }
 }
+
+function getToolUri(name: string): string {
+  return `lm-tools://tool/${name}`;
+}
+
+function getSchemaUri(name: string): string {
+  return `lm-tools://schema/${name}`;
+}
+
+function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<string, unknown> {
+  const combined = `${tool.name} ${(tool.description ?? '')}`.toLowerCase();
+  const requiresObjectInput = schemaRequiresObjectInput(tool.inputSchema);
+  const toolkitInputNote = requiresObjectInput
+    ? 'vscodeLmToolkit input must be an object (not a JSON string).'
+    : undefined;
+  if (combined.includes('do not use') || combined.includes('placeholder')) {
+    return {
+      mode: 'do-not-use',
+      reason: 'Heuristic: description indicates do-not-use/placeholder.',
+      toolkitInputNote,
+    };
+  }
+
+  const requiresToken = toolInvocationTokenRequired.has(tool.name);
+  if (requiresToken) {
+    return {
+      mode: 'chat',
+      reason: 'Heuristic: toolInvocationToken required; use vscodeLmChat.',
+      requiresToolInvocationToken: true,
+      toolkitInputNote,
+    };
+  }
+
+  if (tool.tags.some((tag) => tag.includes('codesearch'))) {
+    return {
+      mode: 'toolkit',
+      reason: 'Heuristic: codesearch tag; use vscodeLmToolkit.',
+      toolkitInputNote,
+    };
+  }
+
+  return {
+    mode: 'unknown',
+    reason: 'Heuristic: no token requirement; check schema and prefer vscodeLmChat if invocation fails.',
+    requiresObjectInput: requiresObjectInput || undefined,
+    toolkitInputNote,
+  };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function markToolRequiresToken(name: string | undefined): void {
+  if (!name) {
+    return;
+  }
+  if (toolInvocationTokenRequired.has(name)) {
+    return;
+  }
+  toolInvocationTokenRequired.add(name);
+  if (globalState) {
+    void globalState.update(
+      'lmToolsMcp.toolInvocationTokenRequired',
+      Array.from(toolInvocationTokenRequired),
+    );
+  }
+}
+
+function schemaRequiresObjectInput(schema: object | undefined): boolean {
+  if (!schema || typeof schema !== 'object') {
+    return false;
+  }
+
+  const record = schema as Record<string, unknown>;
+  if (record.type === 'object' || typeof record.properties === 'object') {
+    return true;
+  }
+  const properties = record.properties && typeof record.properties === 'object'
+    ? Object.values(record.properties as Record<string, unknown>)
+    : [];
+  for (const propSchema of properties) {
+    if (schemaHasObject(propSchema)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function schemaHasObject(schema: unknown): boolean {
+  if (!schema || typeof schema !== 'object') {
+    return false;
+  }
+
+  const record = schema as Record<string, unknown>;
+  if (record.type === 'object' || typeof record.properties === 'object') {
+    return true;
+  }
+  if (record.type === 'array' && record.items) {
+    return schemaHasObject(record.items);
+  }
+  if (Array.isArray(record.anyOf) && record.anyOf.some(schemaHasObject)) {
+    return true;
+  }
+  if (Array.isArray(record.oneOf) && record.oneOf.some(schemaHasObject)) {
+    return true;
+  }
+
+  return false;
+}
+
+function formatLogPayload(value: unknown): string {
+  return safeStringify(value);
+}
+
+function formatChatLogPayload(args: ChatToolInput): string {
+  const messages = args.messages.map((message) => ({
+    role: message.role,
+    name: message.name,
+    content: message.content,
+  }));
+  const payload = {
+    messages,
+    modelId: args.modelId,
+    modelFamily: args.modelFamily,
+    maxIterations: args.maxIterations,
+    toolMode: args.toolMode,
+    justification: args.justification,
+    modelOptions: args.modelOptions,
+  };
+  return formatLogPayload(payload);
+}
+
+function extractPromptTsxText(value: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (seen.has(node)) {
+      return;
+    }
+    seen.add(node);
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+      }
+      return;
+    }
+
+    const record = node as Record<string, unknown>;
+    if (typeof record.text === 'string') {
+      parts.push(record.text);
+    }
+    if (record.node !== undefined) {
+      visit(record.node);
+    }
+    if (record.children !== undefined) {
+      visit(record.children);
+    }
+  };
+
+  visit(value);
+  return parts.join('');
+}
+
+function readTemplateVariable(
+  variables: Record<string, string | string[]>,
+  name: string,
+): string | undefined {
+  const value = variables[name];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  return value;
+}
+
+function normalizeConfigString(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getChatConfig(): ChatConfig {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const modelId = normalizeConfigString(config.get<string>('chat.modelId'));
+  const modelFamily = normalizeConfigString(config.get<string>('chat.modelFamily'));
+  const maxIterations = clampNumber(config.get<number>('chat.maxIterations', 6), 1, 20);
+  return {
+    modelId,
+    modelFamily,
+    maxIterations,
+  };
+}
+
+async function selectChatModel(
+  lm: typeof vscode.lm,
+  preferredModelId?: string,
+  preferredModelFamily?: string,
+): Promise<vscode.LanguageModelChat | undefined> {
+  const config = getChatConfig();
+  const modelId = normalizeConfigString(preferredModelId ?? config.modelId);
+  const modelFamily = normalizeConfigString(preferredModelFamily ?? config.modelFamily);
+
+  if (modelId) {
+    const byId = await lm.selectChatModels({ id: modelId });
+    if (byId.length > 0) {
+      return byId[0];
+    }
+    logWarn(`Chat model id "${modelId}" not found.`);
+  }
+
+  if (modelFamily) {
+    const byFamily = await lm.selectChatModels({ family: modelFamily });
+    if (byFamily.length > 0) {
+      return byFamily[0];
+    }
+    logWarn(`Chat model family "${modelFamily}" not found.`);
+  }
+
+  return undefined;
+}
+
+async function runChatWithTools(
+  lm: typeof vscode.lm,
+  model: vscode.LanguageModelChat,
+  initialMessages: vscode.LanguageModelChatMessage[],
+  tools: readonly vscode.LanguageModelChatTool[],
+  options: ChatRunOptions,
+): Promise<Record<string, unknown>> {
+  const messages = [...initialMessages];
+  const toolCalls: Array<{ name: string; callId: string }> = [];
+  let combinedText = '';
+  let stopReason: 'completed' | 'maxIterations' | 'error' = 'completed';
+  let iterations = 0;
+
+  for (let iteration = 0; iteration < options.maxIterations; iteration += 1) {
+    iterations = iteration + 1;
+    const response = await model.sendRequest(
+      messages,
+      {
+        tools: tools.length > 0 ? Array.from(tools) : undefined,
+        toolMode: options.toolMode,
+        justification: options.justification,
+        modelOptions: options.modelOptions,
+      },
+    );
+
+    const assistantParts: Array<
+      vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart | vscode.LanguageModelDataPart
+    > = [];
+    const toolCallParts: vscode.LanguageModelToolCallPart[] = [];
+    let unknownPartCount = 0;
+    const unknownPartTypes = new Set<string>();
+
+    for await (const part of response.stream) {
+      if (part instanceof vscode.LanguageModelTextPart) {
+        assistantParts.push(part);
+        combinedText += part.value;
+        continue;
+      }
+
+      if (part instanceof vscode.LanguageModelToolCallPart) {
+        assistantParts.push(part);
+        toolCallParts.push(part);
+        toolCalls.push({ name: part.name, callId: part.callId });
+        logInfo(`vscodeLmChat tool call: ${part.name} id=${part.callId} input=${formatLogPayload(part.input)}`);
+        continue;
+      }
+
+      if (part instanceof vscode.LanguageModelDataPart) {
+        assistantParts.push(part);
+        continue;
+      }
+
+      unknownPartCount += 1;
+      unknownPartTypes.add(describeResponsePart(part));
+    }
+
+    if (unknownPartCount > 0) {
+      const types = Array.from(unknownPartTypes).join(', ');
+      logWarn(`Ignored ${unknownPartCount} unknown LanguageModel response part(s): ${types}`);
+    }
+
+    if (toolCallParts.length === 0) {
+      stopReason = 'completed';
+      break;
+    }
+
+    if (iteration >= options.maxIterations - 1) {
+      stopReason = 'maxIterations';
+      break;
+    }
+
+    const toolResultParts: vscode.LanguageModelToolResultPart[] = [];
+    for (const toolCall of toolCallParts) {
+      try {
+        const result = await lm.invokeTool(toolCall.name, {
+          input: toolCall.input,
+          toolInvocationToken: undefined,
+        });
+        logInfo(`vscodeLmChat tool result (${toolCall.name}): ${formatLogPayload(result.content)}`);
+        toolResultParts.push(new vscode.LanguageModelToolResultPart(toolCall.callId, result.content));
+      } catch (error) {
+        logError(`Tool invocation failed (${toolCall.name}): ${String(error)}`);
+        const errorPart = new vscode.LanguageModelTextPart(
+          `Tool invocation failed (${toolCall.name}): ${String(error)}`,
+        );
+        toolResultParts.push(new vscode.LanguageModelToolResultPart(toolCall.callId, [errorPart]));
+      }
+    }
+
+    messages.push(vscode.LanguageModelChatMessage.Assistant(assistantParts));
+    messages.push(vscode.LanguageModelChatMessage.User(toolResultParts));
+  }
+
+  const payload: Record<string, unknown> = {
+    text: combinedText,
+    iterations,
+    stopReason,
+    model: {
+      id: model.id,
+      family: model.family,
+    },
+  };
+
+  if (toolCalls.length > 0) {
+    payload.toolCalls = toolCalls;
+  }
+
+  return payload;
+}
+
+function describeResponsePart(part: unknown): string {
+  if (part && typeof part === 'object' && 'constructor' in part) {
+    const ctor = (part as { constructor?: { name?: string } }).constructor;
+    if (ctor && typeof ctor.name === 'string' && ctor.name.length > 0) {
+      return ctor.name;
+    }
+  }
+
+  return typeof part;
+}
+
 
 function getRequestUrl(req: http.IncomingMessage): URL | undefined {
   const host = req.headers.host ?? 'localhost';
@@ -831,37 +1303,19 @@ function respondJson(res: http.ServerResponse, status: number, payload: Record<s
   res.end(JSON.stringify(payload));
 }
 
-function readTemplateVariable(
-  variables: Record<string, string | string[]>,
-  name: string,
-): string | undefined {
-  const value = variables[name];
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-
-  return value;
-}
-
-function getAllLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
-  const lm = getLanguageModelNamespace();
-  return lm ? lm.tools : [];
-}
-
-function getExposedLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
-  const tools = getAllLmToolsSnapshot();
-  const disabledSet = new Set(getDisabledTools());
-  return tools.filter((tool) => !disabledSet.has(tool.name));
-}
-
-function isToolDisabled(name: string): boolean {
-  const disabled = getDisabledTools();
-  return disabled.includes(name);
-}
 
 function getLanguageModelNamespace(): typeof vscode.lm | undefined {
   const possibleLm = (vscode as { lm?: typeof vscode.lm }).lm;
   return possibleLm;
+}
+
+function getAllAllowedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+  const lm = getLanguageModelNamespace();
+  if (!lm) {
+    return [];
+  }
+
+  return lm.tools.filter((tool) => ALLOWED_TOOL_NAMES.has(tool.name));
 }
 
 async function getOwnershipState(): Promise<OwnershipState> {

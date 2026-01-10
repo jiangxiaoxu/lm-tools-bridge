@@ -14,7 +14,6 @@
     "onCommand:lm-tools-dump",
     "onCommand:lm-tools-mcp.start",
     "onCommand:lm-tools-mcp.stop",
-    "onCommand:lm-tools-mcp.configureTools",
     "onCommand:lm-tools-mcp.takeOver"
   ],
   "main": "./out/extension.js",
@@ -31,10 +30,6 @@
       {
         "command": "lm-tools-mcp.stop",
         "title": "LM Tools MCP: Stop Server"
-      },
-      {
-        "command": "lm-tools-mcp.configureTools",
-        "title": "LM Tools MCP: Configure Exposed Tools"
       },
       {
         "command": "lm-tools-mcp.takeOver",
@@ -61,13 +56,22 @@
           "maximum": 65535,
           "description": "Port for the MCP server."
         },
-        "lmToolsMcp.tools.disabled": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "description": "List of LM tool names disabled from MCP exposure."
+        "lmToolsMcp.chat.modelId": {
+          "type": "string",
+          "default": "gpt-5-mini",
+          "description": "Preferred model ID for Language Model API."
+        },
+        "lmToolsMcp.chat.modelFamily": {
+          "type": "string",
+          "default": "gpt-5-mini",
+          "description": "Fallback model family if modelId is not found."
+        },
+        "lmToolsMcp.chat.maxIterations": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum tool-calling iterations for a chat request."
         }
       }
     }

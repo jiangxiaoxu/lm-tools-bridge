@@ -129,7 +129,7 @@ let toolInvocationTokenRequired = new Set<string>();
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
   logChannel = outputChannel as vscode.LogOutputChannel;
-  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
   globalState = context.globalState;
   toolInvocationTokenRequired = new Set(
     globalState.get<string[]>('lmToolsBridge.toolInvocationTokenRequired', []),
@@ -1506,11 +1506,11 @@ function updateStatusBar(state: OwnershipState): void {
   if (state === 'owner') {
     statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Owner';
     statusBarItem.tooltip = `This VS Code instance owns LM Tools Bridge (${config.host}:${config.port}).`;
-    statusBarItem.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
+    statusBarItem.color = undefined;
   } else if (state === 'inUse') {
     statusBarItem.text = '$(lock) LM Tools Bridge: In Use';
     statusBarItem.tooltip = `LM Tools Bridge port is in use (${config.host}:${config.port}). Click to take over.`;
-    statusBarItem.color = new vscode.ThemeColor('statusBarItem.warningForeground');
+    statusBarItem.color = undefined;
   } else {
     statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
     statusBarItem.tooltip = `LM Tools Bridge server is not running (${config.host}:${config.port}). Click to take over.`;

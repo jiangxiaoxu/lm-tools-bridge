@@ -6,21 +6,22 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import * as z from 'zod';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
-const LOG_CHANNEL_NAME = 'lm-tools-bridge';
-const DUMP_COMMAND_ID = 'lm-tools-bridge.dump';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
 const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
 const TAKE_OVER_COMMAND_ID = 'lm-tools-bridge.takeOver';
+const CONFIGURE_COMMAND_ID = 'lm-tools-bridge.configureTools';
+const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
 const CONFIG_SECTION = 'lmToolsBridge';
+const CONFIG_ENABLED_TOOLS = 'tools.enabled';
+const CONFIG_BLACKLIST = 'tools.blacklist';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
 const HEALTH_PATH = '/mcp/health';
-const ALLOWED_TOOL_NAMES = new Set([
+const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
-  'copilot_getVSCodeAPI',
   'copilot_findFiles',
   'copilot_findTextInFiles',
   'copilot_readFile',
@@ -35,6 +36,33 @@ const ALLOWED_TOOL_NAMES = new Set([
   'get_terminal_output',
   'terminal_selection',
   'terminal_last_command',
+];
+const INTERNAL_BLACKLIST = new Set([
+  'copilot_applyPatch',
+  'copilot_insertEdit',
+  'copilot_replaceString',
+  'copilot_multiReplaceString',
+  'copilot_createFile',
+  'copilot_createDirectory',
+  'copilot_createNewJupyterNotebook',
+  'copilot_editNotebook',
+  'copilot_runNotebookCell',
+  'copilot_createNewWorkspace',
+  'copilot_getVSCodeAPI',
+  'copilot_installExtension',
+  'copilot_runVscodeCommand',
+  'create_and_run_task',
+  'run_in_terminal',
+  'manage_todo_list',
+  'copilot_memory',
+  'copilot_getNotebookSummary',
+  'copilot_fetchWebPage',
+  'copilot_openSimpleBrowser',
+  'copilot_editFiles',
+  'copilot_getProjectSetupInfo',
+  'runSubagent',
+  'vscode_get_confirmation',
+  'inline_chat_exit',
 ]);
 
 type ChatRole = 'system' | 'user' | 'assistant';
@@ -99,23 +127,24 @@ let globalState: vscode.Memento | undefined;
 let toolInvocationTokenRequired = new Set<string>();
 
 export function activate(context: vscode.ExtensionContext): void {
-  const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
-  logChannel = vscode.window.createOutputChannel(LOG_CHANNEL_NAME, { log: true });
+  const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
+  logChannel = outputChannel as vscode.LogOutputChannel;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   globalState = context.globalState;
   toolInvocationTokenRequired = new Set(
     globalState.get<string[]>('lmToolsBridge.toolInvocationTokenRequired', []),
   );
-  const dumpCommand = vscode.commands.registerCommand(DUMP_COMMAND_ID, () => {
-    outputChannel.clear();
-    outputChannel.show(true);
-    dumpLmTools(outputChannel);
-  });
   const startCommand = vscode.commands.registerCommand(START_COMMAND_ID, () => {
     void startMcpServer(outputChannel);
   });
   const stopCommand = vscode.commands.registerCommand(STOP_COMMAND_ID, () => {
     void stopMcpServer(outputChannel);
+  });
+  const configureCommand = vscode.commands.registerCommand(CONFIGURE_COMMAND_ID, () => {
+    void configureExposedTools();
+  });
+  const statusMenuCommand = vscode.commands.registerCommand(STATUS_MENU_COMMAND_ID, () => {
+    void showStatusMenu(outputChannel);
   });
   const takeOverCommand = vscode.commands.registerCommand(TAKE_OVER_COMMAND_ID, () => {
     void handleTakeOverCommand(outputChannel);
@@ -130,11 +159,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     outputChannel,
-    logChannel,
     statusBarItem,
-    dumpCommand,
     startCommand,
     stopCommand,
+    configureCommand,
+    statusMenuCommand,
     takeOverCommand,
     configWatcher,
     { dispose: () => { void stopMcpServer(outputChannel); } },
@@ -147,6 +176,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   void refreshStatusBar();
   logInfo('Extension activated.');
+  void vscode.commands.executeCommand('setContext', 'lmToolsBridge.statusBar', true);
 }
 
 export function deactivate(): void {
@@ -161,7 +191,7 @@ export function deactivate(): void {
 }
 
 function dumpLmTools(channel: vscode.OutputChannel): void {
-  const tools = getAllAllowedToolsSnapshot();
+  const tools = getExposedToolsSnapshot();
   if (tools.length === 0) {
     channel.appendLine('No tools found in vscode.lm.tools.');
     return;
@@ -185,6 +215,12 @@ function dumpLmTools(channel: vscode.OutputChannel): void {
   }
 }
 
+function showEnabledToolsDump(channel: vscode.OutputChannel): void {
+  channel.clear();
+  channel.show(true);
+  dumpLmTools(channel);
+}
+
 function getServerConfig(): ServerConfig {
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   return {
@@ -192,6 +228,118 @@ function getServerConfig(): ServerConfig {
     host: config.get<string>('server.host', DEFAULT_HOST),
     port: config.get<number>('server.port', DEFAULT_PORT),
   };
+}
+
+function getEnabledToolsSetting(): string[] {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const enabled = config.get<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
+  return Array.isArray(enabled) ? enabled.filter((name) => typeof name === 'string') : [];
+}
+
+function getBlacklistPatterns(): string[] {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const raw = config.get<string>(CONFIG_BLACKLIST, '');
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => entry.toLowerCase());
+}
+
+function isToolBlacklisted(name: string, patterns: string[]): boolean {
+  if (patterns.length === 0) {
+    return false;
+  }
+  const lowered = name.toLowerCase();
+  return patterns.some((pattern) => lowered.includes(pattern));
+}
+
+function isToolInternallyBlacklisted(name: string): boolean {
+  return INTERNAL_BLACKLIST.has(name);
+}
+
+async function setEnabledTools(enabled: string[]): Promise<void> {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  await config.update(CONFIG_ENABLED_TOOLS, enabled, vscode.ConfigurationTarget.Global);
+}
+
+async function resetEnabledTools(): Promise<void> {
+  await setEnabledTools([...DEFAULT_ENABLED_TOOL_NAMES]);
+}
+
+async function configureExposedTools(): Promise<void> {
+  const lm = getLanguageModelNamespace();
+  if (!lm) {
+    void vscode.window.showWarningMessage('vscode.lm is not available in this VS Code version.');
+    return;
+  }
+
+  const tools = lm.tools;
+  if (tools.length === 0) {
+    void vscode.window.showInformationMessage('No tools found in vscode.lm.tools.');
+    return;
+  }
+
+  const blacklistPatterns = getBlacklistPatterns();
+  const visibleTools = tools.filter((tool) => {
+    if (isToolInternallyBlacklisted(tool.name)) {
+      return false;
+    }
+    return !isToolBlacklisted(tool.name, blacklistPatterns);
+  });
+  if (visibleTools.length === 0) {
+    void vscode.window.showWarningMessage('All tools are hidden by the blacklist configuration.');
+    return;
+  }
+
+  const enabledSet = new Set(getEnabledToolsSetting());
+  const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
+
+  items.push({
+    label: '$(refresh) Reset (default enabled list)',
+    description: 'Restore the default enabled tool list',
+    alwaysShow: true,
+    isReset: true,
+  });
+  items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
+
+  for (const tool of visibleTools) {
+    items.push({
+      label: tool.name,
+      description: tool.description,
+      detail: tool.tags.length > 0 ? tool.tags.join(', ') : undefined,
+      picked: enabledSet.has(tool.name),
+      toolName: tool.name,
+    });
+  }
+
+  const selections = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: 'Configure exposed LM tools',
+    placeHolder: 'Select tools to expose to MCP',
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+
+  if (!selections) {
+    return;
+  }
+
+  const shouldReset = selections.some((item) => item.isReset);
+  if (shouldReset) {
+    await resetEnabledTools();
+    void vscode.window.showInformationMessage('Enabled tools reset to defaults.');
+    return;
+  }
+
+  const selectedNames = new Set(
+    selections
+      .map((item) => item.toolName)
+      .filter((name): name is string => typeof name === 'string'),
+  );
+
+  await setEnabledTools(Array.from(selectedNames));
+  void vscode.window.showInformationMessage(`Enabled ${selectedNames.size} tool(s) for MCP.`);
 }
 
 
@@ -488,7 +636,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           return toolErrorResult('vscode.lm is not available in this VS Code version.');
         }
 
-        const tools = getAllAllowedToolsSnapshot();
+        const tools = getExposedToolsSnapshot();
         const detail: ToolDetail = args.detail ?? 'summary';
 
         if (args.action === 'listTools') {
@@ -542,7 +690,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
             requiresToolInvocationToken: true,
             hint: 'This tool requires a chat toolInvocationToken and cannot be invoked directly via vscodeLmToolkit.',
             inputSchema: args.name
-              ? getAllAllowedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
+              ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
               : null,
           });
         }
@@ -550,7 +698,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           error: message,
           name: args.name,
           inputSchema: args.name
-            ? getAllAllowedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
+            ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
             : null,
         });
       }
@@ -602,7 +750,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         });
         const maxIterations = args.maxIterations ?? getChatConfig().maxIterations;
         const toolMode = vscode.LanguageModelChatToolMode.Auto;
-        const tools = getAllAllowedToolsSnapshot();
+        const tools = getExposedToolsSnapshot();
         logInfo(`vscodeLmChat tools available (${tools.length}): ${tools.map((tool) => tool.name).join(', ')}`);
 
         const result = await runChatWithTools(lm, chatModel, messages, tools, {
@@ -627,7 +775,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     { description: 'List exposed tool names.' },
     async () => {
       logInfo('Resource read: lm-tools://names');
-      return resourceJson('lm-tools://names', listToolsPayload(getAllAllowedToolsSnapshot(), 'names'));
+      return resourceJson('lm-tools://names', listToolsPayload(getExposedToolsSnapshot(), 'names'));
     },
   );
 
@@ -637,7 +785,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     { description: 'List exposed tools with descriptions.' },
     async () => {
       logInfo('Resource read: lm-tools://list');
-      return resourceJson('lm-tools://list', listToolsPayload(getAllAllowedToolsSnapshot(), 'summary'));
+      return resourceJson('lm-tools://list', listToolsPayload(getExposedToolsSnapshot(), 'summary'));
     },
   );
 
@@ -645,7 +793,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     list: () => {
       logInfo('Resource list: lm-tools://tool/{name}');
       return {
-        resources: getAllAllowedToolsSnapshot().map((tool) => ({
+        resources: getExposedToolsSnapshot().map((tool) => ({
           uri: `lm-tools://tool/${tool.name}`,
           name: tool.name,
           title: tool.name,
@@ -656,7 +804,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     complete: {
       name: (value) => {
         logInfo(`Resource complete: lm-tools://tool/{name} value=${value}`);
-        return getAllAllowedToolsSnapshot()
+        return getExposedToolsSnapshot()
           .map((tool) => tool.name)
           .filter((name) => name.startsWith(value));
       },
@@ -673,7 +821,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!name) {
         return resourceJson(uri.toString(), { error: 'Tool name is required.' });
       }
-      const tool = getAllAllowedToolsSnapshot().find((candidate) => candidate.name === name);
+      const tool = getExposedToolsSnapshot().find((candidate) => candidate.name === name);
       if (!tool) {
         return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
       }
@@ -685,7 +833,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     list: () => {
       logInfo('Resource list: lm-tools://schema/{name}');
       return {
-        resources: getAllAllowedToolsSnapshot().map((tool) => ({
+        resources: getExposedToolsSnapshot().map((tool) => ({
           uri: `lm-tools://schema/${tool.name}`,
           name: tool.name,
           title: tool.name,
@@ -696,7 +844,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     complete: {
       name: (value) => {
         logInfo(`Resource complete: lm-tools://schema/{name} value=${value}`);
-        return getAllAllowedToolsSnapshot()
+        return getExposedToolsSnapshot()
           .map((tool) => tool.name)
           .filter((name) => name.startsWith(value));
       },
@@ -713,7 +861,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!name) {
         return resourceJson(uri.toString(), { error: 'Tool name is required.' });
       }
-      const tool = getAllAllowedToolsSnapshot().find((candidate) => candidate.name === name);
+      const tool = getExposedToolsSnapshot().find((candidate) => candidate.name === name);
       if (!tool) {
         return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
       }
@@ -736,7 +884,7 @@ async function handleHealth(
 
   try {
     const ownership = await getOwnershipState();
-    const toolsSnapshot = getAllAllowedToolsSnapshot();
+    const toolsSnapshot = getExposedToolsSnapshot();
     const toolsCount = toolsSnapshot.length;
     const toolNames = toolsSnapshot.map((tool) => tool.name);
     const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => ({
@@ -1309,13 +1457,33 @@ function getLanguageModelNamespace(): typeof vscode.lm | undefined {
   return possibleLm;
 }
 
-function getAllAllowedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+function getAllLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
   const lm = getLanguageModelNamespace();
-  if (!lm) {
-    return [];
-  }
+  return lm ? lm.tools : [];
+}
 
-  return lm.tools.filter((tool) => ALLOWED_TOOL_NAMES.has(tool.name));
+function getVisibleToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+  const blacklistPatterns = getBlacklistPatterns();
+  return getAllLmToolsSnapshot().filter((tool) => {
+    if (isToolInternallyBlacklisted(tool.name)) {
+      return false;
+    }
+    return !isToolBlacklisted(tool.name, blacklistPatterns);
+  });
+}
+
+function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+  const enabledSet = new Set(getEnabledToolsSetting());
+  const blacklistPatterns = getBlacklistPatterns();
+  return getAllLmToolsSnapshot().filter((tool) => {
+    if (isToolInternallyBlacklisted(tool.name)) {
+      return false;
+    }
+    if (isToolBlacklisted(tool.name, blacklistPatterns)) {
+      return false;
+    }
+    return enabledSet.has(tool.name);
+  });
 }
 
 async function getOwnershipState(): Promise<OwnershipState> {
@@ -1334,21 +1502,64 @@ function updateStatusBar(state: OwnershipState): void {
   }
 
   const config = getServerConfig();
-  statusBarItem.command = TAKE_OVER_COMMAND_ID;
+  statusBarItem.command = STATUS_MENU_COMMAND_ID;
   if (state === 'owner') {
-    statusBarItem.text = '$(debug-disconnect) MCP: Owner';
-    statusBarItem.tooltip = `This VS Code instance owns MCP (${config.host}:${config.port}).`;
+    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Owner';
+    statusBarItem.tooltip = `This VS Code instance owns LM Tools Bridge (${config.host}:${config.port}).`;
     statusBarItem.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
   } else if (state === 'inUse') {
-    statusBarItem.text = '$(lock) MCP: In Use';
-    statusBarItem.tooltip = `MCP port is in use (${config.host}:${config.port}). Click to take over.`;
+    statusBarItem.text = '$(lock) LM Tools Bridge: In Use';
+    statusBarItem.tooltip = `LM Tools Bridge port is in use (${config.host}:${config.port}). Click to take over.`;
     statusBarItem.color = new vscode.ThemeColor('statusBarItem.warningForeground');
   } else {
-    statusBarItem.text = '$(circle-slash) MCP: Off';
-    statusBarItem.tooltip = `MCP server is not running (${config.host}:${config.port}). Click to take over.`;
+    statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
+    statusBarItem.tooltip = `LM Tools Bridge server is not running (${config.host}:${config.port}). Click to take over.`;
     statusBarItem.color = undefined;
   }
   statusBarItem.show();
+}
+
+async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
+  const ownership = await getOwnershipState();
+  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'dump' }> = [
+    {
+      label: '$(debug-disconnect) Take Over MCP',
+      description: ownership === 'owner' ? 'Already owning the MCP server' : 'Acquire ownership of the MCP port',
+      action: 'takeOver',
+    },
+    {
+      label: '$(settings-gear) Configure Exposed Tools',
+      description: 'Enable/disable tools exposed via MCP',
+      action: 'configure',
+    },
+    {
+      label: '$(list-unordered) Dump Enabled Tools',
+      description: 'Show enabled tool descriptions in Output',
+      action: 'dump',
+    },
+  ];
+
+  const selection = await vscode.window.showQuickPick(items, {
+    title: 'LM Tools Bridge',
+    placeHolder: 'Select an action',
+  });
+  if (!selection || !selection.action) {
+    return;
+  }
+
+  if (selection.action === 'takeOver') {
+    await handleTakeOverCommand(channel);
+    return;
+  }
+
+  if (selection.action === 'configure') {
+    await configureExposedTools();
+    return;
+  }
+
+  if (selection.action === 'dump') {
+    showEnabledToolsDump(channel);
+  }
 }
 
 function logInfo(message: string): void {

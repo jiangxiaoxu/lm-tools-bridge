@@ -16,10 +16,6 @@
   "contributes": {
     "commands": [
       {
-        "command": "lm-tools-bridge.dump",
-        "title": "lm-tools-bridge.dump"
-      },
-      {
         "command": "lm-tools-bridge.start",
         "title": "LM Tools Bridge: Start Server"
       },
@@ -30,6 +26,14 @@
       {
         "command": "lm-tools-bridge.takeOver",
         "title": "LM Tools Bridge: Take Over Server"
+      },
+      {
+        "command": "lm-tools-bridge.configureTools",
+        "title": "LM Tools Bridge: Configure Tools"
+      },
+      {
+        "command": "lm-tools-bridge.statusMenu",
+        "title": "LM Tools Bridge: Status Menu"
       }
     ],
     "configuration": {
@@ -68,6 +72,37 @@
           "minimum": 1,
           "maximum": 20,
           "description": "Maximum tool-calling iterations for a chat request."
+        },
+        "lmToolsBridge.tools.enabled": {
+          "type": "array",
+          "default": [
+            "copilot_searchCodebase",
+            "copilot_searchWorkspaceSymbols",
+            "copilot_listCodeUsages",
+            "copilot_findFiles",
+            "copilot_findTextInFiles",
+            "copilot_readFile",
+            "copilot_listDirectory",
+            "copilot_getErrors",
+            "copilot_readProjectStructure",
+            "copilot_getChangedFiles",
+            "copilot_testFailure",
+            "copilot_findTestFiles",
+            "copilot_getDocInfo",
+            "copilot_getSearchResults",
+            "get_terminal_output",
+            "terminal_selection",
+            "terminal_last_command"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "List of LM tool names enabled for MCP exposure."
+        },
+        "lmToolsBridge.tools.blacklist": {
+          "type": "string",
+          "default": "",
+          "description": "Comma-separated substring patterns to hide/disable tools (case-insensitive). Blacklist takes precedence over enabled list."
         }
       }
     }

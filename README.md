@@ -7,12 +7,12 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 1. Open the extension in VS Code.
 2. Run `npm install`.
 3. Press `F5` to launch the Extension Development Host.
-4. (Optional) In the Extension Development Host, press `Ctrl+Shift+P` and run `lm-tools-bridge.dump`.
+4. Use the status bar menu to dump enabled tools when needed.
 5. Check Output -> `LM Tools Bridge`.
 
 ## MCP Server
 
-The extension starts a local MCP Streamable HTTP server and exposes two tools plus resources. Only tools in a fixed whitelist are exposed.
+The extension starts a local MCP Streamable HTTP server and exposes two tools plus resources. Only tools enabled in settings and not blacklisted are exposed.
 
 - Endpoint: `http://127.0.0.1:48123/mcp`
 - Tool names:
@@ -26,15 +26,14 @@ The extension starts a local MCP Streamable HTTP server and exposes two tools pl
 
 `lm-tools://list` also includes `toolUri`, `schemaUri`, and `usageHint` to guide whether to call via `vscodeLmToolkit` or `vscodeLmChat`.
 
-### Allowed tools (whitelist)
+### Default enabled tools
 
-Only the following tools are exposed via MCP:
+By default, the following tools are enabled for MCP exposure (you can change this via the status bar or settings):
 
 Workspace search/read/diagnostics:
 - `copilot_searchCodebase`
 - `copilot_searchWorkspaceSymbols`
 - `copilot_listCodeUsages`
-- `copilot_getVSCodeAPI`
 - `copilot_findFiles`
 - `copilot_findTextInFiles`
 - `copilot_readFile`
@@ -51,6 +50,36 @@ Terminal output read-only:
 - `get_terminal_output`
 - `terminal_selection`
 - `terminal_last_command`
+
+### Internal blacklist (always disabled)
+
+These tools are always hidden and cannot be enabled via settings:
+
+- `copilot_applyPatch`
+- `copilot_insertEdit`
+- `copilot_replaceString`
+- `copilot_multiReplaceString`
+- `copilot_createFile`
+- `copilot_createDirectory`
+- `copilot_createNewJupyterNotebook`
+- `copilot_editNotebook`
+- `copilot_runNotebookCell`
+- `copilot_createNewWorkspace`
+- `copilot_installExtension`
+- `copilot_runVscodeCommand`
+- `create_and_run_task`
+- `run_in_terminal`
+- `manage_todo_list`
+- `copilot_memory`
+- `copilot_getNotebookSummary`
+- `copilot_fetchWebPage`
+- `copilot_openSimpleBrowser`
+- `copilot_editFiles`
+- `copilot_getProjectSetupInfo`
+- `runSubagent`
+- `vscode_get_confirmation`
+- `inline_chat_exit`
+- `copilot_getVSCodeAPI`
 
 ### Tool input (vscodeLmChat)
 
@@ -109,7 +138,14 @@ Note: `action` is **only** for `vscodeLmToolkit` itself. The `input` field is fo
 - `lmToolsBridge.chat.modelId` (default: gpt-5-mini)
 - `lmToolsBridge.chat.modelFamily` (default: gpt-5-mini)
 - `lmToolsBridge.chat.maxIterations` (default: 6)
-- `lmToolsBridge.tools.disabled` (default: [])
+- `lmToolsBridge.tools.enabled` (default: the list above)
+- `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
+
+### Configure exposed tools
+
+- Right-click the status bar item and select `LM Tools Bridge: Configure Tools`.
+- Use the multi-select list to enable tools. Click **Reset** to restore defaults.
+- Tools matching the blacklist are hidden from the picker and are always disabled.
 
 
 ### Take over MCP server
@@ -118,10 +154,10 @@ When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server
 
 ### Status bar indicator
 
-The status bar shows the MCP ownership state:
-- `MCP: Owner` (this instance hosts the port)
-- `MCP: In Use` (another instance hosts the port)
-- `MCP: Off` (no server running)
+The status bar shows the ownership state:
+- `LM Tools Bridge: Owner` (this instance hosts the port)
+- `LM Tools Bridge: In Use` (another instance hosts the port)
+- `LM Tools Bridge: Off` (no server running)
 
 Click the status bar item to take over when not owning the port.
 

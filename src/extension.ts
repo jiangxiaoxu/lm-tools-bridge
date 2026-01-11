@@ -20,6 +20,7 @@ const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
 const CONTROL_STATUS_PATH = '/mcp-control/status';
 const HEALTH_PATH = '/mcp/health';
+const STATUS_REFRESH_INTERVAL_MS = 3000;
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
@@ -133,6 +134,7 @@ let logChannel: vscode.LogOutputChannel | undefined;
 let globalState: vscode.Memento | undefined;
 let toolInvocationTokenRequired = new Set<string>();
 let helpUrl: string | undefined;
+let statusRefreshTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
@@ -188,12 +190,21 @@ export function activate(context: vscode.ExtensionContext): void {
       await startMcpServer(outputChannel);
     }
     await refreshStatusBar();
+    if (!statusRefreshTimer) {
+      statusRefreshTimer = setInterval(() => {
+        void refreshStatusBar();
+      }, STATUS_REFRESH_INTERVAL_MS);
+    }
   })();
   logInfo('Extension activated.');
   void vscode.commands.executeCommand('setContext', 'lmToolsBridge.statusBar', true);
 }
 
 export function deactivate(): void {
+  if (statusRefreshTimer) {
+    clearInterval(statusRefreshTimer);
+    statusRefreshTimer = undefined;
+  }
   if (serverState) {
     try {
       serverState.server.close();
@@ -1603,11 +1614,11 @@ function updateStatusBar(info: OwnershipInfo): void {
   const tooltip = buildStatusTooltip(info.ownerWorkspacePath, config.host, config.port);
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
   if (info.state === 'owner') {
-    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Owner';
+    statusBarItem.text = '$(lock) LM Tools Bridge: Owner';
     statusBarItem.tooltip = tooltip;
     statusBarItem.color = undefined;
   } else if (info.state === 'nonOwner') {
-    statusBarItem.text = '$(lock) LM Tools Bridge: Non-owner';
+    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Non-owner';
     statusBarItem.tooltip = `${tooltip}\nClick to take over.`;
     statusBarItem.color = undefined;
   } else {

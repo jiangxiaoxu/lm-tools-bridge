@@ -2,9 +2,9 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "0.0.1",
+  "version": "1.0.1",
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.104.0"
   },
   "categories": [
     "Other"
@@ -108,7 +108,8 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run compile && npm run bundle",
+    "bundle": "node ./scripts/bundle.mjs",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./"
   },
@@ -119,6 +120,7 @@
   "devDependencies": {
     "@types/node": "^20.11.19",
     "@types/vscode": "^1.95.0",
+    "esbuild": "^0.27.2",
     "typescript": "^5.4.5"
   }
 }

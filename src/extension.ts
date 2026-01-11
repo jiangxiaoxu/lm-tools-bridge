@@ -734,7 +734,14 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
     'vscodeLmToolkit',
     {
-      description: 'List, inspect, and invoke tools from vscode.lm.tools. Valid actions: "listTools" | "getToolInfo" | "invokeTool". listTools only allows { action, detail? } and defaults to detail="names". getToolInfo requires { action:"getToolInfo", name } and returns full detail (no detail). invokeTool requires { action:"invokeTool", name, input? } and input must be an object. Use lm-tools://schema/{name} for input shapes.',
+      description: [
+        'List, inspect, and invoke tools from vscode.lm.tools.',
+        'Valid actions: "listTools" | "getToolInfo" | "invokeTool".',
+        '• listTools only allows { action, detail? } and defaults to detail="names". Use detail="full" when you need all tool info.',
+        '• getToolInfo requires { action:"getToolInfo", name } and always returns full detail (no detail parameter).',
+        '• invokeTool requires { action:"invokeTool", name, input? } and the input must be an object.',
+        'Use lm-tools://schema/{name} for tool input shapes before invoking.',
+      ].join('\n'),
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {
@@ -967,7 +974,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           uri: `lm-tools://tool/${tool.name}`,
           name: tool.name,
           title: tool.name,
-          description: tool.description,
+          description: `${tool.description} (Read lm-tools://schema/${tool.name} before invoking this tool to satisfy schema validation.)`,
         })),
       };
     },
@@ -1007,7 +1014,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           uri: `lm-tools://schema/${tool.name}`,
           name: tool.name,
           title: tool.name,
-          description: 'Input schema',
+          description: 'Input schema (call this before invoking the tool to avoid validation errors).',
         })),
       };
     },
@@ -1024,7 +1031,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerResource(
     'lmToolsSchema',
     schemaTemplate,
-    { description: 'Read tool input schema by name.' },
+    { description: 'Read tool input schema by name. Call it before invoking the tool to satisfy the validator.' },
     async (uri, variables) => {
       const name = readTemplateVariable(variables, 'name');
       logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);

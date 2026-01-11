@@ -165,6 +165,14 @@ Example result (multiple workspaces):
 }
 ```
 
+### Recommended tool call order
+
+1. Call `getVSCodeWorkspace` to verify the workspace matches the status bar tooltip.
+2. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `listTools detail:"full"`); the schema must be read before invoking.
+3. Invoke the tool with `vscodeLmToolkit`/`vscodeLmChat` once the schema is known.
+
+Following these steps prevents validation errors such as missing `action` or schema mismatches.
+
 ### Settings
 
 - `lmToolsBridge.server.autoStart` (default: true)

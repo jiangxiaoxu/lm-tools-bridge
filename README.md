@@ -24,10 +24,11 @@ The extension starts a local MCP Streamable HTTP server and exposes tools plus r
   - `lm-tools://names` (tool names only)
   - `lm-tools://tool/{name}` (full tool detail)
   - `lm-tools://schema/{name}` (input schema only; not listed by `list_mcp_resources`)
-  - `lm-tools://policy` (recommended call order policy)
+  - `lm-tools://policy` (recommended call order policy; use lm-tools://mcp-tool/getVSCodeWorkspace, then lm-tools://schema/{name}, then invokeTool with lm-tools://tool/{name})
   - `lm-tools://mcp-tool/getVSCodeWorkspace` (MCP-native tool description)
 
 Use `lm-tools://schema/{name}` to fetch input structure when needed.
+Resource list entries include `uri`, `name`, and `description` (no `title`) to minimize payload.
 
 ### Default enabled tools
 

@@ -915,19 +915,21 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
   const policyPayload = {
     order: [
-      'getVSCodeWorkspace',
-      'read schema via lm-tools://schema/{name}',
-      'invokeTool',
+      'lm-tools://mcp-tool/getVSCodeWorkspace',
+      'lm-tools://schema/{name}',
+      'invokeTool (see lm-tools://tool/{name})',
     ],
     schemaUriFormat: 'lm-tools://schema/{name}',
     schemaUriNote: 'Replace {name} with the exact tool name (e.g., lm-tools://schema/copilot_readFile).',
-    note: 'Always verify the workspace and read the target tool schema before invoking any tool.',
+    workspaceUri: 'lm-tools://mcp-tool/getVSCodeWorkspace',
+    toolUriFormat: 'lm-tools://tool/{name}',
+    note: 'Use getVSCodeWorkspace to verify the workspace, then read the target tool schema before invoking any tool.',
   };
 
   server.registerResource(
     'lmToolsPolicy',
     'lm-tools://policy',
-    { description: 'Call order policy: verify workspace, then read schema, then invoke tools.' },
+    { description: 'Call order policy: use getVSCodeWorkspace (lm-tools://mcp-tool/getVSCodeWorkspace) to verify workspace, then read tool schema (lm-tools://schema/{name}), then invokeTool (see lm-tools://tool/{name}).' },
     async () => {
       logInfo('Resource read: lm-tools://policy');
       return resourceJson('lm-tools://policy', policyPayload);
@@ -942,7 +944,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           {
             uri: 'lm-tools://mcp-tool/getVSCodeWorkspace',
             name: 'getVSCodeWorkspace',
-            title: 'getVSCodeWorkspace',
             description: getWorkspaceDescription,
           },
         ],
@@ -984,7 +985,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
           uri: `lm-tools://tool/${tool.name}`,
           name: tool.name,
-          title: tool.name,
           description: tool.description,
         })),
       };

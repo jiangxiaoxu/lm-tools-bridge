@@ -13,19 +13,21 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 
 ## MCP Server
 
-The extension starts a local MCP Streamable HTTP server and exposes two tools plus resources. Only tools enabled in settings and not blacklisted are exposed.
+The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed.
 
 - Endpoint: `http://127.0.0.1:48123/mcp`
 - Tool names:
   - `vscodeLmChat`
   - `vscodeLmToolkit`
+  - `getVSCodeWorkspace` (call this first to confirm the workspace before using other tools)
 - Resources:
   - `lm-tools://names` (tool names only)
-  - `lm-tools://list` (name/description/tags)
+  - `lm-tools://list` (tool names only; same as `lm-tools://names`)
   - `lm-tools://tool/{name}` (full tool detail)
   - `lm-tools://schema/{name}` (input schema only)
+  - `lm-tools://mcp-tool/getVSCodeWorkspace` (MCP-native tool description)
 
-`lm-tools://list` also includes `toolUri`, `schemaUri`, and `usageHint` to guide whether to call via `vscodeLmToolkit` or `vscodeLmChat`.
+Use `lm-tools://schema/{name}` to fetch input structure when needed.
 
 ### Default enabled tools
 
@@ -51,6 +53,7 @@ Terminal output read-only:
 - `get_terminal_output`
 - `terminal_selection`
 - `terminal_last_command`
+- `getVSCodeWorkspace`
 
 ### Internal blacklist (always disabled)
 
@@ -123,13 +126,45 @@ Note: `role: "system"` is forwarded as a user message named `system` because the
 {
   "action": "listTools | getToolInfo | invokeTool",
   "name": "toolName",
-  "detail": "names | summary | full",
+  "detail": "names | full",
   "input": {},
   "includeBinary": false
 }
 ```
 
-Note: `action` is **only** for `vscodeLmToolkit` itself. The `input` field is for the target tool and must follow its schema (`lm-tools://schema/{name}`).
+Note: `action` is **only** for `vscodeLmToolkit` itself. The `input` field is for the target tool and must follow its schema (`lm-tools://schema/{name}`). `detail` defaults to `names`.
+For `listTools`, only `action` and optional `detail` are allowed. `getToolInfo` does not accept `detail` and always returns full detail (including `inputSchema`). Use `detail: "full"` with `listTools` when you need full tool info.
+
+### MCP native tool: getVSCodeWorkspace
+
+`getVSCodeWorkspace` returns the workspace information that matches the status bar tooltip. Before using any other tool for the first time, call `getVSCodeWorkspace` to verify the workspace. If it does not match, ask the user to confirm.
+
+Example call (tools/call):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "getVSCodeWorkspace",
+    "arguments": {}
+  }
+}
+```
+
+Example result (multiple workspaces):
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"ownerWorkspacePath\":\"G:\\\\UE_Folder\\\\vscode-lm-tools-bridge; G:\\\\UE_Folder\\\\another-workspace\",\"workspaceFolders\":[{\"name\":\"vscode-lm-tools-bridge\",\"path\":\"G:\\\\UE_Folder\\\\vscode-lm-tools-bridge\"},{\"name\":\"another-workspace\",\"path\":\"G:\\\\UE_Folder\\\\another-workspace\"}]}"
+    }
+  ]
+}
+```
 
 ### Settings
 

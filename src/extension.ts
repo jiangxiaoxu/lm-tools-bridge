@@ -39,6 +39,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'get_terminal_output',
   'terminal_selection',
   'terminal_last_command',
+  'getVSCodeWorkspace',
 ];
 const INTERNAL_BLACKLIST = new Set([
   'copilot_applyPatch',
@@ -70,7 +71,7 @@ const INTERNAL_BLACKLIST = new Set([
 
 type ChatRole = 'system' | 'user' | 'assistant';
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
-type ToolDetail = 'names' | 'summary' | 'full';
+type ToolDetail = 'names' | 'full';
 
 interface ChatMessageInput {
   role: ChatRole;
@@ -701,29 +702,39 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
-  const toolActionSchema = z.enum(['listTools', 'getToolInfo', 'invokeTool'])
-    .describe('Action for vscodeLmToolkit only. Valid values: listTools | getToolInfo | invokeTool.');
-  const toolDetailSchema = z.enum(['names', 'summary', 'full'])
-    .describe('Detail level for listTools/getToolInfo.');
-  const toolkitSchema: z.ZodTypeAny = z.object({
-    action: toolActionSchema,
-    name: z.string()
-      .describe('Target tool name. Required for getToolInfo/invokeTool.')
-      .optional(),
+  const toolDetailSchema = z.enum(['names', 'full'])
+    .describe('Detail level for listTools only. Use full to get complete tool info if needed.');
+  const listToolsSchema = z.object({
+    action: z.literal('listTools'),
     detail: toolDetailSchema.optional(),
+  }).strict().describe('List tools with optional detail. Only "action" (must be "listTools") and optional "detail" are allowed.');
+  const getToolInfoSchema = z.object({
+    action: z.literal('getToolInfo'),
+    name: z.string()
+      .describe('Target tool name. Required for getToolInfo.'),
+  }).strict().describe('Get tool info. Always returns full detail including inputSchema.');
+  const invokeToolSchema = z.object({
+    action: z.literal('invokeTool'),
+    name: z.string()
+      .describe('Target tool name. Required for invokeTool.'),
     input: z.object({}).passthrough()
       .describe('Target tool input object. See lm-tools://schema/{name}.')
       .optional(),
     includeBinary: z.boolean()
       .describe('Include base64 for binary data parts in tool results.')
       .optional(),
-  }).strict().describe('Toolkit wrapper for listing/inspecting/invoking copilot_ tools.');
+  }).strict().describe('Invoke a tool with input.');
+  const toolkitSchema: z.ZodTypeAny = z.discriminatedUnion('action', [
+    listToolsSchema,
+    getToolInfoSchema,
+    invokeToolSchema,
+  ]).describe('Toolkit wrapper for listing/inspecting/invoking tools. listTools only supports action/detail; getToolInfo always returns full detail.');
 
   // @ts-expect-error TS2589: Deep instantiation from SDK tool generics.
   server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
     'vscodeLmToolkit',
     {
-      description: 'List, inspect, and invoke copilot_ tools from vscode.lm.tools.',
+      description: 'List, inspect, and invoke tools from vscode.lm.tools. listTools supports only action/detail and defaults to names; use full if you need complete tool info. Tool input schemas are available via lm-tools://schema/{name}.',
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {
@@ -735,7 +746,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         }
 
         const tools = getExposedToolsSnapshot();
-        const detail: ToolDetail = args.detail ?? 'summary';
+        const detail: ToolDetail = args.detail ?? 'names';
 
         if (args.action === 'listTools') {
           logInfo(`vscodeLmToolkit action=listTools detail=${detail}`);
@@ -752,8 +763,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         }
 
         if (args.action === 'getToolInfo') {
-          logInfo(`vscodeLmToolkit action=getToolInfo name=${tool.name} detail=${detail}`);
-          return toolSuccessResult(toolInfoPayload(tool, detail));
+          if (args.detail !== undefined) {
+            return toolErrorResult('detail is not supported for getToolInfo; full detail is always returned.');
+          }
+          logInfo(`vscodeLmToolkit action=getToolInfo name=${tool.name} detail=full`);
+          return toolSuccessResult(toolInfoPayload(tool, 'full'));
         }
 
         const input = args.input ?? {};
@@ -803,6 +817,21 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
+  const getWorkspaceDescription = 'getVSCodeWorkspace: Get current VS Code workspace paths. Input schema is an empty object. Before using other tools, call getVSCodeWorkspace to verify the workspace. If it does not match, ask the user to confirm.';
+  const getWorkspaceSchema: z.ZodTypeAny = z.object({}).strict().describe('No input.');
+
+  server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
+    'getVSCodeWorkspace',
+    {
+      description: getWorkspaceDescription,
+      inputSchema: getWorkspaceSchema,
+    },
+    async () => toolSuccessResult({
+      ownerWorkspacePath: getOwnerWorkspacePath(),
+      workspaceFolders: getWorkspaceFoldersInfo(),
+    }),
+  );
+
   const messageSchema = z.object({
     role: z.enum(['system', 'user', 'assistant']),
     content: z.string(),
@@ -822,7 +851,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
     'vscodeLmChat',
     {
-      description: 'Run a chat request via VS Code Language Model API with tool calling.',
+      description: 'Run a chat request via VS Code Language Model API with tool calling. Input schema: { messages: [{ role, content, name? }], modelId?, modelFamily?, maxIterations?, toolMode?, justification?, modelOptions? }.',
       inputSchema: chatSchema,
     },
     async (args: ChatToolInput) => {
@@ -880,10 +909,53 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerResource(
     'lmToolsList',
     'lm-tools://list',
-    { description: 'List exposed tools with descriptions.' },
+    { description: 'List exposed tool names (same as lm-tools://names).' },
     async () => {
       logInfo('Resource read: lm-tools://list');
-      return resourceJson('lm-tools://list', listToolsPayload(getExposedToolsSnapshot(), 'summary'));
+      return resourceJson('lm-tools://list', listToolsPayload(getExposedToolsSnapshot(), 'names'));
+    },
+  );
+
+  const mcpToolTemplate = new ResourceTemplate('lm-tools://mcp-tool/{name}', {
+    list: () => {
+      logInfo('Resource list: lm-tools://mcp-tool/{name}');
+      return {
+        resources: [
+          {
+            uri: 'lm-tools://mcp-tool/getVSCodeWorkspace',
+            name: 'getVSCodeWorkspace',
+            title: 'getVSCodeWorkspace',
+            description: getWorkspaceDescription,
+          },
+        ],
+      };
+    },
+    complete: {
+      name: (value) => {
+        logInfo(`Resource complete: lm-tools://mcp-tool/{name} value=${value}`);
+        return ['getVSCodeWorkspace'].filter((name) => name.startsWith(value));
+      },
+    },
+  });
+
+  server.registerResource(
+    'mcpTools',
+    mcpToolTemplate,
+    { description: 'Read MCP-native tool definition by name. Supported: getVSCodeWorkspace. Call it first to verify the workspace; if it does not match, ask the user to confirm.' },
+    async (uri, variables) => {
+      const name = readTemplateVariable(variables, 'name');
+      logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);
+      if (!name) {
+        return resourceJson(uri.toString(), { error: 'Tool name is required.' });
+      }
+      if (name !== 'getVSCodeWorkspace') {
+        return resourceJson(uri.toString(), { error: `Tool not found: ${name}` });
+      }
+      return resourceJson(uri.toString(), {
+        name: 'getVSCodeWorkspace',
+        description: getWorkspaceDescription,
+        inputSchema: {},
+      });
     },
   );
 
@@ -891,7 +963,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     list: () => {
       logInfo('Resource list: lm-tools://tool/{name}');
       return {
-        resources: getExposedToolsSnapshot().map((tool) => ({
+        resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
           uri: `lm-tools://tool/${tool.name}`,
           name: tool.name,
           title: tool.name,
@@ -931,7 +1003,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     list: () => {
       logInfo('Resource list: lm-tools://schema/{name}');
       return {
-        resources: getExposedToolsSnapshot().map((tool) => ({
+        resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
           uri: `lm-tools://schema/${tool.name}`,
           name: tool.name,
           title: tool.name,
@@ -1052,40 +1124,17 @@ function resourceJson(uri: string, payload: Record<string, unknown>) {
 }
 
 function listToolsPayload(tools: readonly vscode.LanguageModelToolInformation[], detail: ToolDetail) {
+  const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
   if (detail === 'names') {
-    return { tools: tools.map((tool) => tool.name) };
-  }
-
-  if (detail === 'summary') {
-    return {
-      tools: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        tags: tool.tags,
-        toolUri: getToolUri(tool.name),
-        schemaUri: getSchemaUri(tool.name),
-        usageHint: getToolUsageHint(tool),
-      })),
-    };
+    return { tools: orderedTools.map((tool) => tool.name) };
   }
 
   return {
-    tools: tools.map((tool) => toolInfoPayload(tool, 'full')),
+    tools: orderedTools.map((tool) => toolInfoPayload(tool, 'full')),
   };
 }
 
 function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: ToolDetail) {
-  if (detail === 'summary') {
-    return {
-      name: tool.name,
-      description: tool.description,
-      tags: tool.tags,
-      toolUri: getToolUri(tool.name),
-      schemaUri: getSchemaUri(tool.name),
-      usageHint: getToolUsageHint(tool),
-    };
-  }
-
   if (detail === 'names') {
     return {
       name: tool.name,
@@ -1747,6 +1796,34 @@ function getOwnerWorkspacePath(): string {
     return 'No workspace open';
   }
   return folders.map((folder) => folder.uri.fsPath).join('; ');
+}
+
+function prioritizeTool(
+  tools: readonly vscode.LanguageModelToolInformation[],
+  preferredName: string,
+): vscode.LanguageModelToolInformation[] {
+  const ordered = [...tools];
+  ordered.sort((left, right) => {
+    if (left.name === preferredName) {
+      return -1;
+    }
+    if (right.name === preferredName) {
+      return 1;
+    }
+    return 0;
+  });
+  return ordered;
+}
+
+function getWorkspaceFoldersInfo(): Array<{ name: string; path: string }> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return [];
+  }
+  return folders.map((folder) => ({
+    name: folder.name,
+    path: folder.uri.fsPath,
+  }));
 }
 
 function resolveHelpUrl(context: vscode.ExtensionContext): string | undefined {

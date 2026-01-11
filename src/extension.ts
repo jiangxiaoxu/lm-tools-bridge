@@ -916,9 +916,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const policyPayload = {
     order: [
       'getVSCodeWorkspace',
-      'lm-tools://schema/{name}',
+      'read schema via lm-tools://schema/{name}',
       'invokeTool',
     ],
+    schemaUriFormat: 'lm-tools://schema/{name}',
+    schemaUriNote: 'Replace {name} with the exact tool name (e.g., lm-tools://schema/copilot_readFile).',
     note: 'Always verify the workspace and read the target tool schema before invoking any tool.',
   };
 
@@ -929,16 +931,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     async () => {
       logInfo('Resource read: lm-tools://policy');
       return resourceJson('lm-tools://policy', policyPayload);
-    },
-  );
-
-  server.registerResource(
-    'lmToolsList',
-    'lm-tools://list',
-    { description: 'List exposed tool names (same as lm-tools://names).' },
-    async () => {
-      logInfo('Resource read: lm-tools://list');
-      return resourceJson('lm-tools://list', listToolsPayload(getExposedToolsSnapshot(), 'names'));
     },
   );
 
@@ -993,7 +985,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           uri: `lm-tools://tool/${tool.name}`,
           name: tool.name,
           title: tool.name,
-          description: `${tool.description} (Read lm-tools://schema/${tool.name} before invoking this tool to satisfy schema validation.)`,
+          description: tool.description,
         })),
       };
     },
@@ -1028,14 +1020,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const schemaTemplate = new ResourceTemplate('lm-tools://schema/{name}', {
     list: () => {
       logInfo('Resource list: lm-tools://schema/{name}');
-      return {
-        resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
-          uri: `lm-tools://schema/${tool.name}`,
-          name: tool.name,
-          title: tool.name,
-          description: 'Input schema (call this before invoking the tool to avoid validation errors).',
-        })),
-      };
+      return { resources: [] };
     },
     complete: {
       name: (value) => {

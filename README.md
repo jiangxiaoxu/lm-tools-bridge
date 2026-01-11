@@ -7,8 +7,9 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 1. Open the extension in VS Code.
 2. Run `npm install`.
 3. Press `F5` to launch the Extension Development Host.
-4. Use the status bar menu to dump enabled tools when needed.
-5. Check Output -> `LM Tools Bridge`.
+4. Click the status bar item to open the LM Tools Bridge menu.
+5. Use **Dump Enabled Tools** to inspect tools when needed.
+6. Check Output -> `LM Tools Bridge`.
 
 ## MCP Server
 
@@ -147,6 +148,10 @@ Note: `action` is **only** for `vscodeLmToolkit` itself. The `input` field is fo
 - Use the multi-select list to enable tools. Click **Reset** to restore defaults.
 - Tools matching the blacklist are hidden from the picker and are always disabled.
 
+### Help and reload
+
+- The status menu includes **Help** (opens the GitHub README).
+- **Reload Window** triggers `Developer: Reload Window` to refresh the extension quickly.
 
 ### Take over MCP server
 
@@ -156,10 +161,10 @@ When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server
 
 The status bar shows the ownership state:
 - `LM Tools Bridge: Owner` (this instance hosts the port)
-- `LM Tools Bridge: In Use` (another instance hosts the port)
+- `LM Tools Bridge: Non-owner` (another instance hosts the port)
 - `LM Tools Bridge: Off` (no server running)
 
-Click the status bar item to take over when not owning the port.
+The tooltip includes the owner workspace path(s) and the MCP URL. Click the status bar item to take over when not owning the port.
 
 ### Logs
 

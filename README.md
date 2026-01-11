@@ -25,6 +25,7 @@ The extension starts a local MCP Streamable HTTP server and exposes tools plus r
   - `lm-tools://list` (tool names only; same as `lm-tools://names`)
   - `lm-tools://tool/{name}` (full tool detail)
   - `lm-tools://schema/{name}` (input schema only)
+  - `lm-tools://policy` (recommended call order policy)
   - `lm-tools://mcp-tool/getVSCodeWorkspace` (MCP-native tool description)
 
 Use `lm-tools://schema/{name}` to fetch input structure when needed.

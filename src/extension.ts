@@ -913,6 +913,25 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
+  const policyPayload = {
+    order: [
+      'getVSCodeWorkspace',
+      'lm-tools://schema/{name}',
+      'invokeTool',
+    ],
+    note: 'Always verify the workspace and read the target tool schema before invoking any tool.',
+  };
+
+  server.registerResource(
+    'lmToolsPolicy',
+    'lm-tools://policy',
+    { description: 'Call order policy: verify workspace, then read schema, then invoke tools.' },
+    async () => {
+      logInfo('Resource read: lm-tools://policy');
+      return resourceJson('lm-tools://policy', policyPayload);
+    },
+  );
+
   server.registerResource(
     'lmToolsList',
     'lm-tools://list',

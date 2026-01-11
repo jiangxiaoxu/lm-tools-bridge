@@ -734,7 +734,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
     'vscodeLmToolkit',
     {
-      description: 'List, inspect, and invoke tools from vscode.lm.tools. listTools supports only action/detail and defaults to names; use full if you need complete tool info. Tool input schemas are available via lm-tools://schema/{name}.',
+      description: 'List, inspect, and invoke tools from vscode.lm.tools. Valid actions: "listTools" | "getToolInfo" | "invokeTool". listTools only allows { action, detail? } and defaults to detail="names". getToolInfo requires { action:"getToolInfo", name } and returns full detail (no detail). invokeTool requires { action:"invokeTool", name, input? } and input must be an object. Use lm-tools://schema/{name} for input shapes.',
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {

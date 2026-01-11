@@ -132,8 +132,7 @@ Note: `role: "system"` is forwarded as a user message named `system` because the
 }
 ```
 
-Note: `action` is **only** for `vscodeLmToolkit` itself. The `input` field is for the target tool and must follow its schema (`lm-tools://schema/{name}`). `detail` defaults to `names`.
-For `listTools`, only `action` and optional `detail` are allowed. `getToolInfo` does not accept `detail` and always returns full detail (including `inputSchema`). Use `detail: "full"` with `listTools` when you need full tool info.
+Note: `action` is **only** for `vscodeLmToolkit` itself. Valid actions: `listTools` | `getToolInfo` | `invokeTool`. `listTools` only allows `action` and optional `detail` and defaults to `detail: "names"`; use `detail: "full"` if you need complete tool info. `getToolInfo` does not accept `detail` and always returns full detail (including `inputSchema`). `invokeTool` requires `name` and optional `input`, which must be an object. The `input` field is for the target tool and must follow its schema (`lm-tools://schema/{name}`).
 
 ### MCP native tool: getVSCodeWorkspace
 

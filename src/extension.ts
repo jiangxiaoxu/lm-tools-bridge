@@ -11,12 +11,14 @@ const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
 const TAKE_OVER_COMMAND_ID = 'lm-tools-bridge.takeOver';
 const CONFIGURE_COMMAND_ID = 'lm-tools-bridge.configureTools';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
+const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
 const CONFIG_SECTION = 'lmToolsBridge';
 const CONFIG_ENABLED_TOOLS = 'tools.enabled';
 const CONFIG_BLACKLIST = 'tools.blacklist';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
+const CONTROL_STATUS_PATH = '/mcp-control/status';
 const HEALTH_PATH = '/mcp/health';
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
@@ -116,21 +118,28 @@ interface McpServerState {
   server: http.Server;
   host: string;
   port: number;
+  ownerWorkspacePath: string;
 }
 
-type OwnershipState = 'owner' | 'inUse' | 'off';
+type OwnershipState = 'owner' | 'nonOwner' | 'off';
+interface OwnershipInfo {
+  state: OwnershipState;
+  ownerWorkspacePath?: string;
+}
 
 let serverState: McpServerState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
 let globalState: vscode.Memento | undefined;
 let toolInvocationTokenRequired = new Set<string>();
+let helpUrl: string | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
   logChannel = outputChannel as vscode.LogOutputChannel;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
   globalState = context.globalState;
+  helpUrl = resolveHelpUrl(context);
   toolInvocationTokenRequired = new Set(
     globalState.get<string[]>('lmToolsBridge.toolInvocationTokenRequired', []),
   );
@@ -142,6 +151,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const configureCommand = vscode.commands.registerCommand(CONFIGURE_COMMAND_ID, () => {
     void configureExposedTools();
+  });
+  const helpCommand = vscode.commands.registerCommand(HELP_COMMAND_ID, () => {
+    void openHelpDoc();
   });
   const statusMenuCommand = vscode.commands.registerCommand(STATUS_MENU_COMMAND_ID, () => {
     void showStatusMenu(outputChannel);
@@ -163,6 +175,7 @@ export function activate(context: vscode.ExtensionContext): void {
     startCommand,
     stopCommand,
     configureCommand,
+    helpCommand,
     statusMenuCommand,
     takeOverCommand,
     configWatcher,
@@ -170,11 +183,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const config = getServerConfig();
-  if (config.autoStart) {
-    void startMcpServer(outputChannel);
-  }
-
-  void refreshStatusBar();
+  void (async () => {
+    if (config.autoStart) {
+      await startMcpServer(outputChannel);
+    }
+    await refreshStatusBar();
+  })();
   logInfo('Extension activated.');
   void vscode.commands.executeCommand('setContext', 'lmToolsBridge.statusBar', true);
 }
@@ -363,7 +377,7 @@ async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
 
 async function handleTakeOverCommand(channel: vscode.OutputChannel): Promise<void> {
   const state = await getOwnershipState();
-  if (state === 'owner') {
+  if (state.state === 'owner') {
     void vscode.window.showInformationMessage('This VS Code instance already owns the MCP server.');
     return;
   }
@@ -404,12 +418,13 @@ async function reconcileServerState(channel: vscode.OutputChannel): Promise<void
 async function startMcpServer(channel: vscode.OutputChannel, override?: { host: string; port: number }): Promise<boolean> {
   if (serverState) {
     logInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
-    updateStatusBar('owner');
+    updateStatusBar({ state: 'owner', ownerWorkspacePath: serverState.ownerWorkspacePath });
     return true;
   }
 
   const config = override ?? getServerConfig();
   const { host, port } = config;
+  const ownerWorkspacePath = getOwnerWorkspacePath();
   const server = http.createServer((req, res) => {
     void handleMcpHttpRequest(req, res, channel);
   });
@@ -420,10 +435,10 @@ async function startMcpServer(channel: vscode.OutputChannel, override?: { host: 
       if (err.code === 'EADDRINUSE') {
         logWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
         logWarn('Use "LM Tools Bridge: Take Over Server" to reclaim the port.');
-        updateStatusBar('inUse');
+        updateStatusBar({ state: 'nonOwner' });
       } else {
         logError(`Failed to start MCP server: ${String(error)}`);
-        updateStatusBar('off');
+        updateStatusBar({ state: 'off' });
       }
       try {
         server.close();
@@ -433,9 +448,14 @@ async function startMcpServer(channel: vscode.OutputChannel, override?: { host: 
       resolve(false);
     });
     server.listen(port, host, () => {
-      serverState = { server, host, port };
+      serverState = {
+        server,
+        host,
+        port,
+        ownerWorkspacePath,
+      };
       logInfo(`MCP server listening at http://${host}:${port}/mcp`);
-      updateStatusBar('owner');
+      updateStatusBar({ state: 'owner', ownerWorkspacePath });
       resolve(true);
     });
   });
@@ -473,6 +493,11 @@ async function handleMcpHttpRequest(
 
   if (requestUrl.pathname === CONTROL_STOP_PATH) {
     await handleControlStop(req, res, channel);
+    return;
+  }
+
+  if (requestUrl.pathname === CONTROL_STATUS_PATH) {
+    await handleControlStatus(req, res);
     return;
   }
 
@@ -537,6 +562,21 @@ async function handleControlStop(
   });
 }
 
+async function handleControlStatus(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    respondJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  respondJson(res, 200, {
+    ownerWorkspacePath: serverState?.ownerWorkspacePath ?? null,
+  });
+}
+
 async function startMcpServerWithRetry(
   channel: vscode.OutputChannel,
   host: string,
@@ -578,6 +618,53 @@ function requestRemoteStop(host: string, port: number): Promise<boolean> {
     request.on('error', () => {
       clearTimeout(timeout);
       resolve(false);
+    });
+    request.on('close', () => {
+      clearTimeout(timeout);
+    });
+    request.end();
+  });
+}
+
+function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspacePath?: string } | undefined> {
+  return new Promise((resolve) => {
+    const request = http.request(
+      {
+        host,
+        port,
+        path: CONTROL_STATUS_PATH,
+        method: 'GET',
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.from(chunk));
+        });
+        response.on('end', () => {
+          if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+            resolve(undefined);
+            return;
+          }
+          try {
+            const text = Buffer.concat(chunks).toString('utf8');
+            const parsed = JSON.parse(text) as { ownerWorkspacePath?: string | null };
+            resolve({
+              ownerWorkspacePath: parsed.ownerWorkspacePath ?? undefined,
+            });
+          } catch {
+            resolve(undefined);
+          }
+        });
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      request.destroy(new Error('Timeout'));
+    }, 1500);
+
+    request.on('error', () => {
+      clearTimeout(timeout);
+      resolve(undefined);
     });
     request.on('close', () => {
       clearTimeout(timeout);
@@ -1486,30 +1573,42 @@ function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation
   });
 }
 
-async function getOwnershipState(): Promise<OwnershipState> {
+async function getOwnershipState(): Promise<OwnershipInfo> {
   if (serverState) {
-    return 'owner';
+    return {
+      state: 'owner',
+      ownerWorkspacePath: serverState.ownerWorkspacePath,
+    };
   }
 
   const config = getServerConfig();
   const available = await isPortAvailable(config.host, config.port);
-  return available ? 'off' : 'inUse';
+  if (available) {
+    return { state: 'off' };
+  }
+
+  const remote = await requestRemoteStatus(config.host, config.port);
+  return {
+    state: 'nonOwner',
+    ownerWorkspacePath: remote?.ownerWorkspacePath,
+  };
 }
 
-function updateStatusBar(state: OwnershipState): void {
+function updateStatusBar(info: OwnershipInfo): void {
   if (!statusBarItem) {
     return;
   }
 
   const config = getServerConfig();
+  const tooltip = buildStatusTooltip(info.ownerWorkspacePath, config.host, config.port);
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
-  if (state === 'owner') {
+  if (info.state === 'owner') {
     statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Owner';
-    statusBarItem.tooltip = `This VS Code instance owns LM Tools Bridge (${config.host}:${config.port}).`;
+    statusBarItem.tooltip = tooltip;
     statusBarItem.color = undefined;
-  } else if (state === 'inUse') {
-    statusBarItem.text = '$(lock) LM Tools Bridge: In Use';
-    statusBarItem.tooltip = `LM Tools Bridge port is in use (${config.host}:${config.port}). Click to take over.`;
+  } else if (info.state === 'nonOwner') {
+    statusBarItem.text = '$(lock) LM Tools Bridge: Non-owner';
+    statusBarItem.tooltip = `${tooltip}\nClick to take over.`;
     statusBarItem.color = undefined;
   } else {
     statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
@@ -1521,10 +1620,10 @@ function updateStatusBar(state: OwnershipState): void {
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
   const ownership = await getOwnershipState();
-  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'dump' }> = [
+  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'dump' | 'help' | 'reload' }> = [
     {
       label: '$(debug-disconnect) Take Over MCP',
-      description: ownership === 'owner' ? 'Already owning the MCP server' : 'Acquire ownership of the MCP port',
+      description: ownership.state === 'owner' ? 'Already owning the MCP server' : 'Acquire ownership of the MCP port',
       action: 'takeOver',
     },
     {
@@ -1536,6 +1635,17 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       label: '$(list-unordered) Dump Enabled Tools',
       description: 'Show enabled tool descriptions in Output',
       action: 'dump',
+    },
+    {
+      label: '$(refresh) Reload Window',
+      description: 'Reload VS Code window',
+      action: 'reload',
+    },
+    { label: 'Help', kind: vscode.QuickPickItemKind.Separator },
+    {
+      label: '$(book) Help',
+      description: 'Open README on GitHub',
+      action: 'help',
     },
   ];
 
@@ -1559,6 +1669,16 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 
   if (selection.action === 'dump') {
     showEnabledToolsDump(channel);
+    return;
+  }
+
+  if (selection.action === 'help') {
+    await openHelpDoc();
+    return;
+  }
+
+  if (selection.action === 'reload') {
+    await vscode.commands.executeCommand('workbench.action.reloadWindow');
   }
 }
 
@@ -1588,8 +1708,8 @@ function logError(message: string): void {
 }
 
 async function refreshStatusBar(): Promise<void> {
-  const state = await getOwnershipState();
-  updateStatusBar(state);
+  const info = await getOwnershipState();
+  updateStatusBar(info);
 }
 
 function isPortAvailable(host: string, port: number): Promise<boolean> {
@@ -1608,6 +1728,39 @@ function isPortAvailable(host: string, port: number): Promise<boolean> {
     });
     tester.listen(port, host);
   });
+}
+
+function getOwnerWorkspacePath(): string {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return 'No workspace open';
+  }
+  return folders.map((folder) => folder.uri.fsPath).join('; ');
+}
+
+function resolveHelpUrl(context: vscode.ExtensionContext): string | undefined {
+  const packageJson = context.extension.packageJSON as { homepage?: string };
+  const homepage = packageJson?.homepage?.trim();
+  return homepage && homepage.length > 0 ? homepage : undefined;
+}
+
+async function openHelpDoc(): Promise<void> {
+  const url = helpUrl;
+  if (!url) {
+    void vscode.window.showWarningMessage('No help URL is configured.');
+    return;
+  }
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+function buildStatusTooltip(ownerWorkspacePath: string | undefined, host: string, port: number): string {
+  const pathValue = ownerWorkspacePath ?? 'unknown';
+  const paths = pathValue
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const pathLines = paths.length > 0 ? paths.map((entry) => `- ${entry}`).join('\n') : '- unknown';
+  return `Owner workspace:\n${pathLines}\nurl = "http://${host}:${port}/mcp"`;
 }
 
 function formatTags(tags: readonly string[]): string {

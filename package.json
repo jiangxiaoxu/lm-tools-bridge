@@ -2,7 +2,12 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.1",
+  "version": "1.0.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jiangxiaoxu/-lm-tools-bridge.git"
+  },
+  "homepage": "https://github.com/jiangxiaoxu/-lm-tools-bridge#readme",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -34,6 +39,10 @@
       {
         "command": "lm-tools-bridge.statusMenu",
         "title": "LM Tools Bridge: Status Menu"
+      },
+      {
+        "command": "lm-tools-bridge.openHelp",
+        "title": "LM Tools Bridge: Open Help"
       }
     ],
     "configuration": {

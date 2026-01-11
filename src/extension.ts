@@ -69,6 +69,10 @@ const INTERNAL_BLACKLIST = new Set([
   'inline_chat_exit',
 ]);
 
+const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
+  maxResults: 1000,
+};
+
 type ChatRole = 'system' | 'user' | 'assistant';
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
@@ -1046,7 +1050,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!tool) {
         return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
       }
-      return resourceJson(uri.toString(), { name: tool.name, inputSchema: tool.inputSchema ?? null });
+      return resourceJson(uri.toString(), { name: tool.name, inputSchema: applySchemaDefaults(tool.inputSchema ?? null) });
     },
   );
 
@@ -1156,7 +1160,7 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
     name: tool.name,
     description: tool.description,
     tags: tool.tags,
-    inputSchema: tool.inputSchema ?? null,
+    inputSchema: applySchemaDefaults(tool.inputSchema ?? null),
     toolUri: getToolUri(tool.name),
     schemaUri: getSchemaUri(tool.name),
     usageHint: getToolUsageHint(tool),
@@ -1841,6 +1845,89 @@ function resolveHelpUrl(context: vscode.ExtensionContext): string | undefined {
   const packageJson = context.extension.packageJSON as { homepage?: string };
   const homepage = packageJson?.homepage?.trim();
   return homepage && homepage.length > 0 ? homepage : undefined;
+}
+
+function applySchemaDefaults(schema: unknown): unknown {
+  const overrides = getSchemaDefaultOverrides();
+  return applySchemaDefaultsInternal(schema, overrides, undefined);
+}
+
+function applySchemaDefaultsInternal(
+  schema: unknown,
+  overrides: Record<string, unknown>,
+  requiredNames: Set<string> | undefined,
+): unknown {
+  if (!schema || typeof schema !== 'object') {
+    return schema;
+  }
+
+  if (Array.isArray(schema)) {
+    return schema.map((item) => applySchemaDefaultsInternal(item, overrides, undefined));
+  }
+
+  const record = schema as Record<string, unknown>;
+  const copy: Record<string, unknown> = {};
+  const currentRequired = extractRequired(record) ?? requiredNames;
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const props = value as Record<string, unknown>;
+      const newProps: Record<string, unknown> = {};
+      for (const [propName, propSchema] of Object.entries(props)) {
+        if (propSchema && typeof propSchema === 'object') {
+          const propCopy = { ...(propSchema as Record<string, unknown>) };
+          const defaultValue = resolveSchemaDefault(propName, overrides);
+          const isRequired = currentRequired?.has(propName) ?? false;
+          if (defaultValue !== undefined && !isRequired && !('default' in propCopy)) {
+            propCopy.default = defaultValue;
+          }
+          newProps[propName] = applySchemaDefaultsInternal(propCopy, overrides, extractRequired(propCopy));
+        } else {
+          newProps[propName] = applySchemaDefaultsInternal(propSchema, overrides, undefined);
+        }
+      }
+      copy[key] = newProps;
+      continue;
+    }
+
+    if (key === 'items') {
+      copy[key] = applySchemaDefaultsInternal(value, overrides, undefined);
+      continue;
+    }
+
+    if (['anyOf', 'oneOf', 'allOf'].includes(key) && Array.isArray(value)) {
+      copy[key] = value.map((entry) => applySchemaDefaultsInternal(entry, overrides, undefined));
+      continue;
+    }
+
+    copy[key] = applySchemaDefaultsInternal(value, overrides, undefined);
+  }
+
+  return copy;
+}
+
+function extractRequired(schemaRecord: Record<string, unknown>): Set<string> | undefined {
+  const required = schemaRecord.required;
+  if (Array.isArray(required) && required.every((item) => typeof item === 'string')) {
+    return new Set(required as string[]);
+  }
+  return undefined;
+}
+
+function getSchemaDefaultOverrides(): Record<string, unknown> {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const fromConfig = config.get<unknown>('tools.schemaDefaults', {});
+  if (!fromConfig || typeof fromConfig !== 'object' || Array.isArray(fromConfig)) {
+    return { ...BUILTIN_SCHEMA_DEFAULTS };
+  }
+  return { ...BUILTIN_SCHEMA_DEFAULTS, ...(fromConfig as Record<string, unknown>) };
+}
+
+function resolveSchemaDefault(name: string, overrides: Record<string, unknown>): unknown {
+  if (name in overrides) {
+    return overrides[name];
+  }
+  return undefined;
 }
 
 async function openHelpDoc(): Promise<void> {

@@ -113,6 +113,13 @@
           "type": "string",
           "default": "",
           "description": "Comma-separated substring patterns to hide/disable tools (case-insensitive). Blacklist takes precedence over enabled list."
+        },
+        "lmToolsBridge.tools.schemaDefaults": {
+          "type": "object",
+          "default": {
+            "maxResults": 1000
+          },
+          "description": "Map of input property names to default values. When a tool schema has a property with the given name and no default, this value will be injected. Example: { \"maxResults\": 1000 }."
         }
       }
     }

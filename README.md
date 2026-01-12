@@ -184,7 +184,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 - `lmToolsBridge.chat.maxIterations` (default: 6)
 - `lmToolsBridge.tools.enabled` (default: the list above)
 - `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
-- `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected when absent in tool schemas)
+- `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
 
 ### Configure exposed tools
 

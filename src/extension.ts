@@ -789,9 +789,10 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
             inputSchema: tool.inputSchema ?? null,
           });
         }
-        logInfo(`vscodeLmToolkit invoking tool ${tool.name} with input: ${formatLogPayload(input)}`);
+        const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema);
+        logInfo(`vscodeLmToolkit invoking tool ${tool.name} with input: ${formatLogPayload(normalizedInput)}`);
         const result = await lm.invokeTool(tool.name, {
-          input,
+          input: normalizedInput,
           toolInvocationToken: undefined,
         });
         const includeBinary = args.includeBinary ?? false;
@@ -1545,8 +1546,13 @@ async function runChatWithTools(
     const toolResultParts: vscode.LanguageModelToolResultPart[] = [];
     for (const toolCall of toolCallParts) {
       try {
+        let input = toolCall.input;
+        if (isPlainObject(input)) {
+          const toolSchema = tools.find((tool) => tool.name === toolCall.name)?.inputSchema;
+          input = applyInputDefaultsToToolInput(input, toolSchema ?? null);
+        }
         const result = await lm.invokeTool(toolCall.name, {
-          input: toolCall.input,
+          input,
           toolInvocationToken: undefined,
         });
         logInfo(`vscodeLmChat tool result (${toolCall.name}): ${formatLogPayload(result.content)}`);
@@ -1830,6 +1836,72 @@ function prioritizeTool(
   return ordered;
 }
 
+function extractSchemaPropertyNames(schema: unknown): Set<string> | undefined {
+  const names = new Set<string>();
+  collectSchemaPropertyNames(schema, names);
+  return names.size > 0 ? names : undefined;
+}
+
+function collectSchemaPropertyNames(schema: unknown, out: Set<string>): void {
+  if (!schema || typeof schema !== 'object') {
+    return;
+  }
+  if (Array.isArray(schema)) {
+    for (const entry of schema) {
+      collectSchemaPropertyNames(entry, out);
+    }
+    return;
+  }
+  const record = schema as Record<string, unknown>;
+  const props = record.properties;
+  if (props && typeof props === 'object' && !Array.isArray(props)) {
+    for (const key of Object.keys(props as Record<string, unknown>)) {
+      out.add(key);
+    }
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        collectSchemaPropertyNames(entry, out);
+      }
+    }
+  }
+}
+
+function extractSchemaRequiredNames(schema: unknown): Set<string> | undefined {
+  const requiredNames = new Set<string>();
+  collectSchemaRequiredNames(schema, requiredNames);
+  return requiredNames.size > 0 ? requiredNames : undefined;
+}
+
+function collectSchemaRequiredNames(schema: unknown, out: Set<string>): void {
+  if (!schema || typeof schema !== 'object') {
+    return;
+  }
+  if (Array.isArray(schema)) {
+    for (const entry of schema) {
+      collectSchemaRequiredNames(entry, out);
+    }
+    return;
+  }
+  const record = schema as Record<string, unknown>;
+  const required = extractRequired(record);
+  if (required) {
+    for (const name of required) {
+      out.add(name);
+    }
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        collectSchemaRequiredNames(entry, out);
+      }
+    }
+  }
+}
+
 function getWorkspaceFoldersInfo(): Array<{ name: string; path: string }> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
@@ -1850,6 +1922,29 @@ function resolveHelpUrl(context: vscode.ExtensionContext): string | undefined {
 function applySchemaDefaults(schema: unknown): unknown {
   const overrides = getSchemaDefaultOverrides();
   return applySchemaDefaultsInternal(schema, overrides, undefined);
+}
+
+function applyInputDefaultsToToolInput(
+  input: Record<string, unknown>,
+  schema: unknown,
+): Record<string, unknown> {
+  const overrides = getSchemaDefaultOverrides();
+  const allowed = extractSchemaPropertyNames(schema);
+  const required = extractSchemaRequiredNames(schema);
+  const result: Record<string, unknown> = { ...input };
+  for (const [name, value] of Object.entries(overrides)) {
+    if (name in result && result[name] !== undefined) {
+      continue;
+    }
+    if (!allowed || !allowed.has(name)) {
+      continue;
+    }
+    if (required && required.has(name)) {
+      continue;
+    }
+    result[name] = value;
+  }
+  return result;
 }
 
 function applySchemaDefaultsInternal(

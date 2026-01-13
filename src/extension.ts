@@ -1183,12 +1183,10 @@ function serializeToolResult(
     }
 
     if (part instanceof vscode.LanguageModelPromptTsxPart) {
-      const plain = extractPromptTsxText(part.value);
-      const plainValue = plain.trim().length > 0 ? plain : safeStringify(part.value);
-
+      const textParts = extractPromptTsxText(part.value);
       parts.push({
         type: 'prompt-tsx',
-        text: plainValue,
+        textParts,
       });
       continue;
     }
@@ -1372,7 +1370,7 @@ function formatChatLogPayload(args: ChatToolInput): string {
   return formatLogPayload(payload);
 }
 
-function extractPromptTsxText(value: unknown): string {
+function extractPromptTsxText(value: unknown): string[] {
   const parts: string[] = [];
   const seen = new Set<unknown>();
 
@@ -1405,7 +1403,46 @@ function extractPromptTsxText(value: unknown): string {
   };
 
   visit(value);
-  return parts.join('');
+  return parts;
+}
+
+function joinPromptTsxTextParts(parts: readonly string[]): string {
+  let result = '';
+  for (const part of parts) {
+    if (part.length === 0) {
+      continue;
+    }
+    if (result.length === 0) {
+      result = part;
+      continue;
+    }
+
+    const prevChar = result[result.length - 1];
+    const nextChar = part[0];
+    if (prevChar && nextChar && !/\s/u.test(prevChar) && !/\s/u.test(nextChar)) {
+      if (startsWithWindowsAbsolutePath(part) || startsWithListMarker(part)) {
+        result += '\n';
+      } else if (isWordChar(prevChar) && isWordChar(nextChar)) {
+        result += ' ';
+      }
+    }
+
+    result += part;
+  }
+
+  return result;
+}
+
+function startsWithWindowsAbsolutePath(text: string): boolean {
+  return /^[a-zA-Z]:[\\/]/u.test(text) || text.startsWith('\\\\');
+}
+
+function startsWithListMarker(text: string): boolean {
+  return /^(\d+[.)]\s+|[-*•]\s+)/u.test(text);
+}
+
+function isWordChar(char: string): boolean {
+  return /[0-9A-Za-z_]/u.test(char);
 }
 
 function readTemplateVariable(

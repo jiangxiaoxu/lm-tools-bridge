@@ -803,7 +803,10 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         });
         const includeBinary = args.includeBinary ?? false;
         const serialized = serializeToolResult(result, { includeBinary });
-        logInfo(`vscodeLmToolkit tool result (${tool.name}): ${formatLogPayload(serialized)}`);
+        const toolkitResultText = tool.name === 'copilot_findTextInFiles'
+          ? formatFindTextInFilesResult(serialized)
+          : serializedToolResultToText(serialized);
+        logInfo(`vscodeLmToolkit tool result (${tool.name}): ${toolkitResultText}`);
 
         return toolSuccessResult({
           name: tool.name,
@@ -1097,11 +1100,12 @@ async function handleHealth(
 }
 
 function toolSuccessResult(payload: Record<string, unknown>) {
+  const text = payloadToText(payload);
   return {
     content: [
       {
         type: 'text' as const,
-        text: JSON.stringify(payload),
+        text,
       },
     ],
   };
@@ -1120,15 +1124,91 @@ function toolErrorResult(message: string) {
 }
 
 function toolErrorResultPayload(payload: Record<string, unknown>) {
+  const text = payloadToText(payload);
   return {
     isError: true,
     content: [
       {
         type: 'text' as const,
-        text: JSON.stringify(payload),
+        text,
       },
     ],
   };
+}
+
+function payloadToText(payload: unknown): string {
+  if (payload === null || payload === undefined) {
+    return '';
+  }
+  if (typeof payload === 'string') {
+    return payload;
+  }
+  if (Array.isArray(payload)) {
+    const segments = payload.map(payloadToText).filter((segment) => segment.length > 0);
+    return joinPromptTsxTextParts(segments);
+  }
+  if (typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    if (typeof record.text === 'string') {
+      return record.text;
+    }
+    if (Array.isArray(record.textParts)) {
+      const textParts = record.textParts.filter((part): part is string => typeof part === 'string');
+      if (textParts.length > 0) {
+        return joinPromptTsxTextParts(textParts);
+      }
+    }
+    if (Array.isArray(record.result)) {
+      if (record.name === 'copilot_findTextInFiles') {
+        const parts = record.result.filter((item): item is Record<string, unknown> => (
+          item !== null && typeof item === 'object'
+        ));
+        const formatted = formatFindTextInFilesResult(parts);
+        if (formatted.length > 0) {
+          return formatted;
+        }
+      }
+      const text = serializedToolResultToText(record.result);
+      if (text.length > 0) {
+        return text;
+      }
+    }
+    if (Array.isArray(record.tools)) {
+      const toolText = toolListToText(record.tools);
+      if (toolText.length > 0) {
+        return toolText;
+      }
+    }
+    if (Array.isArray(record.content)) {
+      const contentText = toolResultContentToText(record.content);
+      if (contentText.length > 0) {
+        return contentText;
+      }
+    }
+    return unescapeNewlines(safePrettyStringify(record));
+  }
+  return String(payload);
+}
+
+function toolListToText(tools: readonly unknown[]): string {
+  const entries: string[] = [];
+  for (const tool of tools) {
+    if (typeof tool === 'string') {
+      entries.push(tool);
+      continue;
+    }
+    if (tool && typeof tool === 'object') {
+      const record = tool as Record<string, unknown>;
+      if (typeof record.name === 'string') {
+        if (typeof record.description === 'string' && record.description.length > 0) {
+          entries.push(`${record.name}: ${record.description}`);
+        } else {
+          entries.push(record.name);
+        }
+      }
+    }
+  }
+  return entries.join('\n');
 }
 
 function resourceJson(uri: string, payload: Record<string, unknown>) {
@@ -1225,6 +1305,111 @@ function serializeToolResult(
   return parts;
 }
 
+function serializedToolResultToText(parts: readonly Record<string, unknown>[]): string {
+  const segments: string[] = [];
+  for (const part of parts) {
+    const text = serializedToolResultPartToText(part);
+    if (text.length > 0) {
+      segments.push(text);
+    }
+  }
+  return joinPromptTsxTextParts(segments);
+}
+
+function formatFindTextInFilesResult(parts: readonly Record<string, unknown>[]): string {
+  const text = serializedToolResultToText(parts);
+  return formatMatchTextToMarkdown(text);
+}
+
+function formatMatchTextToMarkdown(text: string): string {
+  if (!text.includes('<match ')) {
+    return text;
+  }
+  const normalized = text.replace(/\r\n/g, '\n');
+  const regex = /<match\s+path="([^"]+)"\s+line=(\d+)>\s*([\s\S]*?)<\/match>/g;
+  const matches: Array<{ path: string; line: string; snippet: string }> = [];
+  const seen = new Set<string>();
+  let header = '';
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(normalized)) !== null) {
+    if (matches.length === 0 && match.index > 0) {
+      header = normalized.slice(0, match.index).trim();
+    }
+    const snippet = match[3]?.replace(/\n$/, '') ?? '';
+    const key = `${match[1]}:${match[2]}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    matches.push({ path: match[1], line: match[2], snippet });
+  }
+  if (matches.length === 0) {
+    return text;
+  }
+  const output: string[] = [];
+  if (header.length > 0) {
+    output.push(header);
+  }
+  for (const item of matches) {
+    output.push(`- \`${item.path}:${item.line}\``);
+    if (item.snippet.length > 0) {
+      output.push('```');
+      output.push(item.snippet);
+      output.push('```');
+    }
+  }
+  return output.join('\n');
+}
+
+function serializedToolResultPartToText(part: Record<string, unknown>): string {
+  if (part.type === 'text' && typeof part.text === 'string') {
+    return part.text;
+  }
+  if (part.type === 'prompt-tsx' && Array.isArray(part.textParts)) {
+    const textParts = part.textParts.filter((item): item is string => typeof item === 'string');
+    if (textParts.length > 0) {
+      return joinPromptTsxTextParts(textParts);
+    }
+    return '';
+  }
+  if (part.type === 'data' && typeof part.text === 'string') {
+    return part.text;
+  }
+  if (part.type === 'unknown' && typeof part.text === 'string') {
+    return part.text;
+  }
+  return '';
+}
+
+function toolResultContentToText(content: readonly unknown[]): string {
+  const parts: Array<Record<string, unknown>> = [];
+  for (const item of content) {
+    if (item instanceof vscode.LanguageModelTextPart) {
+      parts.push({ type: 'text', text: item.value });
+      continue;
+    }
+    if (item instanceof vscode.LanguageModelPromptTsxPart) {
+      const textParts = extractPromptTsxText(item.value);
+      parts.push({ type: 'prompt-tsx', textParts });
+      continue;
+    }
+    if (item instanceof vscode.LanguageModelDataPart) {
+      const decodedText = decodeTextData(item);
+      if (decodedText !== undefined) {
+        parts.push({ type: 'data', text: decodedText });
+      }
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>;
+      if (typeof record.type === 'string') {
+        parts.push(record);
+      }
+    }
+  }
+  return serializedToolResultToText(parts);
+}
+
 function decodeTextData(part: vscode.LanguageModelDataPart): string | undefined {
   if (part.mimeType.startsWith('text/') || part.mimeType === 'application/json') {
     return new TextDecoder('utf-8').decode(part.data);
@@ -1239,6 +1424,18 @@ function safeStringify(value: unknown): string {
   } catch {
     return '"[unserializable]"';
   }
+}
+
+function safePrettyStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return '[unserializable]';
+  }
+}
+
+function unescapeNewlines(text: string): string {
+  return text.replace(/\\r\\n/g, '\r\n').replace(/\\n/g, '\n');
 }
 
 function getToolUri(name: string): string {
@@ -1595,7 +1792,10 @@ async function runChatWithTools(
           input,
           toolInvocationToken: undefined,
         });
-        logInfo(`vscodeLmChat tool result (${toolCall.name}): ${formatLogPayload(result.content)}`);
+        const chatResultText = toolCall.name === 'copilot_findTextInFiles'
+          ? formatMatchTextToMarkdown(toolResultContentToText(result.content))
+          : toolResultContentToText(result.content);
+        logInfo(`vscodeLmChat tool result (${toolCall.name}): ${chatResultText}`);
         toolResultParts.push(new vscode.LanguageModelToolResultPart(toolCall.callId, result.content));
       } catch (error) {
         logError(`Tool invocation failed (${toolCall.name}): ${String(error)}`);

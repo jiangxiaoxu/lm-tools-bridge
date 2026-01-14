@@ -175,6 +175,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
     void reconcileServerState(outputChannel);
   });
+  const workspaceWatcher = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    if (serverState) {
+      serverState.ownerWorkspacePath = getOwnerWorkspacePath();
+    }
+    void refreshStatusBar();
+  });
 
   context.subscriptions.push(
     outputChannel,
@@ -186,6 +192,7 @@ export function activate(context: vscode.ExtensionContext): void {
     statusMenuCommand,
     takeOverCommand,
     configWatcher,
+    workspaceWatcher,
     { dispose: () => { void stopMcpServer(outputChannel); } },
   );
 

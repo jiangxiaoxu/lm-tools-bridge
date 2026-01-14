@@ -88,7 +88,6 @@ interface ChatToolInput {
   modelId?: string;
   modelFamily?: string;
   maxIterations?: number;
-  toolMode?: 'auto' | 'required';
   justification?: string;
   modelOptions?: Record<string, unknown>;
 }
@@ -544,10 +543,6 @@ async function handleMcpHttpRequest(
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
   });
-  const originalSend = transport.send.bind(transport);
-  transport.send = async (message, options) => (
-    originalSend(stripMcpEnvelopeFields(message), options)
-  );
   transport.onerror = (error) => {
     logError(`MCP transport error: ${String(error)}`);
   };
@@ -860,13 +855,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     content: z.string(),
     name: z.string().optional(),
   });
-  const toolModeSchema = z.enum(['auto', 'required']);
   const chatSchema: z.ZodTypeAny = z.object({
     messages: z.array(messageSchema).min(1),
     modelId: z.string().optional(),
     modelFamily: z.string().optional(),
     maxIterations: z.number().int().min(1).max(20).optional(),
-    toolMode: toolModeSchema.optional(),
     justification: z.string().optional(),
     modelOptions: z.record(z.unknown()).optional(),
   });
@@ -874,7 +867,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
     'vscodeLmChat',
     {
-      description: 'Run a chat request via VS Code Language Model API with tool calling. Input schema: { messages: [{ role, content, name? }], modelId?, modelFamily?, maxIterations?, toolMode?, justification?, modelOptions? }.',
+      description: 'Run a chat request via VS Code Language Model API with tool calling. Input schema: { messages: [{ role, content, name? }], modelId?, modelFamily?, maxIterations?, justification?, modelOptions? }.',
       inputSchema: chatSchema,
     },
     async (args: ChatToolInput) => {
@@ -1374,7 +1367,6 @@ function formatChatLogPayload(args: ChatToolInput): string {
     modelId: args.modelId,
     modelFamily: args.modelFamily,
     maxIterations: args.maxIterations,
-    toolMode: args.toolMode,
     justification: args.justification,
     modelOptions: args.modelOptions,
   };
@@ -1665,28 +1657,6 @@ function respondJson(res: http.ServerResponse, status: number, payload: Record<s
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(payload));
-}
-
-function stripMcpEnvelopeFields<T>(message: T): T {
-  if (Array.isArray(message)) {
-    return message.map((entry) => stripMcpEnvelopeFields(entry)) as T;
-  }
-  if (!isPlainObject(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const result = record.result;
-  if (!isPlainObject(result)) {
-    return message;
-  }
-  if (!('raw' in result) && !('structuredContent' in result)) {
-    return message;
-  }
-  const { raw: _raw, structuredContent: _structuredContent, ...rest } = result;
-  return {
-    ...record,
-    result: rest,
-  } as T;
 }
 
 

@@ -537,6 +537,10 @@ async function handleMcpHttpRequest(
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
   });
+  const originalSend = transport.send.bind(transport);
+  transport.send = async (message, options) => (
+    originalSend(stripMcpEnvelopeFields(message), options)
+  );
   transport.onerror = (error) => {
     logError(`MCP transport error: ${String(error)}`);
   };
@@ -1654,6 +1658,28 @@ function respondJson(res: http.ServerResponse, status: number, payload: Record<s
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(payload));
+}
+
+function stripMcpEnvelopeFields<T>(message: T): T {
+  if (Array.isArray(message)) {
+    return message.map((entry) => stripMcpEnvelopeFields(entry)) as T;
+  }
+  if (!isPlainObject(message)) {
+    return message;
+  }
+  const record = message as Record<string, unknown>;
+  const result = record.result;
+  if (!isPlainObject(result)) {
+    return message;
+  }
+  if (!('raw' in result) && !('structuredContent' in result)) {
+    return message;
+  }
+  const { raw: _raw, structuredContent: _structuredContent, ...rest } = result;
+  return {
+    ...record,
+    result: rest,
+  } as T;
 }
 
 

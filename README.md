@@ -13,11 +13,10 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 
 ## MCP Server
 
-The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed.
+The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed by `vscodeLmToolkit`.
 
-- Endpoint: `http://127.0.0.1:48123/mcp`
+- Endpoint: `http://127.0.0.1:48123/mcp` (host is fixed to `127.0.0.1`)
 - Tool names:
-  - `vscodeLmChat`
   - `vscodeLmToolkit`
   - `getVSCodeWorkspace` (call this first to confirm the workspace before using other tools)
 - Resources:
@@ -52,7 +51,6 @@ Terminal output read-only:
 - `get_terminal_output`
 - `terminal_selection`
 - `terminal_last_command`
-- `getVSCodeWorkspace`
 
 ### Internal blacklist (always disabled)
 
@@ -86,41 +84,6 @@ These tools are always hidden and cannot be enabled via settings:
 - `inline_chat_exit`
 - `copilot_getVSCodeAPI`
 
-### Tool input (vscodeLmChat)
-
-```json
-{
-  "messages": [
-    { "role": "user", "content": "Summarize the active file." }
-  ],
-  "modelId": "gpt-5-mini",
-  "modelFamily": "gpt-5-mini",
-  "maxIterations": 6,
-  "toolMode": "auto",
-  "justification": "Run a VS Code chat request with tools",
-  "modelOptions": {}
-}
-```
-
-Note: `role: "system"` is forwarded as a user message named `system` because the API only supports user/assistant roles.
-
-### Tool output (vscodeLmChat)
-
-```json
-{
-  "text": "...",
-  "toolCalls": [
-    { "name": "vscode.search", "callId": "call_123" }
-  ],
-  "iterations": 2,
-  "stopReason": "completed",
-  "model": {
-    "id": "gpt-5-mini",
-    "family": "gpt-5-mini"
-  }
-}
-```
-
 ### Tool input (vscodeLmToolkit)
 
 ```json
@@ -128,8 +91,7 @@ Note: `role: "system"` is forwarded as a user message named `system` because the
   "action": "listTools | getToolInfo | invokeTool",
   "name": "toolName",
   "detail": "names | full",
-  "input": {},
-  "includeBinary": false
+  "input": {}
 }
 ```
 
@@ -137,7 +99,7 @@ Note: `action` is **only** for `vscodeLmToolkit` itself. Valid actions: `listToo
 
 ### MCP native tool: getVSCodeWorkspace
 
-`getVSCodeWorkspace` returns the workspace information that matches the status bar tooltip. Before using any other tool for the first time, call `getVSCodeWorkspace` to verify the workspace. If it does not match, ask the user to confirm.
+`getVSCodeWorkspace` returns the workspace information that matches the status bar tooltip. Before using any other tool for the first time, call `getVSCodeWorkspace` to verify the workspace. If it does not match, ask the user to confirm. This tool is always available and is not controlled by `tools.enabled`/`tools.blacklist`.
 
 Example call (tools/call):
 
@@ -170,18 +132,14 @@ Example result (multiple workspaces):
 
 1. Call `getVSCodeWorkspace` to verify the workspace matches the status bar tooltip.
 2. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `listTools detail:"full"`); the schema must be read before invoking.
-3. Invoke the tool with `vscodeLmToolkit`/`vscodeLmChat` once the schema is known.
+3. Invoke the tool with `vscodeLmToolkit` once the schema is known.
 
 Following these steps prevents validation errors such as missing `action` or schema mismatches.
 
 ### Settings
 
 - `lmToolsBridge.server.autoStart` (default: true)
-- `lmToolsBridge.server.host` (default: 127.0.0.1)
 - `lmToolsBridge.server.port` (default: 48123)
-- `lmToolsBridge.chat.modelId` (default: gpt-5-mini)
-- `lmToolsBridge.chat.modelFamily` (default: gpt-5-mini)
-- `lmToolsBridge.chat.maxIterations` (default: 6)
 - `lmToolsBridge.tools.enabled` (default: the list above)
 - `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
 - `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
@@ -192,6 +150,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 - Right-click the status bar item and select `LM Tools Bridge: Configure Tools`.
 - Use the multi-select list to enable tools. Click **Reset** to restore defaults.
 - Tools matching the blacklist are hidden from the picker and are always disabled.
+- These controls apply to `vscodeLmToolkit` only.
 - `lmToolsBridge.tools.responseFormat` controls tool responses: `text` returns only content.text (human-readable), `structured` returns only structuredContent (machine-readable) with empty content, `both` returns both content.text and structuredContent. Applies to all tools.
 
 ### Help and reload

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -54,34 +54,12 @@
           "default": true,
           "description": "Automatically start the MCP server on startup."
         },
-        "lmToolsBridge.server.host": {
-          "type": "string",
-          "default": "127.0.0.1",
-          "description": "Host address for the MCP server (use localhost/loopback)."
-        },
         "lmToolsBridge.server.port": {
           "type": "number",
           "default": 48123,
           "minimum": 1,
           "maximum": 65535,
           "description": "Port for the MCP server."
-        },
-        "lmToolsBridge.chat.modelId": {
-          "type": "string",
-          "default": "gpt-5-mini",
-          "description": "Preferred model ID for Language Model API."
-        },
-        "lmToolsBridge.chat.modelFamily": {
-          "type": "string",
-          "default": "gpt-5-mini",
-          "description": "Fallback model family if modelId is not found."
-        },
-        "lmToolsBridge.chat.maxIterations": {
-          "type": "number",
-          "default": 6,
-          "minimum": 1,
-          "maximum": 20,
-          "description": "Maximum tool-calling iterations for a chat request."
         },
         "lmToolsBridge.tools.enabled": {
           "type": "array",

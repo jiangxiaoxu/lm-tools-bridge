@@ -38,7 +38,6 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'get_terminal_output',
   'terminal_selection',
   'terminal_last_command',
-  'getVSCodeWorkspace',
 ];
 const INTERNAL_BLACKLIST = new Set([
   'copilot_applyPatch',
@@ -74,45 +73,15 @@ const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
   maxResults: 1000,
 };
 
-type ChatRole = 'system' | 'user' | 'assistant';
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
 type ResponseFormat = 'text' | 'structured' | 'both';
-
-interface ChatMessageInput {
-  role: ChatRole;
-  content: string;
-  name?: string;
-}
-
-interface ChatToolInput {
-  messages: ChatMessageInput[];
-  modelId?: string;
-  modelFamily?: string;
-  maxIterations?: number;
-  justification?: string;
-  modelOptions?: Record<string, unknown>;
-}
 
 interface ToolkitInput {
   action: ToolAction;
   name?: string;
   detail?: ToolDetail;
   input?: unknown;
-  includeBinary?: boolean;
-}
-
-interface ChatConfig {
-  modelId?: string;
-  modelFamily?: string;
-  maxIterations: number;
-}
-
-interface ChatRunOptions {
-  maxIterations: number;
-  toolMode: vscode.LanguageModelChatToolMode;
-  justification?: string;
-  modelOptions?: Record<string, unknown>;
 }
 
 interface ServerConfig {
@@ -137,8 +106,6 @@ interface OwnershipInfo {
 let serverState: McpServerState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
-let globalState: vscode.Memento | undefined;
-let toolInvocationTokenRequired = new Set<string>();
 let helpUrl: string | undefined;
 let statusRefreshTimer: NodeJS.Timeout | undefined;
 
@@ -146,11 +113,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
   logChannel = outputChannel as vscode.LogOutputChannel;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
-  globalState = context.globalState;
   helpUrl = resolveHelpUrl(context);
-  toolInvocationTokenRequired = new Set(
-    globalState.get<string[]>('lmToolsBridge.toolInvocationTokenRequired', []),
-  );
   const startCommand = vscode.commands.registerCommand(START_COMMAND_ID, () => {
     void startMcpServer(outputChannel);
   });
@@ -263,7 +226,7 @@ function getServerConfig(): ServerConfig {
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   return {
     autoStart: config.get<boolean>('server.autoStart', true),
-    host: config.get<string>('server.host', DEFAULT_HOST),
+    host: DEFAULT_HOST,
     port: config.get<number>('server.port', DEFAULT_PORT),
   };
 }
@@ -732,9 +695,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     input: z.object({}).passthrough()
       .describe('Target tool input object. See lm-tools://schema/{name}.')
       .optional(),
-    includeBinary: z.boolean()
-      .describe('Include base64 for binary data parts in tool results.')
-      .optional(),
   }).strict().describe('Invoke a tool with input.');
   const toolkitSchema: z.ZodTypeAny = z.discriminatedUnion('action', [
     listToolsSchema,
@@ -809,8 +769,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           input: normalizedInput,
           toolInvocationToken: undefined,
         });
-        const includeBinary = args.includeBinary ?? false;
-        const serialized = serializeToolResult(result, { includeBinary });
+        const serialized = serializeToolResult(result);
         const toolkitResultText = tool.name === 'copilot_findTextInFiles'
           ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
           : serializedToolResultToText(serialized);
@@ -823,18 +782,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       } catch (error) {
         const message = String(error);
         logError(`Toolkit tool error: ${message}`);
-        if (message.includes('toolInvocationToken')) {
-          markToolRequiresToken(args.name);
-          return toolErrorResultPayload({
-            error: message,
-            name: args.name,
-            requiresToolInvocationToken: true,
-            hint: 'This tool requires a chat toolInvocationToken and cannot be invoked directly via vscodeLmToolkit.',
-            inputSchema: args.name
-              ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
-              : null,
-          });
-        }
         return toolErrorResultPayload({
           error: message,
           name: args.name,
@@ -859,68 +806,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       ownerWorkspacePath: getOwnerWorkspacePath(),
       workspaceFolders: getWorkspaceFoldersInfo(),
     })),
-  );
-
-  const messageSchema = z.object({
-    role: z.enum(['system', 'user', 'assistant']),
-    content: z.string(),
-    name: z.string().optional(),
-  });
-  const chatSchema: z.ZodTypeAny = z.object({
-    messages: z.array(messageSchema).min(1),
-    modelId: z.string().optional(),
-    modelFamily: z.string().optional(),
-    maxIterations: z.number().int().min(1).max(20).optional(),
-    justification: z.string().optional(),
-    modelOptions: z.record(z.unknown()).optional(),
-  });
-
-  server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
-    'vscodeLmChat',
-    {
-      description: 'Run a chat request via VS Code Language Model API with tool calling. Input schema: { messages: [{ role, content, name? }], modelId?, modelFamily?, maxIterations?, justification?, modelOptions? }.',
-      inputSchema: chatSchema,
-    },
-    async (args: ChatToolInput) => {
-      try {
-        logInfo(`vscodeLmChat request: ${formatChatLogPayload(args)}`);
-        const lm = getLanguageModelNamespace();
-        if (!lm) {
-          return toolErrorResult('vscode.lm is not available in this VS Code version.');
-        }
-
-        const chatModel = await selectChatModel(lm, args.modelId, args.modelFamily);
-        if (!chatModel) {
-          return toolErrorResult('No matching chat model found. Check modelId/modelFamily settings.');
-        }
-        logInfo(`vscodeLmChat using model id=${chatModel.id} family=${chatModel.family}`);
-
-        const messages = args.messages.map((message) => {
-          const role = message.role === 'assistant'
-            ? vscode.LanguageModelChatMessageRole.Assistant
-            : vscode.LanguageModelChatMessageRole.User;
-          const name = message.role === 'system' ? message.name ?? 'system' : message.name;
-          return new vscode.LanguageModelChatMessage(role, message.content, name);
-        });
-        const maxIterations = args.maxIterations ?? getChatConfig().maxIterations;
-        const toolMode = vscode.LanguageModelChatToolMode.Auto;
-        const tools = getExposedToolsSnapshot();
-        logInfo(`vscodeLmChat tools available (${tools.length}): ${tools.map((tool) => tool.name).join(', ')}`);
-
-        const result = await runChatWithTools(lm, chatModel, messages, tools, {
-          maxIterations,
-          toolMode,
-          justification: args.justification,
-          modelOptions: args.modelOptions,
-        });
-
-        logInfo(`vscodeLmChat result: ${formatLogPayload(result)}`);
-        return toolSuccessResult(result);
-      } catch (error) {
-        logError(`Chat tool error: ${String(error)}`);
-        return toolErrorResult(`Chat execution failed: ${String(error)}`);
-      }
-    },
   );
 
   server.registerResource(
@@ -1355,10 +1240,7 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
   };
 }
 
-function serializeToolResult(
-  result: vscode.LanguageModelToolResult,
-  options: { includeBinary: boolean },
-): Array<Record<string, unknown>> {
+function serializeToolResult(result: vscode.LanguageModelToolResult): Array<Record<string, unknown>> {
   const parts: Array<Record<string, unknown>> = [];
   for (const part of result.content) {
     if (part instanceof vscode.LanguageModelTextPart) {
@@ -1387,10 +1269,6 @@ function serializeToolResult(
       const decodedText = decodeTextData(part);
       if (decodedText !== undefined) {
         payload.text = decodedText;
-      }
-
-      if (options.includeBinary) {
-        payload.dataBase64 = Buffer.from(part.data).toString('base64');
       }
 
       parts.push(payload);
@@ -1597,16 +1475,6 @@ function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<str
     };
   }
 
-  const requiresToken = toolInvocationTokenRequired.has(tool.name);
-  if (requiresToken) {
-    return {
-      mode: 'chat',
-      reason: 'Heuristic: toolInvocationToken required; use vscodeLmChat.',
-      requiresToolInvocationToken: true,
-      toolkitInputNote,
-    };
-  }
-
   if (tool.tags.some((tag) => tag.includes('codesearch'))) {
     return {
       mode: 'toolkit',
@@ -1616,8 +1484,8 @@ function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<str
   }
 
   return {
-    mode: 'unknown',
-    reason: 'Heuristic: no token requirement; check schema and prefer vscodeLmChat if invocation fails.',
+    mode: 'toolkit',
+    reason: 'Heuristic: default to vscodeLmToolkit.',
     requiresObjectInput: requiresObjectInput || undefined,
     toolkitInputNote,
   };
@@ -1625,22 +1493,6 @@ function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<str
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function markToolRequiresToken(name: string | undefined): void {
-  if (!name) {
-    return;
-  }
-  if (toolInvocationTokenRequired.has(name)) {
-    return;
-  }
-  toolInvocationTokenRequired.add(name);
-  if (globalState) {
-    void globalState.update(
-      'lmToolsBridge.toolInvocationTokenRequired',
-      Array.from(toolInvocationTokenRequired),
-    );
-  }
 }
 
 function schemaRequiresObjectInput(schema: object | undefined): boolean {
@@ -1688,23 +1540,6 @@ function schemaHasObject(schema: unknown): boolean {
 
 function formatLogPayload(value: unknown): string {
   return safeStringify(value);
-}
-
-function formatChatLogPayload(args: ChatToolInput): string {
-  const messages = args.messages.map((message) => ({
-    role: message.role,
-    name: message.name,
-    content: message.content,
-  }));
-  const payload = {
-    messages,
-    modelId: args.modelId,
-    modelFamily: args.modelFamily,
-    maxIterations: args.maxIterations,
-    justification: args.justification,
-    modelOptions: args.modelOptions,
-  };
-  return formatLogPayload(payload);
 }
 
 function extractPromptTsxText(value: unknown): string[] {
@@ -1801,180 +1636,6 @@ function normalizeConfigString(value: string | undefined): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
-function getChatConfig(): ChatConfig {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const modelId = normalizeConfigString(config.get<string>('chat.modelId'));
-  const modelFamily = normalizeConfigString(config.get<string>('chat.modelFamily'));
-  const maxIterations = clampNumber(config.get<number>('chat.maxIterations', 6), 1, 20);
-  return {
-    modelId,
-    modelFamily,
-    maxIterations,
-  };
-}
-
-async function selectChatModel(
-  lm: typeof vscode.lm,
-  preferredModelId?: string,
-  preferredModelFamily?: string,
-): Promise<vscode.LanguageModelChat | undefined> {
-  const config = getChatConfig();
-  const modelId = normalizeConfigString(preferredModelId ?? config.modelId);
-  const modelFamily = normalizeConfigString(preferredModelFamily ?? config.modelFamily);
-
-  if (modelId) {
-    const byId = await lm.selectChatModels({ id: modelId });
-    if (byId.length > 0) {
-      return byId[0];
-    }
-    logWarn(`Chat model id "${modelId}" not found.`);
-  }
-
-  if (modelFamily) {
-    const byFamily = await lm.selectChatModels({ family: modelFamily });
-    if (byFamily.length > 0) {
-      return byFamily[0];
-    }
-    logWarn(`Chat model family "${modelFamily}" not found.`);
-  }
-
-  return undefined;
-}
-
-async function runChatWithTools(
-  lm: typeof vscode.lm,
-  model: vscode.LanguageModelChat,
-  initialMessages: vscode.LanguageModelChatMessage[],
-  tools: readonly vscode.LanguageModelChatTool[],
-  options: ChatRunOptions,
-): Promise<Record<string, unknown>> {
-  const messages = [...initialMessages];
-  const toolCalls: Array<{ name: string; callId: string }> = [];
-  let combinedText = '';
-  let stopReason: 'completed' | 'maxIterations' | 'error' = 'completed';
-  let iterations = 0;
-
-  for (let iteration = 0; iteration < options.maxIterations; iteration += 1) {
-    iterations = iteration + 1;
-    const response = await model.sendRequest(
-      messages,
-      {
-        tools: tools.length > 0 ? Array.from(tools) : undefined,
-        toolMode: options.toolMode,
-        justification: options.justification,
-        modelOptions: options.modelOptions,
-      },
-    );
-
-    const assistantParts: Array<
-      vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart | vscode.LanguageModelDataPart
-    > = [];
-    const toolCallParts: vscode.LanguageModelToolCallPart[] = [];
-    let unknownPartCount = 0;
-    const unknownPartTypes = new Set<string>();
-
-    for await (const part of response.stream) {
-      if (part instanceof vscode.LanguageModelTextPart) {
-        assistantParts.push(part);
-        combinedText += part.value;
-        continue;
-      }
-
-      if (part instanceof vscode.LanguageModelToolCallPart) {
-        assistantParts.push(part);
-        toolCallParts.push(part);
-        toolCalls.push({ name: part.name, callId: part.callId });
-        logInfo(`vscodeLmChat tool call: ${part.name} id=${part.callId} input=${formatLogPayload(part.input)}`);
-        continue;
-      }
-
-      if (part instanceof vscode.LanguageModelDataPart) {
-        assistantParts.push(part);
-        continue;
-      }
-
-      unknownPartCount += 1;
-      unknownPartTypes.add(describeResponsePart(part));
-    }
-
-    if (unknownPartCount > 0) {
-      const types = Array.from(unknownPartTypes).join(', ');
-      logWarn(`Ignored ${unknownPartCount} unknown LanguageModel response part(s): ${types}`);
-    }
-
-    if (toolCallParts.length === 0) {
-      stopReason = 'completed';
-      break;
-    }
-
-    if (iteration >= options.maxIterations - 1) {
-      stopReason = 'maxIterations';
-      break;
-    }
-
-    const toolResultParts: vscode.LanguageModelToolResultPart[] = [];
-    for (const toolCall of toolCallParts) {
-      try {
-        let input = toolCall.input;
-        if (isPlainObject(input)) {
-          const toolSchema = tools.find((tool) => tool.name === toolCall.name)?.inputSchema;
-          input = applyInputDefaultsToToolInput(input, toolSchema ?? null);
-        }
-        const result = await lm.invokeTool(toolCall.name, {
-          input,
-          toolInvocationToken: undefined,
-        });
-        const chatResultText = toolCall.name === 'copilot_findTextInFiles'
-          ? normalizeFindTextInFilesText(toolResultContentToText(result.content))
-          : toolResultContentToText(result.content);
-        logInfo(`vscodeLmChat tool result (${toolCall.name}): ${chatResultText}`);
-        toolResultParts.push(new vscode.LanguageModelToolResultPart(toolCall.callId, result.content));
-      } catch (error) {
-        logError(`Tool invocation failed (${toolCall.name}): ${String(error)}`);
-        const errorPart = new vscode.LanguageModelTextPart(
-          `Tool invocation failed (${toolCall.name}): ${String(error)}`,
-        );
-        toolResultParts.push(new vscode.LanguageModelToolResultPart(toolCall.callId, [errorPart]));
-      }
-    }
-
-    messages.push(vscode.LanguageModelChatMessage.Assistant(assistantParts));
-    messages.push(vscode.LanguageModelChatMessage.User(toolResultParts));
-  }
-
-  const payload: Record<string, unknown> = {
-    text: combinedText,
-    iterations,
-    stopReason,
-    model: {
-      id: model.id,
-      family: model.family,
-    },
-  };
-
-  if (toolCalls.length > 0) {
-    payload.toolCalls = toolCalls;
-  }
-
-  return payload;
-}
-
-function describeResponsePart(part: unknown): string {
-  if (part && typeof part === 'object' && 'constructor' in part) {
-    const ctor = (part as { constructor?: { name?: string } }).constructor;
-    if (ctor && typeof ctor.name === 'string' && ctor.name.length > 0) {
-      return ctor.name;
-    }
-  }
-
-  return typeof part;
-}
-
 
 function getRequestUrl(req: http.IncomingMessage): URL | undefined {
   const host = req.headers.host ?? 'localhost';

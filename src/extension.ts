@@ -28,13 +28,11 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_findFiles',
   'copilot_findTextInFiles',
   'copilot_readFile',
-  'copilot_listDirectory',
   'copilot_getErrors',
   'copilot_readProjectStructure',
   'copilot_getChangedFiles',
   'copilot_testFailure',
   'copilot_findTestFiles',
-  'copilot_getDocInfo',
   'copilot_getSearchResults',
   'get_terminal_output',
   'terminal_selection',
@@ -64,6 +62,8 @@ const INTERNAL_BLACKLIST = new Set([
   'copilot_openSimpleBrowser',
   'copilot_editFiles',
   'copilot_getProjectSetupInfo',
+  'copilot_getDocInfo',
+  'copilot_listDirectory',
   'runSubagent',
   'vscode_get_confirmation',
   'inline_chat_exit',
@@ -98,6 +98,7 @@ interface ToolkitInput {
   detail?: ToolDetail;
   input?: unknown;
   includeBinary?: boolean;
+  returnStructuredContent?: boolean;
 }
 
 interface ChatConfig {
@@ -717,11 +718,17 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const listToolsSchema = z.object({
     action: z.literal('listTools'),
     detail: toolDetailSchema.optional(),
+    returnStructuredContent: z.boolean()
+      .optional()
+      .describe('Return structuredContent instead of text content.'),
   }).strict().describe('List tools with optional detail. Only "action" (must be "listTools") and optional "detail" are allowed.');
   const getToolInfoSchema = z.object({
     action: z.literal('getToolInfo'),
     name: z.string()
       .describe('Target tool name. Required for getToolInfo.'),
+    returnStructuredContent: z.boolean()
+      .optional()
+      .describe('Return structuredContent instead of text content.'),
   }).strict().describe('Get tool info. Always returns full detail including inputSchema.');
   const invokeToolSchema = z.object({
     action: z.literal('invokeTool'),
@@ -733,6 +740,9 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     includeBinary: z.boolean()
       .describe('Include base64 for binary data parts in tool results.')
       .optional(),
+    returnStructuredContent: z.boolean()
+      .optional()
+      .describe('Return structuredContent instead of text content.'),
   }).strict().describe('Invoke a tool with input.');
   const toolkitSchema: z.ZodTypeAny = z.discriminatedUnion('action', [
     listToolsSchema,
@@ -750,16 +760,22 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         '• listTools only allows { action, detail? } and defaults to detail="names". Use detail="full" when you need all tool info.',
         '• getToolInfo requires { action:"getToolInfo", name } and always returns full detail (no detail parameter).',
         '• invokeTool requires { action:"invokeTool", name, input? } and the input must be an object.',
+        '• returnStructuredContent=true returns structuredContent and leaves content empty.',
         'Use lm-tools://schema/{name} for tool input shapes before invoking.',
       ].join('\n'),
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {
+      const returnStructuredContent = args.returnStructuredContent ?? false;
       try {
         logInfo(`vscodeLmToolkit request: ${formatLogPayload(args)}`);
         const lm = getLanguageModelNamespace();
         if (!lm) {
-          return toolErrorResult('vscode.lm is not available in this VS Code version.');
+          const payload = { error: 'vscode.lm is not available in this VS Code version.' };
+          if (returnStructuredContent) {
+            return toolErrorResultPayload(payload);
+          }
+          return toolErrorResult(formatToolErrorText(payload));
         }
 
         const tools = getExposedToolsSnapshot();
@@ -767,33 +783,65 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
         if (args.action === 'listTools') {
           logInfo(`vscodeLmToolkit action=listTools detail=${detail}`);
-          return toolSuccessResult(listToolsPayload(tools, detail));
+          if (returnStructuredContent) {
+            return toolSuccessResult(listToolsPayload(tools, detail));
+          }
+          if (detail === 'full') {
+            const toolTexts = tools.map((tool) => formatToolInfoText(toolInfoPayload(tool, 'full')));
+            return toolTextResult(toolTexts.join('\n\n'));
+          }
+          return toolTextResult(formatToolNameList(tools));
         }
 
         if (!args.name) {
-          return toolErrorResult('Tool name is required for this action. Valid actions: listTools | getToolInfo | invokeTool.');
+          const payload = {
+            error: 'Tool name is required for this action. Valid actions: listTools | getToolInfo | invokeTool.',
+          };
+          if (returnStructuredContent) {
+            return toolErrorResultPayload(payload);
+          }
+          return toolErrorResult(formatToolErrorText(payload));
         }
 
         const tool = tools.find((candidate) => candidate.name === args.name);
         if (!tool) {
-          return toolErrorResult(`Tool not found or disabled: ${args.name}`);
+          const payload = {
+            error: `Tool not found or disabled: ${args.name}`,
+            name: args.name,
+          };
+          if (returnStructuredContent) {
+            return toolErrorResultPayload(payload);
+          }
+          return toolErrorResult(formatToolErrorText(payload));
         }
 
         if (args.action === 'getToolInfo') {
           if (args.detail !== undefined) {
-            return toolErrorResult('detail is not supported for getToolInfo; full detail is always returned.');
+            const payload = { error: 'detail is not supported for getToolInfo; full detail is always returned.' };
+            if (returnStructuredContent) {
+              return toolErrorResultPayload(payload);
+            }
+            return toolErrorResult(formatToolErrorText(payload));
           }
           logInfo(`vscodeLmToolkit action=getToolInfo name=${tool.name} detail=full`);
-          return toolSuccessResult(toolInfoPayload(tool, 'full'));
+          const payload = toolInfoPayload(tool, 'full');
+          if (returnStructuredContent) {
+            return toolSuccessResult(payload);
+          }
+          return toolTextResult(formatToolInfoText(payload));
         }
 
         const input = args.input ?? {};
         if (!isPlainObject(input)) {
-          return toolErrorResultPayload({
+          const payload = {
             error: 'Tool input must be an object (not a JSON string). Use lm-tools://schema/{name} for the expected shape.',
             name: tool.name,
             inputSchema: tool.inputSchema ?? null,
-          });
+          };
+          if (returnStructuredContent) {
+            return toolErrorResultPayload(payload);
+          }
+          return toolErrorResult(formatToolErrorText(payload));
         }
         const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema);
         logInfo(`vscodeLmToolkit invoking tool ${tool.name} with input: ${formatLogPayload(normalizedInput)}`);
@@ -804,20 +852,24 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         const includeBinary = args.includeBinary ?? false;
         const serialized = serializeToolResult(result, { includeBinary });
         const toolkitResultText = tool.name === 'copilot_findTextInFiles'
-          ? formatFindTextInFilesResult(serialized)
+          ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
           : serializedToolResultToText(serialized);
         logInfo(`vscodeLmToolkit tool result (${tool.name}): ${toolkitResultText}`);
 
-        return toolSuccessResult({
-          name: tool.name,
-          result: serialized,
-        });
+        if (returnStructuredContent) {
+          const blocks = toolResultToStructuredBlocks(serialized);
+          return toolSuccessResult({ blocks });
+        }
+        const outputText = tool.name === 'copilot_findTextInFiles'
+          ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
+          : serializedToolResultToText(serialized);
+        return toolTextResult(outputText);
       } catch (error) {
         const message = String(error);
         logError(`Toolkit tool error: ${message}`);
         if (message.includes('toolInvocationToken')) {
           markToolRequiresToken(args.name);
-          return toolErrorResultPayload({
+          const payload = {
             error: message,
             name: args.name,
             requiresToolInvocationToken: true,
@@ -825,15 +877,23 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
             inputSchema: args.name
               ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
               : null,
-          });
+          };
+          if (returnStructuredContent) {
+            return toolErrorResultPayload(payload);
+          }
+          return toolErrorResult(formatToolErrorText(payload));
         }
-        return toolErrorResultPayload({
+        const payload = {
           error: message,
           name: args.name,
           inputSchema: args.name
             ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
             : null,
-        });
+        };
+        if (returnStructuredContent) {
+          return toolErrorResultPayload(payload);
+        }
+        return toolErrorResult(formatToolErrorText(payload));
       }
     },
   );
@@ -847,10 +907,10 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       description: getWorkspaceDescription,
       inputSchema: getWorkspaceSchema,
     },
-    async () => toolSuccessResult({
+    async () => toolTextResult(formatWorkspaceInfoText({
       ownerWorkspacePath: getOwnerWorkspacePath(),
       workspaceFolders: getWorkspaceFoldersInfo(),
-    }),
+    })),
   );
 
   const messageSchema = z.object({
@@ -1099,8 +1159,11 @@ async function handleHealth(
   }
 }
 
-function toolSuccessResult(payload: Record<string, unknown>) {
-  const text = payloadToText(payload);
+function toolSuccessResult(payload: unknown) {
+  return buildToolResult(payload, false);
+}
+
+function toolTextResult(text: string) {
   return {
     content: [
       {
@@ -1123,17 +1186,36 @@ function toolErrorResult(message: string) {
   };
 }
 
-function toolErrorResultPayload(payload: Record<string, unknown>) {
+function toolErrorResultPayload(payload: unknown) {
+  return buildToolResult(payload, true);
+}
+
+function buildToolResult(payload: unknown, isError: boolean) {
+  const structuredContent = extractStructuredContent(payload);
+  if (structuredContent !== undefined) {
+    return {
+      content: [],
+      structuredContent,
+      ...(isError ? { isError: true } : {}),
+    };
+  }
   const text = payloadToText(payload);
   return {
-    isError: true,
     content: [
       {
         type: 'text' as const,
         text,
       },
     ],
+    ...(isError ? { isError: true } : {}),
   };
+}
+
+function extractStructuredContent(payload: unknown): Record<string, unknown> | undefined {
+  if (!isPlainObject(payload)) {
+    return undefined;
+  }
+  return payload;
 }
 
 function payloadToText(payload: unknown): string {
@@ -1159,15 +1241,6 @@ function payloadToText(payload: unknown): string {
       }
     }
     if (Array.isArray(record.result)) {
-      if (record.name === 'copilot_findTextInFiles') {
-        const parts = record.result.filter((item): item is Record<string, unknown> => (
-          item !== null && typeof item === 'object'
-        ));
-        const formatted = formatFindTextInFilesResult(parts);
-        if (formatted.length > 0) {
-          return formatted;
-        }
-      }
       const text = serializedToolResultToText(record.result);
       if (text.length > 0) {
         return text;
@@ -1211,13 +1284,98 @@ function toolListToText(tools: readonly unknown[]): string {
   return entries.join('\n');
 }
 
-function resourceJson(uri: string, payload: Record<string, unknown>) {
+function formatToolNameList(tools: readonly vscode.LanguageModelToolInformation[]): string {
+  const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
+  return orderedTools.map((tool) => tool.name).join('\n');
+}
+
+function formatToolInfoText(payload: Record<string, unknown>): string {
+  const lines: string[] = [];
+  const name = typeof payload.name === 'string' ? payload.name : '';
+  if (name) {
+    lines.push(`name: ${name}`);
+  }
+  const description = typeof payload.description === 'string' ? payload.description : '';
+  if (description) {
+    lines.push(`description: ${description}`);
+  }
+  const tags = Array.isArray(payload.tags)
+    ? payload.tags.filter((tag): tag is string => typeof tag === 'string')
+    : [];
+  if (tags.length > 0) {
+    lines.push('tags:');
+    for (const tag of tags) {
+      lines.push(`  - ${tag}`);
+    }
+  }
+  if (payload.inputSchema !== undefined) {
+    lines.push('inputSchema:');
+    lines.push(indentLines(formatSchema(payload.inputSchema as object | undefined), 2));
+  }
+  const toolUri = typeof payload.toolUri === 'string' ? payload.toolUri : '';
+  if (toolUri) {
+    lines.push(`toolUri: ${toolUri}`);
+  }
+  const schemaUri = typeof payload.schemaUri === 'string' ? payload.schemaUri : '';
+  if (schemaUri) {
+    lines.push(`schemaUri: ${schemaUri}`);
+  }
+  if (payload.usageHint !== undefined) {
+    lines.push('usageHint:');
+    lines.push(indentLines(safePrettyStringify(payload.usageHint), 2));
+  }
+  return lines.join('\n');
+}
+
+function formatToolErrorText(payload: Record<string, unknown>): string {
+  const lines: string[] = [];
+  const error = typeof payload.error === 'string' ? payload.error : 'Unknown error';
+  lines.push(`error: ${error}`);
+  const name = typeof payload.name === 'string' ? payload.name : '';
+  if (name) {
+    lines.push(`name: ${name}`);
+  }
+  const requiresToken = payload.requiresToolInvocationToken === true;
+  if (requiresToken) {
+    lines.push('requiresToolInvocationToken: true');
+  }
+  const hint = typeof payload.hint === 'string' ? payload.hint : '';
+  if (hint) {
+    lines.push(`hint: ${hint}`);
+  }
+  if (payload.inputSchema !== undefined) {
+    lines.push('inputSchema:');
+    lines.push(indentLines(formatSchema(payload.inputSchema as object | undefined), 2));
+  }
+  return lines.join('\n');
+}
+
+function formatWorkspaceInfoText(payload: {
+  ownerWorkspacePath?: string;
+  workspaceFolders: Array<{ name: string; path: string }>;
+}): string {
+  const lines: string[] = [];
+  if (payload.ownerWorkspacePath) {
+    lines.push(`ownerWorkspacePath: ${payload.ownerWorkspacePath}`);
+  }
+  if (payload.workspaceFolders.length > 0) {
+    lines.push('workspaceFolders:');
+    for (const folder of payload.workspaceFolders) {
+      lines.push(`  - name: ${folder.name}`);
+      lines.push(`    path: ${folder.path}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function resourceJson(uri: string, payload: unknown) {
+  const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
   return {
     contents: [
       {
         uri,
         mimeType: 'application/json',
-        text: JSON.stringify(payload),
+        text,
       },
     ],
   };
@@ -1267,10 +1425,9 @@ function serializeToolResult(
     }
 
     if (part instanceof vscode.LanguageModelPromptTsxPart) {
-      const textParts = extractPromptTsxText(part.value);
       parts.push({
         type: 'prompt-tsx',
-        textParts,
+        value: part.value,
       });
       continue;
     }
@@ -1316,59 +1473,94 @@ function serializedToolResultToText(parts: readonly Record<string, unknown>[]): 
   return joinPromptTsxTextParts(segments);
 }
 
-function formatFindTextInFilesResult(parts: readonly Record<string, unknown>[]): string {
-  const text = serializedToolResultToText(parts);
-  return formatMatchTextToMarkdown(text);
-}
+function normalizeFindTextInFilesText(text: string): string {
+  const matchRegex = /<match\s+path="([^"]+)"\s+line="?(\d+)"?\s*>\s*([\s\S]*?)<\/match>/gi;
+  const summaryRegex = /(\d{1,5})\s+matches?\b[^\r\n]*?\bmaxResults\s+capped\s+at\s+(\d{1,5})\b/i;
 
-function formatMatchTextToMarkdown(text: string): string {
-  if (!text.includes('<match ')) {
-    return text;
-  }
-  const normalized = text.replace(/\r\n/g, '\n');
-  const regex = /<match\s+path="([^"]+)"\s+line=(\d+)>\s*([\s\S]*?)<\/match>/g;
-  const matches: Array<{ path: string; line: string; snippet: string }> = [];
+  const matches: Array<{ key: string; raw: string }> = [];
   const seen = new Set<string>();
-  let header = '';
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(normalized)) !== null) {
-    if (matches.length === 0 && match.index > 0) {
-      header = normalized.slice(0, match.index).trim();
+  let totalCount = 0;
+  const firstMatchIndex = text.search(/<match\b/i);
+  const prefix = firstMatchIndex === -1 ? text : text.slice(0, firstMatchIndex);
+  let summaryCount: number | null = null;
+  let summaryCap: number | null = null;
+  const summaryMatch = summaryRegex.exec(prefix);
+  if (summaryMatch) {
+    const countValue = Number(summaryMatch[1]);
+    const capValue = Number(summaryMatch[2]);
+    if (
+      !Number.isNaN(countValue)
+      && !Number.isNaN(capValue)
+      && countValue >= 0
+      && capValue >= 0
+      && countValue <= 10000
+      && capValue <= 10000
+    ) {
+      summaryCount = countValue;
+      summaryCap = capValue;
     }
-    const snippet = match[3]?.replace(/\n$/, '') ?? '';
-    const key = `${match[1]}:${match[2]}`;
+  }
+  let match: RegExpExecArray | null;
+  while ((match = matchRegex.exec(text)) !== null) {
+    totalCount += 1;
+    const path = match[1];
+    const line = match[2];
+    const snippet = match[3]?.replace(/\r\n/g, '\n').trimEnd() ?? '';
+    const key = `${path}:${line}:${snippet}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    matches.push({ path: match[1], line: match[2], snippet });
+    matches.push({ key, raw: match[0].trimStart() });
   }
+
   if (matches.length === 0) {
     return text;
   }
-  const output: string[] = [];
-  if (header.length > 0) {
-    output.push(header);
+
+  let capped: number | null = null;
+  if (summaryCount !== null && summaryCap !== null && summaryCount >= summaryCap) {
+    capped = summaryCap;
   }
-  for (const item of matches) {
-    output.push(`- \`${item.path}:${item.line}\``);
-    if (item.snippet.length > 0) {
-      output.push('```');
-      output.push(item.snippet);
-      output.push('```');
+
+  const lines: string[] = [];
+  if (capped !== null) {
+    lines.push('Results capped by VS Code tools, more results are available, output may be incomplete.');
+  }
+  lines.push(`Unique matches: ${matches.length}, total matches: ${totalCount}.`);
+  return [...lines, ...matches.map((item) => item.raw)].join('\n');
+}
+
+function toolResultToStructuredBlocks(
+  parts: readonly Record<string, unknown>[],
+): Array<Record<string, unknown>> {
+  const blocks: Array<Record<string, unknown>> = [];
+  for (const part of parts) {
+    if (part.type === 'data' && typeof part.text !== 'string') {
+      continue;
     }
+    blocks.push(part);
   }
-  return output.join('\n');
+  return blocks;
 }
 
 function serializedToolResultPartToText(part: Record<string, unknown>): string {
   if (part.type === 'text' && typeof part.text === 'string') {
     return part.text;
   }
-  if (part.type === 'prompt-tsx' && Array.isArray(part.textParts)) {
-    const textParts = part.textParts.filter((item): item is string => typeof item === 'string');
-    if (textParts.length > 0) {
-      return joinPromptTsxTextParts(textParts);
+  if (part.type === 'prompt-tsx') {
+    if (Array.isArray(part.textParts)) {
+      const textParts = part.textParts.filter((item): item is string => typeof item === 'string');
+      if (textParts.length > 0) {
+        return joinPromptTsxTextParts(textParts);
+      }
+    }
+    const value = part.value;
+    if (value && typeof value === 'object') {
+      const textParts = extractPromptTsxText(value as Record<string, unknown>);
+      if (textParts.length > 0) {
+        return joinPromptTsxTextParts(textParts);
+      }
     }
     return '';
   }
@@ -1793,7 +1985,7 @@ async function runChatWithTools(
           toolInvocationToken: undefined,
         });
         const chatResultText = toolCall.name === 'copilot_findTextInFiles'
-          ? formatMatchTextToMarkdown(toolResultContentToText(result.content))
+          ? normalizeFindTextInFilesText(toolResultContentToText(result.content))
           : toolResultContentToText(result.content);
         logInfo(`vscodeLmChat tool result (${toolCall.name}): ${chatResultText}`);
         toolResultParts.push(new vscode.LanguageModelToolResultPart(toolCall.callId, result.content));

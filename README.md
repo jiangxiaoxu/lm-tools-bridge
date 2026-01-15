@@ -41,13 +41,11 @@ Workspace search/read/diagnostics:
 - `copilot_findFiles`
 - `copilot_findTextInFiles`
 - `copilot_readFile`
-- `copilot_listDirectory`
 - `copilot_getErrors`
 - `copilot_readProjectStructure`
 - `copilot_getChangedFiles`
 - `copilot_testFailure`
 - `copilot_findTestFiles`
-- `copilot_getDocInfo`
 - `copilot_getSearchResults`
 
 Terminal output read-only:
@@ -81,6 +79,8 @@ These tools are always hidden and cannot be enabled via settings:
 - `copilot_openSimpleBrowser`
 - `copilot_editFiles`
 - `copilot_getProjectSetupInfo`
+- `copilot_getDocInfo`
+- `copilot_listDirectory`
 - `runSubagent`
 - `vscode_get_confirmation`
 - `inline_chat_exit`

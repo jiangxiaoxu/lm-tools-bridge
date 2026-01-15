@@ -89,9 +89,7 @@ function Build-ToolInput {
     }
     $value = $null
 
-    if ($ToolName -eq 'copilot_listDirectory' -and $req -eq 'path') {
-      $value = $SampleDir
-    } elseif ($req -match 'filePaths') {
+    if ($req -match 'filePaths') {
       $value = if ($SampleFile) { @($SampleFile) } else { @() }
     } elseif ($req -match 'filePath|path|uri') {
       $value = if ($SampleFile) { $SampleFile } else { $WorkspacePath }
@@ -152,7 +150,6 @@ $candidateTools = @(
   'copilot_findFiles',
   'copilot_findTextInFiles',
   'copilot_readFile',
-  'copilot_listDirectory',
   'copilot_getErrors',
   'copilot_readProjectStructure',
   'copilot_findTestFiles'

@@ -1222,18 +1222,48 @@ function listToolsPayload(tools: readonly vscode.LanguageModelToolInformation[],
   };
 }
 
+function patchFindTextInFilesSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return schema;
+  }
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return schema;
+  }
+  const propRecord = properties as Record<string, unknown>;
+  const querySchema = propRecord.query;
+  if (!querySchema || typeof querySchema !== 'object' || Array.isArray(querySchema)) {
+    return schema;
+  }
+  const queryCopy = { ...(querySchema as Record<string, unknown>) };
+  const description = typeof queryCopy.description === 'string' ? queryCopy.description : '';
+  if (!description || description.includes('case-sensitive')) {
+    return schema;
+  }
+  queryCopy.description = `${description} If you need case-sensitive matching, use a regex pattern with an inline case-sensitivity flag.`;
+  return {
+    ...record,
+    properties: {
+      ...propRecord,
+      query: queryCopy,
+    },
+  };
+}
+
 function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: ToolDetail) {
   if (detail === 'names') {
     return {
       name: tool.name,
     };
   }
+  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null);
 
   return {
     name: tool.name,
     description: tool.description,
     tags: tool.tags,
-    inputSchema: applySchemaDefaults(tool.inputSchema ?? null),
+    inputSchema: tool.name === 'copilot_findTextInFiles' ? patchFindTextInFilesSchema(inputSchema) : inputSchema,
     toolUri: getToolUri(tool.name),
     schemaUri: getSchemaUri(tool.name),
     usageHint: getToolUsageHint(tool),

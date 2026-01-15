@@ -15,6 +15,7 @@ const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
 const CONFIG_SECTION = 'lmToolsBridge';
 const CONFIG_ENABLED_TOOLS = 'tools.enabled';
 const CONFIG_BLACKLIST = 'tools.blacklist';
+const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
@@ -76,6 +77,7 @@ const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
 type ChatRole = 'system' | 'user' | 'assistant';
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
+type ResponseFormat = 'text' | 'structured' | 'both';
 
 interface ChatMessageInput {
   role: ChatRole;
@@ -98,7 +100,6 @@ interface ToolkitInput {
   detail?: ToolDetail;
   input?: unknown;
   includeBinary?: boolean;
-  returnStructuredContent?: boolean;
 }
 
 interface ChatConfig {
@@ -718,17 +719,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const listToolsSchema = z.object({
     action: z.literal('listTools'),
     detail: toolDetailSchema.optional(),
-    returnStructuredContent: z.boolean()
-      .optional()
-      .describe('Return structuredContent instead of text content.'),
   }).strict().describe('List tools with optional detail. Only "action" (must be "listTools") and optional "detail" are allowed.');
   const getToolInfoSchema = z.object({
     action: z.literal('getToolInfo'),
     name: z.string()
       .describe('Target tool name. Required for getToolInfo.'),
-    returnStructuredContent: z.boolean()
-      .optional()
-      .describe('Return structuredContent instead of text content.'),
   }).strict().describe('Get tool info. Always returns full detail including inputSchema.');
   const invokeToolSchema = z.object({
     action: z.literal('invokeTool'),
@@ -740,9 +735,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     includeBinary: z.boolean()
       .describe('Include base64 for binary data parts in tool results.')
       .optional(),
-    returnStructuredContent: z.boolean()
-      .optional()
-      .describe('Return structuredContent instead of text content.'),
   }).strict().describe('Invoke a tool with input.');
   const toolkitSchema: z.ZodTypeAny = z.discriminatedUnion('action', [
     listToolsSchema,
@@ -760,22 +752,16 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         '• listTools only allows { action, detail? } and defaults to detail="names". Use detail="full" when you need all tool info.',
         '• getToolInfo requires { action:"getToolInfo", name } and always returns full detail (no detail parameter).',
         '• invokeTool requires { action:"invokeTool", name, input? } and the input must be an object.',
-        '• returnStructuredContent=true returns structuredContent and leaves content empty.',
         'Use lm-tools://schema/{name} for tool input shapes before invoking.',
       ].join('\n'),
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {
-      const returnStructuredContent = args.returnStructuredContent ?? false;
       try {
         logInfo(`vscodeLmToolkit request: ${formatLogPayload(args)}`);
         const lm = getLanguageModelNamespace();
         if (!lm) {
-          const payload = { error: 'vscode.lm is not available in this VS Code version.' };
-          if (returnStructuredContent) {
-            return toolErrorResultPayload(payload);
-          }
-          return toolErrorResult(formatToolErrorText(payload));
+          return toolErrorResult('vscode.lm is not available in this VS Code version.');
         }
 
         const tools = getExposedToolsSnapshot();
@@ -783,65 +769,39 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
         if (args.action === 'listTools') {
           logInfo(`vscodeLmToolkit action=listTools detail=${detail}`);
-          if (returnStructuredContent) {
-            return toolSuccessResult(listToolsPayload(tools, detail));
-          }
-          if (detail === 'full') {
-            const toolTexts = tools.map((tool) => formatToolInfoText(toolInfoPayload(tool, 'full')));
-            return toolTextResult(toolTexts.join('\n\n'));
-          }
-          return toolTextResult(formatToolNameList(tools));
+          const payload = listToolsPayload(tools, detail);
+          const text = detail === 'full'
+            ? tools.map((tool) => formatToolInfoText(toolInfoPayload(tool, 'full'))).join('\n\n')
+            : formatToolNameList(tools);
+          return buildToolResult(payload, false, text);
         }
 
         if (!args.name) {
-          const payload = {
-            error: 'Tool name is required for this action. Valid actions: listTools | getToolInfo | invokeTool.',
-          };
-          if (returnStructuredContent) {
-            return toolErrorResultPayload(payload);
-          }
-          return toolErrorResult(formatToolErrorText(payload));
+          return toolErrorResult('Tool name is required for this action. Valid actions: listTools | getToolInfo | invokeTool.');
         }
 
         const tool = tools.find((candidate) => candidate.name === args.name);
         if (!tool) {
-          const payload = {
-            error: `Tool not found or disabled: ${args.name}`,
-            name: args.name,
-          };
-          if (returnStructuredContent) {
-            return toolErrorResultPayload(payload);
-          }
-          return toolErrorResult(formatToolErrorText(payload));
+          return toolErrorResult(`Tool not found or disabled: ${args.name}`);
         }
 
         if (args.action === 'getToolInfo') {
           if (args.detail !== undefined) {
-            const payload = { error: 'detail is not supported for getToolInfo; full detail is always returned.' };
-            if (returnStructuredContent) {
-              return toolErrorResultPayload(payload);
-            }
-            return toolErrorResult(formatToolErrorText(payload));
+            return toolErrorResult('detail is not supported for getToolInfo; full detail is always returned.');
           }
           logInfo(`vscodeLmToolkit action=getToolInfo name=${tool.name} detail=full`);
           const payload = toolInfoPayload(tool, 'full');
-          if (returnStructuredContent) {
-            return toolSuccessResult(payload);
-          }
-          return toolTextResult(formatToolInfoText(payload));
+          const text = formatToolInfoText(payload);
+          return buildToolResult(payload, false, text);
         }
 
         const input = args.input ?? {};
         if (!isPlainObject(input)) {
-          const payload = {
+          return toolErrorResultPayload({
             error: 'Tool input must be an object (not a JSON string). Use lm-tools://schema/{name} for the expected shape.',
             name: tool.name,
             inputSchema: tool.inputSchema ?? null,
-          };
-          if (returnStructuredContent) {
-            return toolErrorResultPayload(payload);
-          }
-          return toolErrorResult(formatToolErrorText(payload));
+          });
         }
         const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema);
         logInfo(`vscodeLmToolkit invoking tool ${tool.name} with input: ${formatLogPayload(normalizedInput)}`);
@@ -856,20 +816,16 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           : serializedToolResultToText(serialized);
         logInfo(`vscodeLmToolkit tool result (${tool.name}): ${toolkitResultText}`);
 
-        if (returnStructuredContent) {
-          const blocks = toolResultToStructuredBlocks(serialized);
-          return toolSuccessResult({ blocks });
-        }
         const outputText = tool.name === 'copilot_findTextInFiles'
           ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
           : serializedToolResultToText(serialized);
-        return toolTextResult(outputText);
+        return buildToolResult({ blocks: toolResultToStructuredBlocks(serialized) }, false, outputText);
       } catch (error) {
         const message = String(error);
         logError(`Toolkit tool error: ${message}`);
         if (message.includes('toolInvocationToken')) {
           markToolRequiresToken(args.name);
-          const payload = {
+          return toolErrorResultPayload({
             error: message,
             name: args.name,
             requiresToolInvocationToken: true,
@@ -877,23 +833,15 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
             inputSchema: args.name
               ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
               : null,
-          };
-          if (returnStructuredContent) {
-            return toolErrorResultPayload(payload);
-          }
-          return toolErrorResult(formatToolErrorText(payload));
+          });
         }
-        const payload = {
+        return toolErrorResultPayload({
           error: message,
           name: args.name,
           inputSchema: args.name
             ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
             : null,
-        };
-        if (returnStructuredContent) {
-          return toolErrorResultPayload(payload);
-        }
-        return toolErrorResult(formatToolErrorText(payload));
+        });
       }
     },
   );
@@ -1164,42 +1112,46 @@ function toolSuccessResult(payload: unknown) {
 }
 
 function toolTextResult(text: string) {
-  return {
-    content: [
-      {
-        type: 'text' as const,
-        text,
-      },
-    ],
-  };
+  return buildToolResult(text, false, text);
 }
 
 function toolErrorResult(message: string) {
-  return {
-    isError: true,
-    content: [
-      {
-        type: 'text' as const,
-        text: message,
-      },
-    ],
-  };
+  return buildToolResult({ error: message }, true, message);
 }
 
 function toolErrorResultPayload(payload: unknown) {
-  return buildToolResult(payload, true);
+  const textOverride = isPlainObject(payload) ? formatToolErrorText(payload) : undefined;
+  return buildToolResult(payload, true, textOverride);
 }
 
-function buildToolResult(payload: unknown, isError: boolean) {
-  const structuredContent = extractStructuredContent(payload);
-  if (structuredContent !== undefined) {
+function buildToolResult(payload: unknown, isError: boolean, textOverride?: string) {
+  const responseFormat = getResponseFormat();
+  const text = textOverride ?? payloadToText(payload);
+  const structuredContent = responseFormat === 'text'
+    ? undefined
+    : (isPlainObject(payload) ? payload : { text });
+
+  if (responseFormat === 'structured') {
     return {
       content: [],
       structuredContent,
       ...(isError ? { isError: true } : {}),
     };
   }
-  const text = payloadToText(payload);
+
+  if (responseFormat === 'both') {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text,
+        },
+      ],
+      structuredContent,
+      ...(isError ? { isError: true } : {}),
+    };
+  }
+
   return {
     content: [
       {
@@ -1209,13 +1161,6 @@ function buildToolResult(payload: unknown, isError: boolean) {
     ],
     ...(isError ? { isError: true } : {}),
   };
-}
-
-function extractStructuredContent(payload: unknown): Record<string, unknown> | undefined {
-  if (!isPlainObject(payload)) {
-    return undefined;
-  }
-  return payload;
 }
 
 function payloadToText(payload: unknown): string {
@@ -2448,6 +2393,16 @@ function getSchemaDefaultOverrides(): Record<string, unknown> {
     return { ...BUILTIN_SCHEMA_DEFAULTS };
   }
   return { ...BUILTIN_SCHEMA_DEFAULTS, ...(fromConfig as Record<string, unknown>) };
+}
+
+function getResponseFormat(): ResponseFormat {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const rawValue = normalizeConfigString(config.get<string>(CONFIG_RESPONSE_FORMAT));
+  const value = rawValue ? rawValue.toLowerCase() : '';
+  if (value === 'structured' || value === 'both') {
+    return value;
+  }
+  return 'text';
 }
 
 function resolveSchemaDefault(name: string, overrides: Record<string, unknown>): unknown {

@@ -185,12 +185,14 @@ Following these steps prevents validation errors such as missing `action` or sch
 - `lmToolsBridge.tools.enabled` (default: the list above)
 - `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
 - `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
+- `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
 
 ### Configure exposed tools
 
 - Right-click the status bar item and select `LM Tools Bridge: Configure Tools`.
 - Use the multi-select list to enable tools. Click **Reset** to restore defaults.
 - Tools matching the blacklist are hidden from the picker and are always disabled.
+- `lmToolsBridge.tools.responseFormat` controls tool responses: `text` returns only content.text (human-readable), `structured` returns only structuredContent (machine-readable) with empty content, `both` returns both content.text and structuredContent. Applies to all tools.
 
 ### Help and reload
 

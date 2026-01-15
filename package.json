@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -118,6 +118,16 @@
             "maxResults": 1000
           },
           "description": "Map of input property names to default values. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Example: { \"maxResults\": 1000 }."
+        },
+        "lmToolsBridge.tools.responseFormat": {
+          "type": "string",
+          "default": "text",
+          "enum": [
+            "text",
+            "structured",
+            "both"
+          ],
+          "description": "Controls how MCP tool calls return data. \"text\" returns only content.text (human-readable). \"structured\" returns only structuredContent (machine-readable) with empty content. \"both\" returns both content.text and structuredContent. This setting applies to all tools."
         }
       }
     }

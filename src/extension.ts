@@ -17,6 +17,7 @@ const CONFIG_SECTION = 'lmToolsBridge';
 const CONFIG_ENABLED_TOOLS = 'tools.enabled';
 const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
+const CONFIG_DEBUG = 'debug';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
@@ -77,6 +78,7 @@ const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
 type ResponseFormat = 'text' | 'structured' | 'both';
+type DebugLevel = 'off' | 'simple' | 'detail';
 
 interface ToolkitInput {
   action: ToolAction;
@@ -98,7 +100,7 @@ interface McpServerState {
   ownerWorkspacePath: string;
 }
 
-type OwnershipState = 'owner' | 'nonOwner' | 'off';
+type OwnershipState = 'current-owner' | 'other-owner' | 'off';
 interface OwnershipInfo {
   state: OwnershipState;
   ownerWorkspacePath?: string;
@@ -109,6 +111,10 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
 let helpUrl: string | undefined;
 let statusRefreshTimer: NodeJS.Timeout | undefined;
+let lastOwnershipState: OwnershipState | undefined;
+let lastOwnerWorkspacePath: string | undefined;
+let lastRemoteStatusResult: 'success' | 'failure' | undefined;
+let lastStatusLogMessage: string | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
@@ -177,7 +183,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }, STATUS_REFRESH_INTERVAL_MS);
     }
   })();
-  logInfo('Extension activated.');
+  logStatusInfo('Extension activated.');
   void vscode.commands.executeCommand('setContext', 'lmToolsBridge.statusBar', true);
 }
 
@@ -422,9 +428,10 @@ async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
     return;
   }
 
+  logStatusInfo(`Take over MCP server (${config.host}:${config.port})`);
   const stopResult = await requestRemoteStop(config.host, config.port);
   if (!stopResult) {
-    logWarn('No remote MCP server responded to stop request (or it is not updated yet).');
+    logStatusWarn('No remote MCP server responded to stop request (or it is not updated yet).');
   }
 
   const started = await startMcpServerWithRetry(channel, config.host, config.port, 6, 400);
@@ -435,13 +442,13 @@ async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
 
 async function handleTakeOverCommand(channel: vscode.OutputChannel): Promise<void> {
   const state = await getOwnershipState();
-  if (state.state === 'owner') {
-    void vscode.window.showInformationMessage('This VS Code instance already owns the MCP server.');
+  if (state.state === 'current-owner') {
+    void vscode.window.showInformationMessage('This VS Code instance is the current-owner of the MCP server.');
     return;
   }
 
   const selection = await vscode.window.showWarningMessage(
-    'This VS Code instance does not own the MCP server. Take over control?',
+    'This VS Code instance is not the current-owner of the MCP server. Take over control?',
     { modal: true },
     'Take Over',
   );
@@ -473,15 +480,19 @@ async function reconcileServerState(channel: vscode.OutputChannel): Promise<void
   }
 }
 
-async function startMcpServer(channel: vscode.OutputChannel, override?: { host: string; port: number }): Promise<boolean> {
+async function startMcpServer(
+  channel: vscode.OutputChannel,
+  override?: { host: string; port: number; suppressPortInUseLog?: boolean },
+): Promise<boolean> {
   if (serverState) {
-    logInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
-    updateStatusBar({ state: 'owner', ownerWorkspacePath: serverState.ownerWorkspacePath });
+    logStatusInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
+    updateStatusBar({ state: 'current-owner', ownerWorkspacePath: serverState.ownerWorkspacePath });
     return true;
   }
 
   const config = override ?? getServerConfig();
   const { host, port } = config;
+  const suppressPortInUseLog = override?.suppressPortInUseLog ?? false;
   const ownerWorkspacePath = getOwnerWorkspacePath();
   const server = http.createServer((req, res) => {
     void handleMcpHttpRequest(req, res, channel);
@@ -491,11 +502,13 @@ async function startMcpServer(channel: vscode.OutputChannel, override?: { host: 
     server.once('error', (error) => {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'EADDRINUSE') {
-        logWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
-        logWarn('Use "LM Tools Bridge: Take Over Server" to reclaim the port.');
-        updateStatusBar({ state: 'nonOwner' });
+        if (!suppressPortInUseLog) {
+          logStatusWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
+          logStatusWarn('Use "LM Tools Bridge: Take Over Server" to reclaim the port.');
+        }
+        updateStatusBar({ state: 'other-owner' });
       } else {
-        logError(`Failed to start MCP server: ${String(error)}`);
+        logStatusError(`Failed to start MCP server: ${String(error)}`);
         updateStatusBar({ state: 'off' });
       }
       try {
@@ -512,8 +525,8 @@ async function startMcpServer(channel: vscode.OutputChannel, override?: { host: 
         port,
         ownerWorkspacePath,
       };
-      logInfo(`MCP server listening at http://${host}:${port}/mcp`);
-      updateStatusBar({ state: 'owner', ownerWorkspacePath });
+      logStatusInfo(`MCP server listening at http://${host}:${port}/mcp`);
+      updateStatusBar({ state: 'current-owner', ownerWorkspacePath });
       resolve(true);
     });
   });
@@ -530,7 +543,7 @@ async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
   serverState = undefined;
   await new Promise<void>((resolve) => {
     server.close(() => {
-      logInfo(`MCP server stopped at http://${host}:${port}/mcp`);
+      logStatusInfo(`MCP server stopped at http://${host}:${port}/mcp`);
       resolve();
     });
   });
@@ -547,7 +560,6 @@ async function handleMcpHttpRequest(
     respondJson(res, 400, { error: 'Bad Request' });
     return;
   }
-  logInfo(`MCP HTTP ${req.method ?? 'UNKNOWN'} ${requestUrl.pathname} from ${req.socket.remoteAddress ?? 'unknown'}`);
 
   if (requestUrl.pathname === CONTROL_STOP_PATH) {
     await handleControlStop(req, res, channel);
@@ -579,8 +591,8 @@ async function handleMcpHttpRequest(
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
   });
-  transport.onerror = (error) => {
-    logError(`MCP transport error: ${String(error)}`);
+  transport.onerror = () => {
+    // Swallow per-request transport errors to avoid noisy logs.
   };
 
   try {
@@ -591,7 +603,6 @@ async function handleMcpHttpRequest(
     });
     await transport.handleRequest(req, res);
   } catch (error) {
-    logError(`MCP request failed: ${String(error)}`);
     if (!res.headersSent) {
       respondJson(res, 500, {
         jsonrpc: '2.0',
@@ -614,7 +625,7 @@ async function handleControlStop(
   }
 
   respondJson(res, 200, { ok: true });
-  logInfo('Received MCP take-over request, shutting down server.');
+  logStatusInfo('Received MCP take-over request, shutting down server.');
   setImmediate(() => {
     void stopMcpServer(channel);
   });
@@ -643,7 +654,7 @@ async function startMcpServerWithRetry(
   delayMs: number,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const started = await startMcpServer(channel, { host, port });
+    const started = await startMcpServer(channel, { host, port, suppressPortInUseLog: true });
     if (started) {
       return true;
     }
@@ -700,16 +711,25 @@ function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspa
         });
         response.on('end', () => {
           if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+            if (lastRemoteStatusResult !== 'failure') {
+              logStatusWarn(`Port status read failed (${host}:${port})`);
+              lastRemoteStatusResult = 'failure';
+            }
             resolve(undefined);
             return;
           }
           try {
             const text = Buffer.concat(chunks).toString('utf8');
             const parsed = JSON.parse(text) as { ownerWorkspacePath?: string | null };
+            lastRemoteStatusResult = 'success';
             resolve({
               ownerWorkspacePath: parsed.ownerWorkspacePath ?? undefined,
             });
           } catch {
+            if (lastRemoteStatusResult !== 'failure') {
+              logStatusWarn(`Port status read failed (${host}:${port})`);
+              lastRemoteStatusResult = 'failure';
+            }
             resolve(undefined);
           }
         });
@@ -722,6 +742,10 @@ function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspa
 
     request.on('error', () => {
       clearTimeout(timeout);
+      if (lastRemoteStatusResult !== 'failure') {
+        logStatusWarn(`Port status read failed (${host}:${port})`);
+        lastRemoteStatusResult = 'failure';
+      }
       resolve(undefined);
     });
     request.on('close', () => {
@@ -788,8 +812,14 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       inputSchema: toolkitSchema,
     },
     async (args: ToolkitInput) => {
+      const debugLevel = getDebugLevel();
+      const requestStartTime = Date.now();
+      let debugInput: unknown = args;
+      let debugOutputText: string | undefined;
+      let debugStructuredOutput: unknown;
+      let debugInvokeInput: Record<string, unknown> | undefined;
+      let debugError: unknown;
       try {
-        logInfo(`vscodeLmToolkit request: ${formatLogPayload(args)}`);
         const lm = getLanguageModelNamespace();
         if (!lm) {
           return toolErrorResult('vscode.lm is not available in this VS Code version.');
@@ -799,11 +829,13 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         const detail: ToolDetail = args.detail ?? 'names';
 
         if (args.action === 'listTools') {
-          logInfo(`vscodeLmToolkit action=listTools detail=${detail}`);
           const payload = listToolsPayload(tools, detail);
           const text = detail === 'full'
             ? tools.map((tool) => formatToolInfoText(toolInfoPayload(tool, 'full'))).join('\n\n')
             : formatToolNameList(tools);
+          debugInput = { action: 'listTools', detail };
+          debugOutputText = text;
+          debugStructuredOutput = payload;
           return buildToolResult(payload, false, text);
         }
 
@@ -820,9 +852,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           if (args.detail !== undefined) {
             return toolErrorResult('detail is not supported for getToolInfo; full detail is always returned.');
           }
-          logInfo(`vscodeLmToolkit action=getToolInfo name=${tool.name} detail=full`);
           const payload = toolInfoPayload(tool, 'full');
           const text = formatToolInfoText(payload);
+          debugInput = { action: 'getToolInfo', name: tool.name };
+          debugOutputText = text;
+          debugStructuredOutput = payload;
           return buildToolResult(payload, false, text);
         }
 
@@ -835,24 +869,29 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
           });
         }
         const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema);
-        logInfo(`vscodeLmToolkit invoking tool ${tool.name} with input: ${formatLogPayload(normalizedInput)}`);
-        const result = await lm.invokeTool(tool.name, {
-          input: normalizedInput,
-          toolInvocationToken: undefined,
-        });
-        const serialized = serializeToolResult(result);
-        const toolkitResultText = tool.name === 'copilot_findTextInFiles'
-          ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
-          : serializedToolResultToText(serialized);
-        logInfo(`vscodeLmToolkit tool result (${tool.name}): ${toolkitResultText}`);
-
-        const outputText = tool.name === 'copilot_findTextInFiles'
-          ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
-          : serializedToolResultToText(serialized);
-        return buildToolResult({ blocks: toolResultToStructuredBlocks(serialized) }, false, outputText);
+        debugInvokeInput = normalizedInput;
+        let outputText: string | undefined;
+        let structuredOutput: { blocks: unknown[] } | undefined;
+        try {
+          const result = await lm.invokeTool(tool.name, {
+            input: normalizedInput,
+            toolInvocationToken: undefined,
+          });
+          const serialized = serializeToolResult(result);
+          outputText = tool.name === 'copilot_findTextInFiles'
+            ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
+            : serializedToolResultToText(serialized);
+          structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+          debugOutputText = outputText;
+          debugStructuredOutput = structuredOutput;
+          return buildToolResult(structuredOutput, false, outputText);
+        } catch (error) {
+          debugError = error;
+          throw error;
+        }
       } catch (error) {
         const message = String(error);
-        logError(`Toolkit tool error: ${message}`);
+        debugError = error;
         return toolErrorResultPayload({
           error: message,
           name: args.name,
@@ -860,6 +899,25 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
             ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
             : null,
         });
+      } finally {
+        const durationMs = Date.now() - requestStartTime;
+        if (debugLevel !== 'off') {
+          if (args.action === 'invokeTool') {
+            logInfo(`vscodeLmToolkit invokeTool name=${args.name ?? ''} input=${formatLogPayload(debugInvokeInput ?? {})} durationMs=${durationMs}`);
+          } else {
+            logInfo(`vscodeLmToolkit ${args.action} input=${formatLogPayload(debugInput)} durationMs=${durationMs}`);
+          }
+        }
+        if (debugLevel === 'detail') {
+          if (debugError) {
+            logInfo(`vscodeLmToolkit ${args.action} error: ${String(debugError)}`);
+          } else {
+            logInfo(`vscodeLmToolkit ${args.action} output: ${debugOutputText ?? ''}`);
+            if (getResponseFormat() !== 'text') {
+              logInfo(`vscodeLmToolkit ${args.action} structured output: ${formatLogPayload(debugStructuredOutput)}`);
+            }
+          }
+        }
       }
     },
   );
@@ -884,7 +942,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     'lm-tools://names',
     { description: 'List exposed tool names.' },
     async () => {
-      logInfo('Resource read: lm-tools://names');
+      logDebugDetail('Resource read: lm-tools://names');
       return resourceJson('lm-tools://names', listToolsPayload(getExposedToolsSnapshot(), 'names'));
     },
   );
@@ -907,14 +965,14 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     'lm-tools://policy',
     { description: 'Call order policy: use getVSCodeWorkspace (lm-tools://mcp-tool/getVSCodeWorkspace) to verify workspace, then read tool schema (lm-tools://schema/{name}), then invokeTool (see lm-tools://tool/{name}).' },
     async () => {
-      logInfo('Resource read: lm-tools://policy');
+      logDebugDetail('Resource read: lm-tools://policy');
       return resourceJson('lm-tools://policy', policyPayload);
     },
   );
 
   const mcpToolTemplate = new ResourceTemplate('lm-tools://mcp-tool/{name}', {
     list: () => {
-      logInfo('Resource list: lm-tools://mcp-tool/{name}');
+      logDebugDetail('Resource list: lm-tools://mcp-tool/{name}');
       return {
         resources: [
           {
@@ -927,7 +985,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
     complete: {
       name: (value) => {
-        logInfo(`Resource complete: lm-tools://mcp-tool/{name} value=${value}`);
+        logDebugDetail(`Resource complete: lm-tools://mcp-tool/{name} value=${value}`);
         return ['getVSCodeWorkspace'].filter((name) => name.startsWith(value));
       },
     },
@@ -939,7 +997,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     { description: 'Read MCP-native tool definition by name. Supported: getVSCodeWorkspace. Call it first to verify the workspace; if it does not match, ask the user to confirm.' },
     async (uri, variables) => {
       const name = readTemplateVariable(variables, 'name');
-      logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);
+      logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
       if (!name) {
         return resourceJson(uri.toString(), { error: 'Tool name is required.' });
       }
@@ -956,7 +1014,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
   const toolTemplate = new ResourceTemplate('lm-tools://tool/{name}', {
     list: () => {
-      logInfo('Resource list: lm-tools://tool/{name}');
+      logDebugDetail('Resource list: lm-tools://tool/{name}');
       return {
         resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
           uri: `lm-tools://tool/${tool.name}`,
@@ -967,7 +1025,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
     complete: {
       name: (value) => {
-        logInfo(`Resource complete: lm-tools://tool/{name} value=${value}`);
+        logDebugDetail(`Resource complete: lm-tools://tool/{name} value=${value}`);
         return getExposedToolsSnapshot()
           .map((tool) => tool.name)
           .filter((name) => name.startsWith(value));
@@ -981,7 +1039,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     { description: 'Read a tool definition by name.' },
     async (uri, variables) => {
       const name = readTemplateVariable(variables, 'name');
-      logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);
+      logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
       if (!name) {
         return resourceJson(uri.toString(), { error: 'Tool name is required.' });
       }
@@ -995,12 +1053,12 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
   const schemaTemplate = new ResourceTemplate('lm-tools://schema/{name}', {
     list: () => {
-      logInfo('Resource list: lm-tools://schema/{name}');
+      logDebugDetail('Resource list: lm-tools://schema/{name}');
       return { resources: [] };
     },
     complete: {
       name: (value) => {
-        logInfo(`Resource complete: lm-tools://schema/{name} value=${value}`);
+        logDebugDetail(`Resource complete: lm-tools://schema/{name} value=${value}`);
         return getExposedToolsSnapshot()
           .map((tool) => tool.name)
           .filter((name) => name.startsWith(value));
@@ -1014,7 +1072,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     { description: 'Read tool input schema by name. Call it before invoking the tool to satisfy the validator.' },
     async (uri, variables) => {
       const name = readTemplateVariable(variables, 'name');
-      logInfo(`Resource read: ${uri.toString()} name=${name ?? ''}`);
+      logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
       if (!name) {
         return resourceJson(uri.toString(), { error: 'Tool name is required.' });
       }
@@ -1738,6 +1796,14 @@ function normalizeConfigString(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeWorkspacePath(value: string | undefined): string {
+  if (!value) {
+    return 'No workspace open';
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : 'No workspace open';
+}
+
 function getRequestUrl(req: http.IncomingMessage): URL | undefined {
   const host = req.headers.host ?? 'localhost';
   const urlValue = req.url ?? '/';
@@ -1790,7 +1856,7 @@ function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation
 async function getOwnershipState(): Promise<OwnershipInfo> {
   if (serverState) {
     return {
-      state: 'owner',
+      state: 'current-owner',
       ownerWorkspacePath: serverState.ownerWorkspacePath,
     };
   }
@@ -1803,7 +1869,7 @@ async function getOwnershipState(): Promise<OwnershipInfo> {
 
   const remote = await requestRemoteStatus(config.host, config.port);
   return {
-    state: 'nonOwner',
+    state: 'other-owner',
     ownerWorkspacePath: remote?.ownerWorkspacePath,
   };
 }
@@ -1814,14 +1880,30 @@ function updateStatusBar(info: OwnershipInfo): void {
   }
 
   const config = getServerConfig();
+  const ownerWorkspacePath = normalizeWorkspacePath(info.ownerWorkspacePath);
+  const stateLabel = info.state === 'current-owner'
+    ? 'current-owner'
+    : (info.state === 'other-owner' ? 'other-owner' : 'off');
+  let summary = `State: ${stateLabel} (${config.host}:${config.port})`;
+  if (info.state === 'other-owner' && info.ownerWorkspacePath === undefined) {
+    summary = '';
+  } else if (info.state !== 'off') {
+    summary = `${summary} workspace=${ownerWorkspacePath}`;
+  }
+  if (summary && summary !== lastStatusLogMessage) {
+    logStatusInfo(summary);
+    lastStatusLogMessage = summary;
+    lastOwnershipState = info.state;
+    lastOwnerWorkspacePath = ownerWorkspacePath;
+  }
   const tooltip = buildStatusTooltip(info.ownerWorkspacePath, config.host, config.port);
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
-  if (info.state === 'owner') {
-    statusBarItem.text = '$(lock) LM Tools Bridge: Owner';
+  if (info.state === 'current-owner') {
+    statusBarItem.text = '$(lock) LM Tools Bridge: Current-owner';
     statusBarItem.tooltip = tooltip;
     statusBarItem.color = undefined;
-  } else if (info.state === 'nonOwner') {
-    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Non-owner';
+  } else if (info.state === 'other-owner') {
+    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Other-owner';
     statusBarItem.tooltip = `${tooltip}\nClick to take over.`;
     statusBarItem.color = undefined;
   } else {
@@ -1837,7 +1919,7 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
   const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
     {
       label: '$(debug-disconnect) Take Over MCP',
-      description: ownership.state === 'owner' ? 'Already owning the MCP server' : 'Acquire ownership of the MCP port',
+      description: ownership.state === 'current-owner' ? 'Already the current-owner of the MCP server' : 'Acquire current-owner control of the MCP port',
       action: 'takeOver',
     },
     {
@@ -1929,6 +2011,24 @@ function logError(message: string): void {
     return;
   }
   console.error(message);
+}
+
+function logStatusInfo(message: string): void {
+  logInfo(message);
+}
+
+function logStatusWarn(message: string): void {
+  logWarn(message);
+}
+
+function logStatusError(message: string): void {
+  logError(message);
+}
+
+function logDebugDetail(message: string): void {
+  if (getDebugLevel() === 'detail') {
+    logInfo(message);
+  }
 }
 
 async function refreshStatusBar(): Promise<void> {
@@ -2169,6 +2269,16 @@ function getResponseFormat(): ResponseFormat {
     return value;
   }
   return 'text';
+}
+
+function getDebugLevel(): DebugLevel {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const rawValue = normalizeConfigString(config.get<string>(CONFIG_DEBUG));
+  const value = rawValue ? rawValue.toLowerCase() : '';
+  if (value === 'detail' || value === 'simple') {
+    return value;
+  }
+  return 'off';
 }
 
 function resolveSchemaDefault(name: string, overrides: Record<string, unknown>): unknown {

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -141,6 +141,16 @@
             "both"
           ],
           "description": "Controls how MCP tool calls return data. \"text\" returns only content.text (human-readable). \"structured\" returns only structuredContent (machine-readable) with empty content. \"both\" returns both content.text and structuredContent. This setting applies to all tools."
+        },
+        "lmToolsBridge.debug": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "simple",
+            "detail"
+          ],
+          "description": "Controls logging verbosity. \"off\" logs only plugin status. \"simple\" logs tool name/input and elapsed time. \"detail\" adds full tool outputs (including structuredContent when enabled)."
         }
       }
     }

@@ -144,6 +144,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 - `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
 - `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
 - `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
+- `lmToolsBridge.debug` (default: `off`; enum: `off` | `simple` | `detail`; controls log verbosity for tool calls)
 
 ### Configure exposed tools
 
@@ -164,16 +165,21 @@ When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server
 
 ### Status bar indicator
 
-The status bar shows the ownership state:
-- `LM Tools Bridge: Owner` (this instance hosts the port)
-- `LM Tools Bridge: Non-owner` (another instance hosts the port)
+The status bar shows the current-owner state:
+- `LM Tools Bridge: Current-owner` (this instance hosts the port)
+- `LM Tools Bridge: Other-owner` (another instance hosts the port)
 - `LM Tools Bridge: Off` (no server running)
 
-The tooltip includes the owner workspace path(s) and the MCP URL. Click the status bar item to take over when not owning the port.
+The tooltip includes the owner workspace path(s) and the MCP URL. Click the status bar item to take over when this instance is not the current-owner.
 
 ### Logs
 
 Check Output -> `LM Tools Bridge` for MCP server logs.
+
+Debug levels:
+- `off`: only status logs (current-owner state + owner workspace path when known). If other-owner and unknown, owner workspace is omitted.
+- `simple`: status logs + tool name/input + duration (ms) for listTools/getToolInfo/invokeTool.
+- `detail`: adds full tool outputs; if responseFormat is `structured` or `both`, logs structured content too.
 
 ### Consent notes
 

@@ -10,6 +10,7 @@ const START_COMMAND_ID = 'lm-tools-bridge.start';
 const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
 const TAKE_OVER_COMMAND_ID = 'lm-tools-bridge.takeOver';
 const CONFIGURE_COMMAND_ID = 'lm-tools-bridge.configureTools';
+const CONFIGURE_BLACKLIST_COMMAND_ID = 'lm-tools-bridge.configureBlacklist';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
 const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
 const CONFIG_SECTION = 'lmToolsBridge';
@@ -39,7 +40,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'terminal_selection',
   'terminal_last_command',
 ];
-const INTERNAL_BLACKLIST = new Set([
+const DEFAULT_BLACKLISTED_TOOL_NAMES = [
   'copilot_applyPatch',
   'copilot_insertEdit',
   'copilot_replaceString',
@@ -67,7 +68,7 @@ const INTERNAL_BLACKLIST = new Set([
   'runSubagent',
   'vscode_get_confirmation',
   'inline_chat_exit',
-]);
+];
 
 const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
   maxResults: 1000,
@@ -123,6 +124,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const configureCommand = vscode.commands.registerCommand(CONFIGURE_COMMAND_ID, () => {
     void configureExposedTools();
   });
+  const configureBlacklistCommand = vscode.commands.registerCommand(CONFIGURE_BLACKLIST_COMMAND_ID, () => {
+    void configureBlacklistedTools();
+  });
   const helpCommand = vscode.commands.registerCommand(HELP_COMMAND_ID, () => {
     void openHelpDoc();
   });
@@ -152,6 +156,7 @@ export function activate(context: vscode.ExtensionContext): void {
     startCommand,
     stopCommand,
     configureCommand,
+    configureBlacklistCommand,
     helpCommand,
     statusMenuCommand,
     takeOverCommand,
@@ -237,26 +242,14 @@ function getEnabledToolsSetting(): string[] {
   return Array.isArray(enabled) ? enabled.filter((name) => typeof name === 'string') : [];
 }
 
-function getBlacklistPatterns(): string[] {
+function getBlacklistedToolsSetting(): string[] {
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const raw = config.get<string>(CONFIG_BLACKLIST, '');
-  return raw
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .map((entry) => entry.toLowerCase());
+  const blacklisted = config.get<string[]>(CONFIG_BLACKLIST, DEFAULT_BLACKLISTED_TOOL_NAMES);
+  return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
 }
 
-function isToolBlacklisted(name: string, patterns: string[]): boolean {
-  if (patterns.length === 0) {
-    return false;
-  }
-  const lowered = name.toLowerCase();
-  return patterns.some((pattern) => lowered.includes(pattern));
-}
-
-function isToolInternallyBlacklisted(name: string): boolean {
-  return INTERNAL_BLACKLIST.has(name);
+function isToolBlacklisted(name: string, blacklistedSet: ReadonlySet<string>): boolean {
+  return blacklistedSet.has(name);
 }
 
 async function setEnabledTools(enabled: string[]): Promise<void> {
@@ -264,8 +257,25 @@ async function setEnabledTools(enabled: string[]): Promise<void> {
   await config.update(CONFIG_ENABLED_TOOLS, enabled, vscode.ConfigurationTarget.Global);
 }
 
+async function setBlacklistedTools(blacklisted: string[]): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  await config.update(CONFIG_BLACKLIST, blacklisted, vscode.ConfigurationTarget.Global);
+  const enabled = getEnabledToolsSetting();
+  const blacklistedSet = new Set(blacklisted);
+  const filtered = enabled.filter((name) => !blacklistedSet.has(name));
+  if (filtered.length !== enabled.length) {
+    await setEnabledTools(filtered);
+    return true;
+  }
+  return false;
+}
+
 async function resetEnabledTools(): Promise<void> {
   await setEnabledTools([...DEFAULT_ENABLED_TOOL_NAMES]);
+}
+
+async function resetBlacklistedTools(): Promise<boolean> {
+  return setBlacklistedTools([...DEFAULT_BLACKLISTED_TOOL_NAMES]);
 }
 
 async function configureExposedTools(): Promise<void> {
@@ -275,20 +285,13 @@ async function configureExposedTools(): Promise<void> {
     return;
   }
 
-  const tools = lm.tools;
-  if (tools.length === 0) {
+  const allTools = getAllLmToolsSnapshot();
+  if (allTools.length === 0) {
     void vscode.window.showInformationMessage('No tools found in vscode.lm.tools.');
     return;
   }
-
-  const blacklistPatterns = getBlacklistPatterns();
-  const visibleTools = tools.filter((tool) => {
-    if (isToolInternallyBlacklisted(tool.name)) {
-      return false;
-    }
-    return !isToolBlacklisted(tool.name, blacklistPatterns);
-  });
-  if (visibleTools.length === 0) {
+  const tools = getVisibleToolsSnapshot();
+  if (tools.length === 0) {
     void vscode.window.showWarningMessage('All tools are hidden by the blacklist configuration.');
     return;
   }
@@ -304,7 +307,7 @@ async function configureExposedTools(): Promise<void> {
   });
   items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
 
-  for (const tool of visibleTools) {
+  for (const tool of tools) {
     items.push({
       label: tool.name,
       description: tool.description,
@@ -343,6 +346,74 @@ async function configureExposedTools(): Promise<void> {
   void vscode.window.showInformationMessage(`Enabled ${selectedNames.size} tool(s) for MCP.`);
 }
 
+async function configureBlacklistedTools(): Promise<void> {
+  const lm = getLanguageModelNamespace();
+  if (!lm) {
+    void vscode.window.showWarningMessage('vscode.lm is not available in this VS Code version.');
+    return;
+  }
+
+  const tools = getAllLmToolsSnapshot();
+  if (tools.length === 0) {
+    void vscode.window.showInformationMessage('No tools found in vscode.lm.tools.');
+    return;
+  }
+
+  const blacklistedSet = new Set(getBlacklistedToolsSetting());
+  const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
+
+  items.push({
+    label: '$(refresh) Reset (default blacklist)',
+    description: 'Restore the default blacklist',
+    alwaysShow: true,
+    isReset: true,
+  });
+  items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
+
+  for (const tool of tools) {
+    items.push({
+      label: tool.name,
+      description: tool.description,
+      detail: tool.tags.length > 0 ? tool.tags.join(', ') : undefined,
+      picked: blacklistedSet.has(tool.name),
+      toolName: tool.name,
+    });
+  }
+
+  const selections = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: 'Configure blacklisted LM tools',
+    placeHolder: 'Select tools to hide/disable',
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+
+  if (!selections) {
+    return;
+  }
+
+  const shouldReset = selections.some((item) => item.isReset);
+  if (shouldReset) {
+    const removed = await resetBlacklistedTools();
+    const message = removed
+      ? 'Blacklisted tools reset to defaults and removed from enabled list.'
+      : 'Blacklisted tools reset to defaults.';
+    void vscode.window.showInformationMessage(message);
+    return;
+  }
+
+  const selectedNames = new Set(
+    selections
+      .map((item) => item.toolName)
+      .filter((name): name is string => typeof name === 'string'),
+  );
+
+  const removed = await setBlacklistedTools(Array.from(selectedNames));
+  const message = removed
+    ? `Blacklisted ${selectedNames.size} tool(s) and removed them from enabled list.`
+    : `Blacklisted ${selectedNames.size} tool(s).`;
+  void vscode.window.showInformationMessage(message);
+}
 
 async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
   const config = getServerConfig();
@@ -1699,23 +1770,17 @@ function getAllLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[]
 }
 
 function getVisibleToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
-  const blacklistPatterns = getBlacklistPatterns();
+  const blacklistedSet = new Set(getBlacklistedToolsSetting());
   return getAllLmToolsSnapshot().filter((tool) => {
-    if (isToolInternallyBlacklisted(tool.name)) {
-      return false;
-    }
-    return !isToolBlacklisted(tool.name, blacklistPatterns);
+    return !isToolBlacklisted(tool.name, blacklistedSet);
   });
 }
 
 function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
   const enabledSet = new Set(getEnabledToolsSetting());
-  const blacklistPatterns = getBlacklistPatterns();
+  const blacklistedSet = new Set(getBlacklistedToolsSetting());
   return getAllLmToolsSnapshot().filter((tool) => {
-    if (isToolInternallyBlacklisted(tool.name)) {
-      return false;
-    }
-    if (isToolBlacklisted(tool.name, blacklistPatterns)) {
+    if (isToolBlacklisted(tool.name, blacklistedSet)) {
       return false;
     }
     return enabledSet.has(tool.name);
@@ -1769,7 +1834,7 @@ function updateStatusBar(info: OwnershipInfo): void {
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
   const ownership = await getOwnershipState();
-  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'dump' | 'help' | 'reload' }> = [
+  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
     {
       label: '$(debug-disconnect) Take Over MCP',
       description: ownership.state === 'owner' ? 'Already owning the MCP server' : 'Acquire ownership of the MCP port',
@@ -1779,6 +1844,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       label: '$(settings-gear) Configure Exposed Tools',
       description: 'Enable/disable tools exposed via MCP',
       action: 'configure',
+    },
+    {
+      label: '$(settings-gear) Configure Blacklisted Tools',
+      description: 'Hide/disable tools before exposure',
+      action: 'configureBlacklist',
     },
     {
       label: '$(list-unordered) Dump Enabled Tools',
@@ -1813,6 +1883,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 
   if (selection.action === 'configure') {
     await configureExposedTools();
+    return;
+  }
+
+  if (selection.action === 'configureBlacklist') {
+    await configureBlacklistedTools();
     return;
   }
 

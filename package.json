@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -36,6 +36,10 @@
       {
         "command": "lm-tools-bridge.configureTools",
         "title": "LM Tools Bridge: Configure Tools"
+      },
+      {
+        "command": "lm-tools-bridge.configureBlacklist",
+        "title": "LM Tools Bridge: Configure Blacklisted Tools"
       },
       {
         "command": "lm-tools-bridge.statusMenu",
@@ -86,9 +90,40 @@
           "description": "List of LM tool names enabled for MCP exposure."
         },
         "lmToolsBridge.tools.blacklist": {
-          "type": "string",
-          "default": "",
-          "description": "Comma-separated substring patterns to hide/disable tools (case-insensitive). Blacklist takes precedence over enabled list."
+          "type": "array",
+          "default": [
+            "copilot_applyPatch",
+            "copilot_insertEdit",
+            "copilot_replaceString",
+            "copilot_multiReplaceString",
+            "copilot_createFile",
+            "copilot_createDirectory",
+            "copilot_createNewJupyterNotebook",
+            "copilot_editNotebook",
+            "copilot_runNotebookCell",
+            "copilot_createNewWorkspace",
+            "copilot_getVSCodeAPI",
+            "copilot_installExtension",
+            "copilot_runVscodeCommand",
+            "create_and_run_task",
+            "run_in_terminal",
+            "manage_todo_list",
+            "copilot_memory",
+            "copilot_getNotebookSummary",
+            "copilot_fetchWebPage",
+            "copilot_openSimpleBrowser",
+            "copilot_editFiles",
+            "copilot_getProjectSetupInfo",
+            "copilot_getDocInfo",
+            "copilot_listDirectory",
+            "runSubagent",
+            "vscode_get_confirmation",
+            "inline_chat_exit"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "List of LM tool names to hide/disable. Blacklist takes precedence over enabled list."
         },
         "lmToolsBridge.tools.schemaDefaults": {
           "type": "object",

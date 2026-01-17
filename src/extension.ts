@@ -250,15 +250,39 @@ function getToolsConfiguration(): vscode.WorkspaceConfiguration {
   return vscode.workspace.getConfiguration(CONFIG_SECTION, getConfigurationResource());
 }
 
-function resolveToolsConfigTarget(config: vscode.WorkspaceConfiguration, key: string): vscode.ConfigurationTarget {
-  const inspection = config.inspect<unknown>(key);
-  if (inspection?.workspaceFolderValue !== undefined) {
+function getWorkspaceFolderForResource(resource?: vscode.Uri): vscode.WorkspaceFolder | undefined {
+  if (resource) {
+    const folder = vscode.workspace.getWorkspaceFolder(resource);
+    if (folder) {
+      return folder;
+    }
+  }
+  return vscode.workspace.workspaceFolders?.[0];
+}
+
+async function hasWorkspaceSettingsFile(resource?: vscode.Uri): Promise<boolean> {
+  const folder = getWorkspaceFolderForResource(resource);
+  if (!folder) {
+    return false;
+  }
+  const settingsUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'settings.json');
+  try {
+    await vscode.workspace.fs.stat(settingsUri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.ConfigurationTarget> {
+  const hasWorkspaceSettings = await hasWorkspaceSettingsFile(resource);
+  if (!hasWorkspaceSettings) {
+    return vscode.ConfigurationTarget.Global;
+  }
+  if (vscode.workspace.workspaceFile) {
     return vscode.ConfigurationTarget.WorkspaceFolder;
   }
-  if (inspection?.workspaceValue !== undefined) {
-    return vscode.ConfigurationTarget.Workspace;
-  }
-  return vscode.ConfigurationTarget.Global;
+  return vscode.ConfigurationTarget.Workspace;
 }
 
 function getEnabledToolsSetting(): string[] {
@@ -278,14 +302,16 @@ function isToolBlacklisted(name: string, blacklistedSet: ReadonlySet<string>): b
 }
 
 async function setEnabledTools(enabled: string[]): Promise<void> {
-  const config = getToolsConfiguration();
-  const target = resolveToolsConfigTarget(config, CONFIG_ENABLED_TOOLS);
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
   await config.update(CONFIG_ENABLED_TOOLS, enabled, target);
 }
 
 async function setBlacklistedTools(blacklisted: string[]): Promise<boolean> {
-  const config = getToolsConfiguration();
-  const target = resolveToolsConfigTarget(config, CONFIG_BLACKLIST);
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
   await config.update(CONFIG_BLACKLIST, blacklisted, target);
   const enabled = getEnabledToolsSetting();
   const blacklistedSet = new Set(blacklisted);

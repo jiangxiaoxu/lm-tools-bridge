@@ -242,14 +242,33 @@ function getServerConfig(): ServerConfig {
   };
 }
 
+function getConfigurationResource(): vscode.Uri | undefined {
+  return vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+}
+
+function getToolsConfiguration(): vscode.WorkspaceConfiguration {
+  return vscode.workspace.getConfiguration(CONFIG_SECTION, getConfigurationResource());
+}
+
+function resolveToolsConfigTarget(config: vscode.WorkspaceConfiguration, key: string): vscode.ConfigurationTarget {
+  const inspection = config.inspect<unknown>(key);
+  if (inspection?.workspaceFolderValue !== undefined) {
+    return vscode.ConfigurationTarget.WorkspaceFolder;
+  }
+  if (inspection?.workspaceValue !== undefined) {
+    return vscode.ConfigurationTarget.Workspace;
+  }
+  return vscode.ConfigurationTarget.Global;
+}
+
 function getEnabledToolsSetting(): string[] {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const config = getToolsConfiguration();
   const enabled = config.get<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
   return Array.isArray(enabled) ? enabled.filter((name) => typeof name === 'string') : [];
 }
 
 function getBlacklistedToolsSetting(): string[] {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const config = getToolsConfiguration();
   const blacklisted = config.get<string[]>(CONFIG_BLACKLIST, DEFAULT_BLACKLISTED_TOOL_NAMES);
   return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
 }
@@ -259,13 +278,15 @@ function isToolBlacklisted(name: string, blacklistedSet: ReadonlySet<string>): b
 }
 
 async function setEnabledTools(enabled: string[]): Promise<void> {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  await config.update(CONFIG_ENABLED_TOOLS, enabled, vscode.ConfigurationTarget.Global);
+  const config = getToolsConfiguration();
+  const target = resolveToolsConfigTarget(config, CONFIG_ENABLED_TOOLS);
+  await config.update(CONFIG_ENABLED_TOOLS, enabled, target);
 }
 
 async function setBlacklistedTools(blacklisted: string[]): Promise<boolean> {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  await config.update(CONFIG_BLACKLIST, blacklisted, vscode.ConfigurationTarget.Global);
+  const config = getToolsConfiguration();
+  const target = resolveToolsConfigTarget(config, CONFIG_BLACKLIST);
+  await config.update(CONFIG_BLACKLIST, blacklisted, target);
   const enabled = getEnabledToolsSetting();
   const blacklistedSet = new Set(blacklisted);
   const filtered = enabled.filter((name) => !blacklistedSet.has(name));

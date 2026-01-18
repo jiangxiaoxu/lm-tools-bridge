@@ -1,15 +1,29 @@
 # Agent Instructions
 
-## Version Bump
+## Version bump
 
-When asked to bump the version, run this command from the repository root:
+Root package:
 
 ```
 npm version patch --no-git-tag-version
 ```
 
-For subpackages, run the version bump with an explicit prefix, for example:
+Subpackage (run inside the subpackage directory, use `version patch` there; do not use `--prefix`):
 
 ```
-npm --prefix lm-tools-bridge-proxy version patch --no-git-tag-version
+cd lm-tools-bridge-proxy
+npm version patch --no-git-tag-version
 ```
+
+## Publish
+
+- Publish the proxy from inside `lm-tools-bridge-proxy` (use `npm publish` there; do not use `--prefix`).
+
+Example:
+
+```
+cd lm-tools-bridge-proxy
+npm publish
+```
+- Do not use `npm --prefix ... publish`; it can publish the root `lm-tools-bridge` by mistake.
+- The root package requires 2FA (OTP) for publish/unpublish.

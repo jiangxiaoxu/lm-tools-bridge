@@ -1,8 +1,11 @@
+#!/usr/bin/env node
 import http from 'node:http';
 import process from 'node:process';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const MANAGER_TIMEOUT_MS = 1500;
 const RESOLVE_RETRIES = 10;
@@ -11,7 +14,17 @@ const STARTUP_GRACE_MS = 5000;
 const LOG_ENV = 'LM_TOOLS_BRIDGE_PROXY_LOG';
 const ERROR_MANAGER_UNREACHABLE = -32003;
 const ERROR_NO_MATCH = -32004;
+const ERROR_WORKSPACE_NOT_SET = -32005;
 const STARTUP_TIME = Date.now();
+const SET_WORKSPACE_METHOD = 'lmTools/setWorkspace';
+
+type ManagerMatch = {
+  sessionId: string;
+  host: string;
+  port: number;
+  workspaceFolders: string[];
+  workspaceFile?: string | null;
+};
 
 function getUserSeed() {
   return process.env.USERNAME ?? process.env.USERPROFILE ?? os.userInfo().username ?? 'default-user';
@@ -61,11 +74,22 @@ async function resolveTarget(cwd) {
   return resolveTargetWithDeadline(cwd, deadline);
 }
 
-function isSameTarget(left, right) {
+function isSameTarget(left: ManagerMatch | undefined, right: ManagerMatch | undefined) {
   if (!left || !right) {
     return false;
   }
   return left.host === right.host && left.port === right.port;
+}
+
+function buildRoots(match: ManagerMatch) {
+  const folders = Array.isArray(match.workspaceFolders) ? match.workspaceFolders : [];
+  return folders.map((folder) => {
+    const resolved = path.resolve(folder);
+    return {
+      uri: pathToFileURL(resolved).toString(),
+      name: path.basename(resolved),
+    };
+  });
 }
 
 async function managerRequest(method, requestPath, body) {
@@ -143,6 +167,50 @@ function appendLog(message) {
 
 function createStdioMessageHandler(targetGetter, targetRefresher) {
   return async (message) => {
+    if (message?.method === 'roots/list') {
+      let target = targetGetter();
+      if (!target) {
+        const now = Date.now();
+        const graceDeadline = STARTUP_TIME + STARTUP_GRACE_MS;
+        const refreshResult = await targetRefresher(now < graceDeadline ? graceDeadline : undefined);
+        target = refreshResult?.target;
+        if (!target) {
+          const errorKind = refreshResult?.errorKind ?? 'unreachable';
+          if (message.id === undefined || message.id === null) {
+            return;
+          }
+          const errorPayload = {
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
+              message: errorKind === 'no_match'
+                ? 'No matching VS Code instance for current workspace.'
+                : 'Manager unreachable.',
+            },
+          };
+          appendLog(`roots/list => ${JSON.stringify({ error: errorPayload.error })}`);
+          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+          return;
+        }
+      }
+      const rootsResult = {
+        roots: buildRoots(target),
+      };
+      appendLog(`roots/list => ${JSON.stringify(rootsResult)}`);
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      const resultPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          roots: rootsResult.roots,
+        },
+      };
+      process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+      return;
+    }
     const payload = JSON.stringify(message);
     let target = targetGetter();
     if (!target) {
@@ -181,6 +249,7 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
             path: targetUrl.pathname,
             method: 'POST',
             headers: {
+              Accept: 'application/json, text/event-stream',
               'Content-Type': 'application/json',
               'Content-Length': Buffer.byteLength(payload),
             },
@@ -191,7 +260,28 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
             response.on('end', () => {
               const text = Buffer.concat(chunks).toString('utf8');
               if (text.length > 0) {
-                process.stdout.write(`${text}\n`);
+                const contentType = Array.isArray(response.headers['content-type'])
+                  ? response.headers['content-type'].join(';')
+                  : response.headers['content-type'] ?? '';
+                if (contentType.includes('text/event-stream')) {
+                  const events = text.split(/\r?\n\r?\n/);
+                  for (const eventBlock of events) {
+                    const lines = eventBlock.split(/\r?\n/);
+                    const dataLines = lines
+                      .filter((line) => line.startsWith('data:'))
+                      .map((line) => line.slice(5).trimStart());
+                    if (dataLines.length === 0) {
+                      continue;
+                    }
+                    const dataText = dataLines.join('\n').trim();
+                    if (dataText.length === 0 || dataText === '[DONE]') {
+                      continue;
+                    }
+                    process.stdout.write(`${dataText}\n`);
+                  }
+                } else {
+                  process.stdout.write(`${text}\n`);
+                }
               }
               resolve({ ok: true });
             });
@@ -258,11 +348,25 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
 }
 
 async function main() {
-  const cwd = process.cwd();
-  let currentTargetResult = await resolveTarget(cwd);
+  let resolveCwd = process.cwd();
+  let workspaceSetExplicitly = false;
+  const envSnapshot = Object.entries(process.env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value ?? ''}`)
+    .join('\n');
+  appendLog(`ENV_VARS_BEGIN\n${envSnapshot}\nENV_VARS_END`);
+  const vscodeCwd = process.env.VSCODE_CWD;
+  if (vscodeCwd) {
+    resolveCwd = path.resolve(vscodeCwd);
+    workspaceSetExplicitly = true;
+    appendLog(`VSCODE_CWD=${vscodeCwd}`);
+  } else {
+    appendLog('VSCODE_CWD not found');
+  }
+  let currentTargetResult = await resolveTarget(resolveCwd);
   let currentTarget = currentTargetResult.target;
   if (!currentTarget) {
-    appendLog(`No VS Code instance registered for cwd: ${cwd}`);
+    appendLog(`No VS Code instance registered for cwd: ${resolveCwd}`);
   }
 
   let resolveInFlight;
@@ -270,7 +374,7 @@ async function main() {
     if (resolveInFlight) {
       return resolveInFlight;
     }
-    const resolver = deadlineMs ? resolveTargetWithDeadline(cwd, deadlineMs) : resolveTarget(cwd);
+    const resolver = deadlineMs ? resolveTargetWithDeadline(resolveCwd, deadlineMs) : resolveTarget(resolveCwd);
     resolveInFlight = resolver.finally(() => {
       resolveInFlight = undefined;
     });
@@ -294,6 +398,55 @@ async function main() {
       if (line.length > 0) {
         try {
           const message = JSON.parse(line);
+          if (message?.method === SET_WORKSPACE_METHOD) {
+            const nextCwd = message?.params?.cwd;
+            if (typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
+              if (message.id !== undefined && message.id !== null) {
+                const errorPayload = {
+                  jsonrpc: '2.0',
+                  id: message.id,
+                  error: {
+                    code: -32602,
+                    message: 'Invalid params: expected params.cwd (string).',
+                  },
+                };
+                process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+              }
+              return;
+            }
+            resolveCwd = path.resolve(nextCwd);
+            workspaceSetExplicitly = true;
+            currentTarget = undefined;
+            void refreshTarget();
+            if (message.id !== undefined && message.id !== null) {
+              const resultPayload = {
+                jsonrpc: '2.0',
+                id: message.id,
+                result: {
+                  ok: true,
+                  cwd: resolveCwd,
+                },
+              };
+              process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+            }
+            return;
+          }
+          if (!workspaceSetExplicitly) {
+            if (message?.method === 'roots/list' || message?.method === undefined) {
+              const errorPayload = {
+                jsonrpc: '2.0',
+                id: message?.id ?? null,
+                error: {
+                  code: ERROR_WORKSPACE_NOT_SET,
+                  message: 'Workspace not set. Call lmTools/setWorkspace with params.cwd before using MCP.',
+                },
+              };
+              if (message?.id !== undefined && message?.id !== null) {
+                process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+              }
+              return;
+            }
+          }
           void handler(message);
         } catch {
           appendLog('Invalid JSON received by MCP proxy.');
@@ -315,6 +468,8 @@ async function main() {
   process.stdin.on('end', () => {
     process.exit(0);
   });
+
+  void handler({ jsonrpc: '2.0', id: null, method: 'roots/list' });
 }
 
 main().catch((error) => {

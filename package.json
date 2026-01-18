@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -28,10 +28,6 @@
       {
         "command": "lm-tools-bridge.stop",
         "title": "LM Tools Bridge: Stop Server"
-      },
-      {
-        "command": "lm-tools-bridge.takeOver",
-        "title": "LM Tools Bridge: Take Over Server"
       },
       {
         "command": "lm-tools-bridge.configureTools",
@@ -63,7 +59,7 @@
           "default": 48123,
           "minimum": 1,
           "maximum": 65535,
-          "description": "Port for the MCP server."
+          "description": "Base port for the MCP server; the extension scans basePort..basePort+99 and picks the first available."
         },
         "lmToolsBridge.tools.enabled": {
           "type": "array",

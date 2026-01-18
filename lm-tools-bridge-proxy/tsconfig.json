@@ -5,23 +5,17 @@
     "lib": [
       "ES2020"
     ],
-    "outDir": "out",
+    "outDir": "dist",
     "rootDir": "src",
     "strict": true,
     "noImplicitAny": true,
-    "sourceMap": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": [
-      "node",
-      "vscode"
+      "node"
     ]
   },
   "include": [
     "src"
-  ],
-  "exclude": [
-    "node_modules",
-    ".vscode-test"
   ]
 }

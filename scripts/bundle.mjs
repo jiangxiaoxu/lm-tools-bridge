@@ -18,6 +18,7 @@ await build({
     ...shared,
     entryPoints: {
         extension: path.join(rootDir, 'src', 'extension.ts'),
+        manager: path.join(rootDir, 'src', 'manager.ts'),
     },
     outdir: outDir,
     tsconfig: path.join(rootDir, 'tsconfig.json'),

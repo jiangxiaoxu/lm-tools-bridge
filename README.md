@@ -15,7 +15,7 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 
 The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed by `vscodeLmToolkit`.
 
-- Endpoint: `http://127.0.0.1:48123/mcp` (host is fixed to `127.0.0.1`)
+- Endpoint: `http://127.0.0.1:<port>/mcp` (host is fixed to `127.0.0.1`; port is the first available in `basePort..basePort+99`)
 - Tool names:
   - `vscodeLmToolkit`
   - `getVSCodeWorkspace` (call this first to confirm the workspace before using other tools)
@@ -28,6 +28,10 @@ The extension starts a local MCP Streamable HTTP server and exposes tools plus r
 
 Use `lm-tools://schema/{name}` to fetch input structure when needed.
 Resource list entries include `uri`, `name`, and `description` (no `title`) to minimize payload.
+
+### Manager (Windows)
+
+On Windows, the extension starts a lightweight Manager process (Named Pipe HTTP) to register active MCP instances via heartbeat. This enables Codex stdio proxies to resolve the correct VS Code instance by workspace. The Manager exits automatically when no instances remain.
 
 ### Default enabled tools
 
@@ -139,7 +143,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 ### Settings
 
 - `lmToolsBridge.server.autoStart` (default: true)
-- `lmToolsBridge.server.port` (default: 48123)
+- `lmToolsBridge.server.port` (default: 48123; base port for the 100-port scan range)
 - `lmToolsBridge.tools.enabled` (default: the list above)
 - `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
 - `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
@@ -159,25 +163,20 @@ Following these steps prevents validation errors such as missing `action` or sch
 - The status menu includes **Help** (opens the GitHub README).
 - **Reload Window** triggers `Developer: Reload Window` to refresh the extension quickly.
 
-### Take over MCP server
-
-When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server` to stop the existing MCP server on the port and start it in the current instance.
-
 ### Status bar indicator
 
 The status bar shows the current-owner state:
 - `LM Tools Bridge: Current-owner` (this instance hosts the port)
-- `LM Tools Bridge: Other-owner` (another instance hosts the port)
 - `LM Tools Bridge: Off` (no server running)
 
-The tooltip includes the owner workspace path(s) and the MCP URL. Click the status bar item to take over when this instance is not the current-owner.
+The tooltip includes the owner workspace path(s) and the MCP URL.
 
 ### Logs
 
 Check Output -> `LM Tools Bridge` for MCP server logs.
 
 Debug levels:
-- `off`: only status logs (current-owner state + owner workspace path when known). If other-owner and unknown, owner workspace is omitted.
+- `off`: only status logs (current-owner state + owner workspace path when known).
 - `simple`: status logs + tool name/input + duration (ms) for listTools/getToolInfo/invokeTool.
 - `detail`: adds full tool outputs; if responseFormat is `structured` or `both`, logs structured content too.
 

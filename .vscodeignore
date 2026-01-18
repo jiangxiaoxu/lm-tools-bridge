@@ -6,6 +6,7 @@ src/**
 out/**
 !out/
 !out/extension.js
+!out/manager.js
 **/*.ts
 **/*.d.ts
 **/*.map

@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import { TextDecoder } from 'node:util';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import { getManagerPipeName } from './managerShared';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
@@ -8,7 +12,6 @@ import * as z from 'zod';
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
 const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
-const TAKE_OVER_COMMAND_ID = 'lm-tools-bridge.takeOver';
 const CONFIGURE_COMMAND_ID = 'lm-tools-bridge.configureTools';
 const CONFIGURE_BLACKLIST_COMMAND_ID = 'lm-tools-bridge.configureBlacklist';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
@@ -20,10 +23,13 @@ const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
-const CONTROL_STOP_PATH = '/mcp-control/stop';
-const CONTROL_STATUS_PATH = '/mcp-control/status';
 const HEALTH_PATH = '/mcp/health';
 const STATUS_REFRESH_INTERVAL_MS = 3000;
+const PORT_SCAN_RANGE = 100;
+const MANAGER_HEARTBEAT_INTERVAL_MS = 2000;
+const MANAGER_REQUEST_TIMEOUT_MS = 1500;
+const MANAGER_START_TIMEOUT_MS = 3000;
+const MANAGER_LOCK_STALE_MS = 5000;
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
@@ -97,10 +103,11 @@ interface McpServerState {
   server: http.Server;
   host: string;
   port: number;
+  basePort: number;
   ownerWorkspacePath: string;
 }
 
-type OwnershipState = 'current-owner' | 'other-owner' | 'off';
+type OwnershipState = 'current-owner' | 'off';
 interface OwnershipInfo {
   state: OwnershipState;
   ownerWorkspacePath?: string;
@@ -111,12 +118,15 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
 let helpUrl: string | undefined;
 let statusRefreshTimer: NodeJS.Timeout | undefined;
-let lastOwnershipState: OwnershipState | undefined;
-let lastOwnerWorkspacePath: string | undefined;
-let lastRemoteStatusResult: 'success' | 'failure' | undefined;
 let lastStatusLogMessage: string | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
+let managerHeartbeatTimer: NodeJS.Timeout | undefined;
+let managerHeartbeatInFlight = false;
+let managerStartPromise: Promise<boolean> | undefined;
+let managerReady = false;
 
 export function activate(context: vscode.ExtensionContext): void {
+  extensionContext = context;
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
   logChannel = outputChannel as vscode.LogOutputChannel;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
@@ -138,9 +148,6 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const statusMenuCommand = vscode.commands.registerCommand(STATUS_MENU_COMMAND_ID, () => {
     void showStatusMenu(outputChannel);
-  });
-  const takeOverCommand = vscode.commands.registerCommand(TAKE_OVER_COMMAND_ID, () => {
-    void handleTakeOverCommand(outputChannel);
   });
   const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration(CONFIG_SECTION)) {
@@ -165,7 +172,6 @@ export function activate(context: vscode.ExtensionContext): void {
     configureBlacklistCommand,
     helpCommand,
     statusMenuCommand,
-    takeOverCommand,
     configWatcher,
     workspaceWatcher,
     { dispose: () => { void stopMcpServer(outputChannel); } },
@@ -192,6 +198,7 @@ export function deactivate(): void {
     clearInterval(statusRefreshTimer);
     statusRefreshTimer = undefined;
   }
+  void stopManagerHeartbeat();
   if (serverState) {
     try {
       serverState.server.close();
@@ -468,44 +475,6 @@ async function configureBlacklistedTools(): Promise<void> {
   void vscode.window.showInformationMessage(message);
 }
 
-async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
-  const config = getServerConfig();
-  if (serverState && serverState.host === config.host && serverState.port === config.port) {
-    void vscode.window.showInformationMessage('MCP server is already running in this VS Code instance.');
-    return;
-  }
-
-  logStatusInfo(`Take over MCP server (${config.host}:${config.port})`);
-  const stopResult = await requestRemoteStop(config.host, config.port);
-  if (!stopResult) {
-    logStatusWarn('No remote MCP server responded to stop request (or it is not updated yet).');
-  }
-
-  const started = await startMcpServerWithRetry(channel, config.host, config.port, 6, 400);
-  if (!started) {
-    void vscode.window.showWarningMessage('Failed to take over MCP server. Port may still be in use.');
-  }
-}
-
-async function handleTakeOverCommand(channel: vscode.OutputChannel): Promise<void> {
-  const state = await getOwnershipState();
-  if (state.state === 'current-owner') {
-    void vscode.window.showInformationMessage('This VS Code instance is the current-owner of the MCP server.');
-    return;
-  }
-
-  const selection = await vscode.window.showWarningMessage(
-    'This VS Code instance is not the current-owner of the MCP server. Take over control?',
-    { modal: true },
-    'Take Over',
-  );
-  if (selection !== 'Take Over') {
-    return;
-  }
-
-  await takeOverMcpServer(channel);
-}
-
 async function reconcileServerState(channel: vscode.OutputChannel): Promise<void> {
   const config = getServerConfig();
   if (!config.autoStart) {
@@ -520,65 +489,56 @@ async function reconcileServerState(channel: vscode.OutputChannel): Promise<void
     return;
   }
 
-  if (serverState.host !== config.host || serverState.port !== config.port) {
+  if (serverState.host !== config.host || serverState.basePort !== config.port) {
     await stopMcpServer(channel);
     await startMcpServer(channel);
     await refreshStatusBar();
   }
 }
 
-async function startMcpServer(
-  channel: vscode.OutputChannel,
-  override?: { host: string; port: number; suppressPortInUseLog?: boolean },
-): Promise<boolean> {
+async function startMcpServer(channel: vscode.OutputChannel): Promise<boolean> {
   if (serverState) {
     logStatusInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
     updateStatusBar({ state: 'current-owner', ownerWorkspacePath: serverState.ownerWorkspacePath });
     return true;
   }
 
-  const config = override ?? getServerConfig();
-  const { host, port } = config;
-  const suppressPortInUseLog = override?.suppressPortInUseLog ?? false;
+  const config = getServerConfig();
+  const { host } = config;
+  const basePort = config.port;
   const ownerWorkspacePath = getOwnerWorkspacePath();
-  const server = http.createServer((req, res) => {
-    void handleMcpHttpRequest(req, res, channel);
-  });
-
-  const started = await new Promise<boolean>((resolve) => {
-    server.once('error', (error) => {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'EADDRINUSE') {
-        if (!suppressPortInUseLog) {
-          logStatusWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
-          logStatusWarn('Use "LM Tools Bridge: Take Over Server" to reclaim the port.');
-        }
-        updateStatusBar({ state: 'other-owner' });
-      } else {
-        logStatusError(`Failed to start MCP server: ${String(error)}`);
-        updateStatusBar({ state: 'off' });
-      }
-      try {
-        server.close();
-      } catch {
-        // Ignore close errors.
-      }
-      resolve(false);
+  const portsToTry = Array.from({ length: PORT_SCAN_RANGE }, (_, index) => basePort + index);
+  for (const port of portsToTry) {
+    const server = http.createServer((req, res) => {
+      void handleMcpHttpRequest(req, res, channel);
     });
-    server.listen(port, host, () => {
-      serverState = {
-        server,
-        host,
-        port,
-        ownerWorkspacePath,
-      };
-      logStatusInfo(`MCP server listening at http://${host}:${port}/mcp`);
-      updateStatusBar({ state: 'current-owner', ownerWorkspacePath });
-      resolve(true);
-    });
-  });
+    const result = await listenOnPort(server, host, port);
+    if (result === 'in-use') {
+      continue;
+    }
+    if (result === 'error') {
+      continue;
+    }
 
-  return started;
+    serverState = {
+      server,
+      host,
+      port,
+      basePort,
+      ownerWorkspacePath,
+    };
+    if (port !== basePort) {
+      logStatusInfo(`Base port ${basePort} is in use. Selected port ${port} instead.`);
+    }
+    logStatusInfo(`MCP server listening at http://${host}:${port}/mcp`);
+    updateStatusBar({ state: 'current-owner', ownerWorkspacePath });
+    await startManagerHeartbeat();
+    return true;
+  }
+
+  logStatusError(`No available port found in range ${basePort}-${basePort + PORT_SCAN_RANGE - 1}.`);
+  updateStatusBar({ state: 'off' });
+  return false;
 }
 
 async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
@@ -594,6 +554,7 @@ async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
       resolve();
     });
   });
+  await stopManagerHeartbeat();
   await refreshStatusBar();
 }
 
@@ -605,16 +566,6 @@ async function handleMcpHttpRequest(
   const requestUrl = getRequestUrl(req);
   if (!requestUrl) {
     respondJson(res, 400, { error: 'Bad Request' });
-    return;
-  }
-
-  if (requestUrl.pathname === CONTROL_STOP_PATH) {
-    await handleControlStop(req, res, channel);
-    return;
-  }
-
-  if (requestUrl.pathname === CONTROL_STATUS_PATH) {
-    await handleControlStatus(req, res);
     return;
   }
 
@@ -660,96 +611,263 @@ async function handleMcpHttpRequest(
   }
 }
 
-async function handleControlStop(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  channel: vscode.OutputChannel,
-): Promise<void> {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    respondJson(res, 405, { error: 'Method Not Allowed' });
-    return;
-  }
-
-  respondJson(res, 200, { ok: true });
-  logStatusInfo('Received MCP take-over request, shutting down server.');
-  setImmediate(() => {
-    void stopMcpServer(channel);
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 
-async function handleControlStatus(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-): Promise<void> {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
-    respondJson(res, 405, { error: 'Method Not Allowed' });
-    return;
-  }
-
-  respondJson(res, 200, {
-    ownerWorkspacePath: serverState?.ownerWorkspacePath ?? null,
+async function listenOnPort(server: http.Server, host: string, port: number): Promise<'started' | 'in-use' | 'error'> {
+  return new Promise((resolve) => {
+    server.once('error', (error) => {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'EADDRINUSE') {
+        try {
+          server.close();
+        } catch {
+          // Ignore close errors.
+        }
+        resolve('in-use');
+        return;
+      }
+      logStatusWarn(`Failed to start MCP server on ${host}:${port}: ${String(error)}`);
+      try {
+        server.close();
+      } catch {
+        // Ignore close errors.
+      }
+      resolve('error');
+    });
+    server.listen(port, host, () => resolve('started'));
   });
 }
 
-async function startMcpServerWithRetry(
-  channel: vscode.OutputChannel,
-  host: string,
-  port: number,
-  attempts: number,
-  delayMs: number,
-): Promise<boolean> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const started = await startMcpServer(channel, { host, port, suppressPortInUseLog: true });
-    if (started) {
-      return true;
+async function startManagerHeartbeat(): Promise<void> {
+  if (managerHeartbeatTimer) {
+    return;
+  }
+  managerReady = await ensureManagerRunning();
+  if (managerReady) {
+    await sendManagerHeartbeat();
+  } else {
+    logStatusWarn('Manager is not available yet; will retry via heartbeat.');
+  }
+  managerHeartbeatTimer = setInterval(() => {
+    void sendManagerHeartbeat();
+  }, MANAGER_HEARTBEAT_INTERVAL_MS);
+}
+
+async function stopManagerHeartbeat(): Promise<void> {
+  if (managerHeartbeatTimer) {
+    clearInterval(managerHeartbeatTimer);
+    managerHeartbeatTimer = undefined;
+  }
+  managerReady = false;
+  await sendManagerBye();
+}
+
+async function sendManagerHeartbeat(): Promise<void> {
+  if (managerHeartbeatInFlight) {
+    return;
+  }
+  const payload = buildManagerHeartbeatPayload();
+  if (!payload) {
+    return;
+  }
+  managerHeartbeatInFlight = true;
+  try {
+    if (!managerReady) {
+      managerReady = await ensureManagerRunning();
+      if (!managerReady) {
+        return;
+      }
     }
-    await delay(delayMs);
+    const response = await managerRequest('POST', '/heartbeat', payload);
+    if (!response.ok) {
+      managerReady = false;
+    }
+  } finally {
+    managerHeartbeatInFlight = false;
+  }
+}
+
+async function sendManagerBye(): Promise<void> {
+  const sessionId = vscode.env.sessionId;
+  if (!sessionId) {
+    return;
+  }
+  await managerRequest('POST', '/bye', { sessionId });
+}
+
+function buildManagerHeartbeatPayload(): {
+  sessionId: string;
+  pid: number;
+  workspaceFolders: string[];
+  workspaceFile?: string;
+  host: string;
+  port: number;
+  lastSeen: number;
+} | undefined {
+  if (!serverState) {
+    return undefined;
+  }
+  const sessionId = vscode.env.sessionId;
+  if (!sessionId) {
+    return undefined;
+  }
+  const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+  return {
+    sessionId,
+    pid: process.pid,
+    workspaceFolders,
+    workspaceFile: vscode.workspace.workspaceFile?.fsPath,
+    host: serverState.host,
+    port: serverState.port,
+    lastSeen: Date.now(),
+  };
+}
+
+async function ensureManagerRunning(): Promise<boolean> {
+  if (managerStartPromise) {
+    return managerStartPromise;
+  }
+  managerStartPromise = ensureManagerRunningInternal()
+    .finally(() => {
+      managerStartPromise = undefined;
+    });
+  return managerStartPromise;
+}
+
+async function ensureManagerRunningInternal(): Promise<boolean> {
+  if (await isManagerAlive()) {
+    return true;
+  }
+  if (!extensionContext) {
+    return false;
+  }
+
+  const lockPath = await getManagerLockPath();
+  const acquired = await tryAcquireManagerLock(lockPath);
+  if (acquired) {
+    await startManagerProcess();
+    const ready = await waitForManagerReady();
+    await releaseManagerLock(lockPath);
+    return ready;
+  }
+
+  const ready = await waitForManagerReady();
+  if (ready) {
+    return true;
+  }
+
+  if (await isLockStale(lockPath)) {
+    await releaseManagerLock(lockPath);
+    const retryAcquired = await tryAcquireManagerLock(lockPath);
+    if (!retryAcquired) {
+      return false;
+    }
+    await startManagerProcess();
+    const retryReady = await waitForManagerReady();
+    await releaseManagerLock(lockPath);
+    return retryReady;
   }
 
   return false;
 }
 
-function requestRemoteStop(host: string, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const request = http.request(
-      {
-        host,
-        port,
-        path: CONTROL_STOP_PATH,
-        method: 'POST',
-      },
-      (response) => {
-        response.resume();
-        const ok = response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300;
-        resolve(ok);
-      },
-    );
-
-    const timeout = setTimeout(() => {
-      request.destroy(new Error('Timeout'));
-    }, 1500);
-
-    request.on('error', () => {
-      clearTimeout(timeout);
-      resolve(false);
-    });
-    request.on('close', () => {
-      clearTimeout(timeout);
-    });
-    request.end();
-  });
+async function waitForManagerReady(): Promise<boolean> {
+  const deadline = Date.now() + MANAGER_START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await isManagerAlive()) {
+      return true;
+    }
+    await delay(200);
+  }
+  return false;
 }
 
-function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspacePath?: string } | undefined> {
+async function isManagerAlive(): Promise<boolean> {
+  const response = await managerRequest('GET', '/health');
+  return response.ok;
+}
+
+async function startManagerProcess(): Promise<void> {
+  if (!extensionContext) {
+    return;
+  }
+  const managerPath = extensionContext.asAbsolutePath(path.join('out', 'manager.js'));
+  if (!fs.existsSync(managerPath)) {
+    logStatusError(`Manager entry not found at ${managerPath}`);
+    return;
+  }
+  const pipeName = getManagerPipeName();
+  const child = spawn(process.execPath, [managerPath, '--pipe', pipeName], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+async function getManagerLockPath(): Promise<string> {
+  if (!extensionContext) {
+    return path.join(process.cwd(), 'lm-tools-bridge-manager.lock');
+  }
+  const baseDir = path.join(extensionContext.globalStorageUri.fsPath, 'manager');
+  await fs.promises.mkdir(baseDir, { recursive: true });
+  return path.join(baseDir, 'manager.lock');
+}
+
+async function tryAcquireManagerLock(lockPath: string): Promise<boolean> {
+  try {
+    const handle = await fs.promises.open(lockPath, 'wx');
+    await handle.writeFile(JSON.stringify({ pid: process.pid, timestamp: Date.now() }));
+    await handle.close();
+    return true;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'EEXIST') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function releaseManagerLock(lockPath: string): Promise<void> {
+  try {
+    await fs.promises.unlink(lockPath);
+  } catch {
+    // Ignore cleanup errors.
+  }
+}
+
+async function isLockStale(lockPath: string): Promise<boolean> {
+  try {
+    const stats = await fs.promises.stat(lockPath);
+    return Date.now() - stats.mtimeMs > MANAGER_LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function managerRequest<T = unknown>(
+  method: string,
+  requestPath: string,
+  body?: unknown,
+): Promise<{ ok: boolean; status?: number; data?: T }> {
   return new Promise((resolve) => {
+    const payload = body ? JSON.stringify(body) : undefined;
     const request = http.request(
       {
-        host,
-        port,
-        path: CONTROL_STATUS_PATH,
-        method: 'GET',
+        socketPath: getManagerPipeName(),
+        path: requestPath,
+        method,
+        headers: payload
+          ? {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          }
+          : undefined,
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -757,27 +875,17 @@ function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspa
           chunks.push(Buffer.from(chunk));
         });
         response.on('end', () => {
-          if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-            if (lastRemoteStatusResult !== 'failure') {
-              logStatusWarn(`Port status read failed (${host}:${port})`);
-              lastRemoteStatusResult = 'failure';
-            }
-            resolve(undefined);
+          const status = response.statusCode ?? 500;
+          if (chunks.length === 0) {
+            resolve({ ok: status >= 200 && status < 300, status });
             return;
           }
           try {
             const text = Buffer.concat(chunks).toString('utf8');
-            const parsed = JSON.parse(text) as { ownerWorkspacePath?: string | null };
-            lastRemoteStatusResult = 'success';
-            resolve({
-              ownerWorkspacePath: parsed.ownerWorkspacePath ?? undefined,
-            });
+            const parsed = JSON.parse(text) as T;
+            resolve({ ok: status >= 200 && status < 300, status, data: parsed });
           } catch {
-            if (lastRemoteStatusResult !== 'failure') {
-              logStatusWarn(`Port status read failed (${host}:${port})`);
-              lastRemoteStatusResult = 'failure';
-            }
-            resolve(undefined);
+            resolve({ ok: false, status });
           }
         });
       },
@@ -785,26 +893,19 @@ function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspa
 
     const timeout = setTimeout(() => {
       request.destroy(new Error('Timeout'));
-    }, 1500);
+    }, MANAGER_REQUEST_TIMEOUT_MS);
 
     request.on('error', () => {
       clearTimeout(timeout);
-      if (lastRemoteStatusResult !== 'failure') {
-        logStatusWarn(`Port status read failed (${host}:${port})`);
-        lastRemoteStatusResult = 'failure';
-      }
-      resolve(undefined);
+      resolve({ ok: false });
     });
     request.on('close', () => {
       clearTimeout(timeout);
     });
+    if (payload) {
+      request.write(payload);
+    }
     request.end();
-  });
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 
@@ -1908,17 +2009,7 @@ async function getOwnershipState(): Promise<OwnershipInfo> {
     };
   }
 
-  const config = getServerConfig();
-  const available = await isPortAvailable(config.host, config.port);
-  if (available) {
-    return { state: 'off' };
-  }
-
-  const remote = await requestRemoteStatus(config.host, config.port);
-  return {
-    state: 'other-owner',
-    ownerWorkspacePath: remote?.ownerWorkspacePath,
-  };
+  return { state: 'off' };
 }
 
 function updateStatusBar(info: OwnershipInfo): void {
@@ -1927,48 +2018,34 @@ function updateStatusBar(info: OwnershipInfo): void {
   }
 
   const config = getServerConfig();
+  const host = serverState?.host ?? config.host;
+  const port = serverState?.port ?? config.port;
   const ownerWorkspacePath = normalizeWorkspacePath(info.ownerWorkspacePath);
-  const stateLabel = info.state === 'current-owner'
-    ? 'current-owner'
-    : (info.state === 'other-owner' ? 'other-owner' : 'off');
-  let summary = `State: ${stateLabel} (${config.host}:${config.port})`;
-  if (info.state === 'other-owner' && info.ownerWorkspacePath === undefined) {
-    summary = '';
-  } else if (info.state !== 'off') {
+  const stateLabel = info.state === 'current-owner' ? 'current-owner' : 'off';
+  let summary = `State: ${stateLabel} (${host}:${port})`;
+  if (info.state !== 'off') {
     summary = `${summary} workspace=${ownerWorkspacePath}`;
   }
   if (summary && summary !== lastStatusLogMessage) {
     logStatusInfo(summary);
     lastStatusLogMessage = summary;
-    lastOwnershipState = info.state;
-    lastOwnerWorkspacePath = ownerWorkspacePath;
   }
-  const tooltip = buildStatusTooltip(info.ownerWorkspacePath, config.host, config.port);
+  const tooltip = buildStatusTooltip(info.ownerWorkspacePath, host, port);
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
   if (info.state === 'current-owner') {
     statusBarItem.text = '$(lock) LM Tools Bridge: Current-owner';
     statusBarItem.tooltip = tooltip;
     statusBarItem.color = undefined;
-  } else if (info.state === 'other-owner') {
-    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Other-owner';
-    statusBarItem.tooltip = `${tooltip}\nClick to take over.`;
-    statusBarItem.color = undefined;
   } else {
     statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
-    statusBarItem.tooltip = `LM Tools Bridge server is not running (${config.host}:${config.port}). Click to take over.`;
+    statusBarItem.tooltip = `LM Tools Bridge server is not running (${host}:${port}).`;
     statusBarItem.color = undefined;
   }
   statusBarItem.show();
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const ownership = await getOwnershipState();
-  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
-    {
-      label: '$(debug-disconnect) Take Over MCP',
-      description: ownership.state === 'current-owner' ? 'Already the current-owner of the MCP server' : 'Acquire current-owner control of the MCP port',
-      action: 'takeOver',
-    },
+  const items: Array<vscode.QuickPickItem & { action?: 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
     {
       label: '$(settings-gear) Configure Exposed Tools',
       description: 'Enable/disable tools exposed via MCP',
@@ -2002,11 +2079,6 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
     placeHolder: 'Select an action',
   });
   if (!selection || !selection.action) {
-    return;
-  }
-
-  if (selection.action === 'takeOver') {
-    await handleTakeOverCommand(channel);
     return;
   }
 
@@ -2081,24 +2153,6 @@ function logDebugDetail(message: string): void {
 async function refreshStatusBar(): Promise<void> {
   const info = await getOwnershipState();
   updateStatusBar(info);
-}
-
-function isPortAvailable(host: string, port: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const tester = http.createServer();
-    tester.once('error', (error) => {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'EADDRINUSE') {
-        resolve(false);
-      } else {
-        resolve(true);
-      }
-    });
-    tester.once('listening', () => {
-      tester.close(() => resolve(true));
-    });
-    tester.listen(port, host);
-  });
 }
 
 function getOwnerWorkspacePath(): string {

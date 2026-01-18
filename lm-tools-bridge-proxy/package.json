@@ -1,0 +1,26 @@
+{
+  "name": "@jiangxiaoxu/lm-tools-bridge-proxy",
+  "version": "0.1.2",
+  "description": "Stdio MCP proxy for LM Tools Bridge (Windows Named Pipe resolve).",
+  "license": "MIT",
+  "bin": {
+    "lm-tools-bridge-proxy": "dist/index.js"
+  },
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "esbuild": "^0.27.2",
+    "typescript": "^5.4.5"
+  }
+}

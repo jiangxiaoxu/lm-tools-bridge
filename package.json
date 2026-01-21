@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -64,6 +64,11 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Port for the MCP server."
+        },
+        "lmToolsBridge.useWorkspaceSettings": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled in workspace settings, this extension reads/writes all lmToolsBridge settings at the workspace scope and overrides user settings."
         },
         "lmToolsBridge.tools.enabled": {
           "type": "array",

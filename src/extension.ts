@@ -14,6 +14,7 @@ const CONFIGURE_BLACKLIST_COMMAND_ID = 'lm-tools-bridge.configureBlacklist';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
 const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
 const CONFIG_SECTION = 'lmToolsBridge';
+const CONFIG_USE_WORKSPACE_SETTINGS = 'useWorkspaceSettings';
 const CONFIG_ENABLED_TOOLS = 'tools.enabled';
 const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
@@ -115,6 +116,7 @@ let lastOwnershipState: OwnershipState | undefined;
 let lastOwnerWorkspacePath: string | undefined;
 let lastRemoteStatusResult: 'success' | 'failure' | undefined;
 let lastStatusLogMessage: string | undefined;
+let workspaceSettingWarningEmitted = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
@@ -234,11 +236,10 @@ function showEnabledToolsDump(channel: vscode.OutputChannel): void {
 }
 
 function getServerConfig(): ServerConfig {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   return {
-    autoStart: config.get<boolean>('server.autoStart', true),
+    autoStart: getConfigValue<boolean>('server.autoStart', true),
     host: DEFAULT_HOST,
-    port: config.get<number>('server.port', DEFAULT_PORT),
+    port: getConfigValue<number>('server.port', DEFAULT_PORT),
   };
 }
 
@@ -246,37 +247,22 @@ function getConfigurationResource(): vscode.Uri | undefined {
   return vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
 }
 
-function getToolsConfiguration(): vscode.WorkspaceConfiguration {
-  return vscode.workspace.getConfiguration(CONFIG_SECTION, getConfigurationResource());
-}
-
-function getWorkspaceFolderForResource(resource?: vscode.Uri): vscode.WorkspaceFolder | undefined {
-  if (resource) {
-    const folder = vscode.workspace.getWorkspaceFolder(resource);
-    if (folder) {
-      return folder;
-    }
-  }
-  return vscode.workspace.workspaceFolders?.[0];
-}
-
-async function hasWorkspaceSettingsFile(resource?: vscode.Uri): Promise<boolean> {
-  const folder = getWorkspaceFolderForResource(resource);
-  if (!folder) {
-    return false;
-  }
-  const settingsUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'settings.json');
-  try {
-    await vscode.workspace.fs.stat(settingsUri);
+function isWorkspaceSettingsEnabled(resource?: vscode.Uri): boolean {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const inspection = config.inspect<boolean>(CONFIG_USE_WORKSPACE_SETTINGS);
+  const workspaceValue = inspection?.workspaceFolderValue ?? inspection?.workspaceValue;
+  if (workspaceValue === true) {
     return true;
-  } catch {
-    return false;
   }
+  if (!workspaceSettingWarningEmitted && inspection?.globalValue === true) {
+    workspaceSettingWarningEmitted = true;
+    logWarn('lmToolsBridge.useWorkspaceSettings is set in User settings but is only honored in Workspace settings.');
+  }
+  return false;
 }
 
 async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.ConfigurationTarget> {
-  const hasWorkspaceSettings = await hasWorkspaceSettingsFile(resource);
-  if (!hasWorkspaceSettings) {
+  if (!isWorkspaceSettingsEnabled(resource)) {
     return vscode.ConfigurationTarget.Global;
   }
   if (vscode.workspace.workspaceFile) {
@@ -285,15 +271,32 @@ async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.C
   return vscode.ConfigurationTarget.Workspace;
 }
 
+function getConfigValue<T>(key: string, fallback: T): T {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  if (isWorkspaceSettingsEnabled(resource)) {
+    return config.get<T>(key, fallback);
+  }
+  const inspection = config.inspect<T>(key);
+  if (!inspection) {
+    return fallback;
+  }
+  if (inspection.globalValue !== undefined) {
+    return inspection.globalValue as T;
+  }
+  if (inspection.defaultValue !== undefined) {
+    return inspection.defaultValue as T;
+  }
+  return fallback;
+}
+
 function getEnabledToolsSetting(): string[] {
-  const config = getToolsConfiguration();
-  const enabled = config.get<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
+  const enabled = getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
   return Array.isArray(enabled) ? enabled.filter((name) => typeof name === 'string') : [];
 }
 
 function getBlacklistedToolsSetting(): string[] {
-  const config = getToolsConfiguration();
-  const blacklisted = config.get<string[]>(CONFIG_BLACKLIST, DEFAULT_BLACKLISTED_TOOL_NAMES);
+  const blacklisted = getConfigValue<string[]>(CONFIG_BLACKLIST, DEFAULT_BLACKLISTED_TOOL_NAMES);
   return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
 }
 
@@ -2300,8 +2303,7 @@ function extractRequired(schemaRecord: Record<string, unknown>): Set<string> | u
 }
 
 function getSchemaDefaultOverrides(): Record<string, unknown> {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const fromConfig = config.get<unknown>('tools.schemaDefaults', {});
+  const fromConfig = getConfigValue<unknown>('tools.schemaDefaults', {});
   if (!fromConfig || typeof fromConfig !== 'object' || Array.isArray(fromConfig)) {
     return { ...BUILTIN_SCHEMA_DEFAULTS };
   }
@@ -2309,8 +2311,7 @@ function getSchemaDefaultOverrides(): Record<string, unknown> {
 }
 
 function getResponseFormat(): ResponseFormat {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const rawValue = normalizeConfigString(config.get<string>(CONFIG_RESPONSE_FORMAT));
+  const rawValue = normalizeConfigString(getConfigValue<string>(CONFIG_RESPONSE_FORMAT, 'text'));
   const value = rawValue ? rawValue.toLowerCase() : '';
   if (value === 'structured' || value === 'both') {
     return value;
@@ -2319,8 +2320,7 @@ function getResponseFormat(): ResponseFormat {
 }
 
 function getDebugLevel(): DebugLevel {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const rawValue = normalizeConfigString(config.get<string>(CONFIG_DEBUG));
+  const rawValue = normalizeConfigString(getConfigValue<string>(CONFIG_DEBUG, 'off'));
   const value = rawValue ? rawValue.toLowerCase() : '';
   if (value === 'detail' || value === 'simple') {
     return value;

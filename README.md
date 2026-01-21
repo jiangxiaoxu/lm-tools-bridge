@@ -140,8 +140,9 @@ Following these steps prevents validation errors such as missing `action` or sch
 
 - `lmToolsBridge.server.autoStart` (default: true)
 - `lmToolsBridge.server.port` (default: 48123)
+- `lmToolsBridge.useWorkspaceSettings` (default: false; must be set in workspace settings to enable workspace-scoped configuration and overrides)
 - `lmToolsBridge.tools.enabled` (default: the list above)
-- `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
+- `lmToolsBridge.tools.blacklist` (default: the list above)
 - `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
 - `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
 - `lmToolsBridge.debug` (default: `off`; enum: `off` | `simple` | `detail`; controls log verbosity for tool calls)

@@ -54,7 +54,7 @@ Terminal output read-only:
 
 ### Internal blacklist (always disabled)
 
-These tools are always hidden and cannot be enabled via settings:
+These tools are always hidden and cannot be configured or enabled via settings:
 
 - `copilot_applyPatch`
 - `copilot_insertEdit`
@@ -81,8 +81,17 @@ These tools are always hidden and cannot be enabled via settings:
 - `copilot_listDirectory`
 - `runSubagent`
 - `vscode_get_confirmation`
+- `vscode_get_terminal_confirmation`
 - `inline_chat_exit`
 - `copilot_getVSCodeAPI`
+- `get_terminal_output`
+- `terminal_selection`
+- `terminal_last_command`
+- `copilot_findTestFiles`
+- `copilot_getSearchResults`
+- `copilot_githubRepo`
+- `copilot_testFailure`
+- `copilot_getChangedFiles`
 
 ### Tool input (vscodeLmToolkit)
 
@@ -140,9 +149,10 @@ Following these steps prevents validation errors such as missing `action` or sch
 
 - `lmToolsBridge.server.autoStart` (default: true)
 - `lmToolsBridge.server.port` (default: 48123)
-- `lmToolsBridge.useWorkspaceSettings` (default: false; must be set in workspace settings to enable workspace-scoped configuration and overrides)
+- `lmToolsBridge.useWorkspaceSettings` (default: false; only honored in workspace settings; user/global settings are ignored; when enabled, workspace settings override user settings)
 - `lmToolsBridge.tools.enabled` (default: the list above)
-- `lmToolsBridge.tools.blacklist` (default: the list above)
+- `lmToolsBridge.tools.blacklist` (default: empty array; user-configurable blacklist, combined with internal blacklist)
+- `lmToolsBridge.tools.blacklistPatterns` (default: empty string; pipe-delimited wildcard patterns like `*gitk|mcp_*|*a*`; uses `*`, is case-insensitive, and is combined with `tools.blacklist` and the internal blacklist; matches are enforced and do not appear in the blacklist picker)
 - `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
 - `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
 - `lmToolsBridge.debug` (default: `off`; enum: `off` | `simple` | `detail`; controls log verbosity for tool calls)

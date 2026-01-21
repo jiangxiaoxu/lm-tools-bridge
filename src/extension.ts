@@ -17,6 +17,7 @@ const CONFIG_SECTION = 'lmToolsBridge';
 const CONFIG_USE_WORKSPACE_SETTINGS = 'useWorkspaceSettings';
 const CONFIG_ENABLED_TOOLS = 'tools.enabled';
 const CONFIG_BLACKLIST = 'tools.blacklist';
+const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
 const DEFAULT_HOST = '127.0.0.1';
@@ -42,7 +43,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'terminal_selection',
   'terminal_last_command',
 ];
-const DEFAULT_BLACKLISTED_TOOL_NAMES = [
+const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'copilot_applyPatch',
   'copilot_insertEdit',
   'copilot_replaceString',
@@ -69,7 +70,16 @@ const DEFAULT_BLACKLISTED_TOOL_NAMES = [
   'copilot_listDirectory',
   'runSubagent',
   'vscode_get_confirmation',
+  'vscode_get_terminal_confirmation',
   'inline_chat_exit',
+  'get_terminal_output',
+  'terminal_selection',
+  'terminal_last_command',
+  'copilot_findTestFiles',
+  'copilot_getSearchResults',
+  'copilot_githubRepo',
+  'copilot_testFailure',
+  'copilot_getChangedFiles',
 ];
 
 const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
@@ -296,12 +306,55 @@ function getEnabledToolsSetting(): string[] {
 }
 
 function getBlacklistedToolsSetting(): string[] {
-  const blacklisted = getConfigValue<string[]>(CONFIG_BLACKLIST, DEFAULT_BLACKLISTED_TOOL_NAMES);
+  const blacklisted = getConfigValue<string[]>(CONFIG_BLACKLIST, []);
   return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
 }
 
-function isToolBlacklisted(name: string, blacklistedSet: ReadonlySet<string>): boolean {
-  return blacklistedSet.has(name);
+function getBlacklistedToolPatterns(): string[] {
+  const rawPatterns = getConfigValue<string>(CONFIG_BLACKLIST_PATTERNS, '');
+  if (!rawPatterns) {
+    return [];
+  }
+  return rawPatterns
+    .split('|')
+    .map((pattern) => pattern.trim())
+    .filter((pattern) => pattern.length > 0);
+}
+
+function compileBlacklistPatterns(patterns: readonly string[]): RegExp[] {
+  const compiled: RegExp[] = [];
+  for (const pattern of patterns) {
+    const escaped = escapeRegExp(pattern).replace(/\\\*/g, '.*');
+    try {
+      compiled.push(new RegExp(`^${escaped}$`, 'i'));
+    } catch {
+      // Ignore invalid patterns.
+    }
+  }
+  return compiled;
+}
+
+function matchesBlacklistPattern(name: string, patterns: readonly RegExp[]): boolean {
+  for (const pattern of patterns) {
+    if (pattern.test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isToolBlacklisted(
+  name: string,
+  blacklistedSet: ReadonlySet<string>,
+  blacklistPatterns: readonly RegExp[],
+): boolean {
+  return BUILTIN_BLACKLISTED_TOOL_NAMES.includes(name)
+    || blacklistedSet.has(name)
+    || matchesBlacklistPattern(name, blacklistPatterns);
 }
 
 async function setEnabledTools(enabled: string[]): Promise<void> {
@@ -331,7 +384,7 @@ async function resetEnabledTools(): Promise<void> {
 }
 
 async function resetBlacklistedTools(): Promise<boolean> {
-  return setBlacklistedTools([...DEFAULT_BLACKLISTED_TOOL_NAMES]);
+  return setBlacklistedTools([]);
 }
 
 async function configureExposedTools(): Promise<void> {
@@ -416,17 +469,24 @@ async function configureBlacklistedTools(): Promise<void> {
   }
 
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
+  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
   const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
 
   items.push({
     label: '$(refresh) Reset (default blacklist)',
-    description: 'Restore the default blacklist',
+    description: 'Clear the configured blacklist',
     alwaysShow: true,
     isReset: true,
   });
   items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
 
   for (const tool of tools) {
+    if (BUILTIN_BLACKLISTED_TOOL_NAMES.includes(tool.name)) {
+      continue;
+    }
+    if (matchesBlacklistPattern(tool.name, blacklistPatterns)) {
+      continue;
+    }
     items.push({
       label: tool.name,
       description: tool.description,
@@ -452,8 +512,8 @@ async function configureBlacklistedTools(): Promise<void> {
   if (shouldReset) {
     const removed = await resetBlacklistedTools();
     const message = removed
-      ? 'Blacklisted tools reset to defaults and removed from enabled list.'
-      : 'Blacklisted tools reset to defaults.';
+      ? 'Blacklisted tools cleared and removed from enabled list.'
+      : 'Blacklisted tools cleared.';
     void vscode.window.showInformationMessage(message);
     return;
   }
@@ -1887,16 +1947,18 @@ function getAllLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[]
 
 function getVisibleToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
+  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
   return getAllLmToolsSnapshot().filter((tool) => {
-    return !isToolBlacklisted(tool.name, blacklistedSet);
+    return !isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns);
   });
 }
 
 function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
   const enabledSet = new Set(getEnabledToolsSetting());
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
+  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
   return getAllLmToolsSnapshot().filter((tool) => {
-    if (isToolBlacklisted(tool.name, blacklistedSet)) {
+    if (isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns)) {
       return false;
     }
     return enabledSet.has(tool.name);

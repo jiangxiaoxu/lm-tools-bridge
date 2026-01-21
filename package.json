@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -68,7 +68,7 @@
         "lmToolsBridge.useWorkspaceSettings": {
           "type": "boolean",
           "default": false,
-          "description": "When enabled in workspace settings, this extension reads/writes all lmToolsBridge settings at the workspace scope and overrides user settings."
+          "description": "Only honored when set in workspace settings. User/global settings are ignored. When enabled, lmToolsBridge settings are read/written at the workspace scope and override user settings."
         },
         "lmToolsBridge.tools.enabled": {
           "type": "array",
@@ -96,39 +96,16 @@
         },
         "lmToolsBridge.tools.blacklist": {
           "type": "array",
-          "default": [
-            "copilot_applyPatch",
-            "copilot_insertEdit",
-            "copilot_replaceString",
-            "copilot_multiReplaceString",
-            "copilot_createFile",
-            "copilot_createDirectory",
-            "copilot_createNewJupyterNotebook",
-            "copilot_editNotebook",
-            "copilot_runNotebookCell",
-            "copilot_createNewWorkspace",
-            "copilot_getVSCodeAPI",
-            "copilot_installExtension",
-            "copilot_runVscodeCommand",
-            "create_and_run_task",
-            "run_in_terminal",
-            "manage_todo_list",
-            "copilot_memory",
-            "copilot_getNotebookSummary",
-            "copilot_fetchWebPage",
-            "copilot_openSimpleBrowser",
-            "copilot_editFiles",
-            "copilot_getProjectSetupInfo",
-            "copilot_getDocInfo",
-            "copilot_listDirectory",
-            "runSubagent",
-            "vscode_get_confirmation",
-            "inline_chat_exit"
-          ],
+          "default": [],
           "items": {
             "type": "string"
           },
-          "description": "List of LM tool names to hide/disable. Blacklist takes precedence over enabled list."
+          "description": "List of LM tool names to hide/disable. Blacklist takes precedence over enabled list and is combined with the built-in blacklist."
+        },
+        "lmToolsBridge.tools.blacklistPatterns": {
+          "type": "string",
+          "default": "",
+          "description": "Pipe-delimited wildcard patterns to hide/disable tools (e.g. \"*gitk|mcp_*|*a*\"). Uses \"*\" as a wildcard and is combined with tools.blacklist."
         },
         "lmToolsBridge.tools.schemaDefaults": {
           "type": "object",

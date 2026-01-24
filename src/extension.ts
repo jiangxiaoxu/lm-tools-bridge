@@ -82,9 +82,13 @@ const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'copilot_getChangedFiles',
 ];
 
-const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
-  maxResults: 1000,
-};
+type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;
+
+const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
+  'copilot_findTextInFiles.maxResults=500',
+];
+
+const schemaDefaultOverrideWarnings = new Set<string>();
 
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
@@ -978,7 +982,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
             inputSchema: tool.inputSchema ?? null,
           });
         }
-        const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema);
+        const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema, tool.name);
         debugInvokeInput = normalizedInput;
         let outputText: string | undefined;
         let structuredOutput: { blocks: unknown[] } | undefined;
@@ -1190,7 +1194,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!tool) {
         return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
       }
-      return resourceJson(uri.toString(), { name: tool.name, inputSchema: applySchemaDefaults(tool.inputSchema ?? null) });
+      return resourceJson(uri.toString(), { name: tool.name, inputSchema: applySchemaDefaults(tool.inputSchema ?? null, tool.name) });
     },
   );
 
@@ -1496,7 +1500,7 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
       name: tool.name,
     };
   }
-  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null);
+  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
 
   return {
     name: tool.name,
@@ -2274,16 +2278,17 @@ function resolveHelpUrl(context: vscode.ExtensionContext): string | undefined {
   return homepage && homepage.length > 0 ? homepage : undefined;
 }
 
-function applySchemaDefaults(schema: unknown): unknown {
-  const overrides = getSchemaDefaultOverrides();
+function applySchemaDefaults(schema: unknown, toolName: string): unknown {
+  const overrides = getSchemaDefaultOverridesForTool(toolName, schema);
   return applySchemaDefaultsInternal(schema, overrides, undefined);
 }
 
 function applyInputDefaultsToToolInput(
   input: Record<string, unknown>,
   schema: unknown,
+  toolName: string,
 ): Record<string, unknown> {
-  const overrides = getSchemaDefaultOverrides();
+  const overrides = getSchemaDefaultOverridesForTool(toolName, schema);
   const allowed = extractSchemaPropertyNames(schema);
   const required = extractSchemaRequiredNames(schema);
   const result: Record<string, unknown> = { ...input };
@@ -2364,12 +2369,333 @@ function extractRequired(schemaRecord: Record<string, unknown>): Set<string> | u
   return undefined;
 }
 
-function getSchemaDefaultOverrides(): Record<string, unknown> {
-  const fromConfig = getConfigValue<unknown>('tools.schemaDefaults', {});
-  if (!fromConfig || typeof fromConfig !== 'object' || Array.isArray(fromConfig)) {
-    return { ...BUILTIN_SCHEMA_DEFAULTS };
+function getSchemaDefaultOverrides(): SchemaDefaultOverrides {
+  const fromConfig = getConfigValue<unknown>('tools.schemaDefaults', []);
+  const overrides = parseSchemaDefaultOverrides(fromConfig);
+  const merged: SchemaDefaultOverrides = {};
+  const builtinOverrides = parseSchemaDefaultOverrides(BUILTIN_SCHEMA_DEFAULT_OVERRIDES);
+  for (const [toolName, toolDefaults] of Object.entries(builtinOverrides)) {
+    merged[toolName] = { ...toolDefaults };
   }
-  return { ...BUILTIN_SCHEMA_DEFAULTS, ...(fromConfig as Record<string, unknown>) };
+  for (const [toolName, toolDefaults] of Object.entries(overrides)) {
+    merged[toolName] = { ...(merged[toolName] ?? {}), ...toolDefaults };
+  }
+  return merged;
+}
+
+function getSchemaDefaultOverridesForTool(toolName: string, schema: unknown): Record<string, unknown> {
+  if (!toolName) {
+    return {};
+  }
+  const overrides = getSchemaDefaultOverrides();
+  const toolOverrides = overrides[toolName];
+  if (!toolOverrides) {
+    return {};
+  }
+  const allowedNames = extractSchemaPropertyNames(schema);
+  if (!allowedNames || allowedNames.size === 0) {
+    return { ...toolOverrides };
+  }
+  const filtered: Record<string, unknown> = {};
+  for (const [paramName, paramValue] of Object.entries(toolOverrides)) {
+    if (!allowedNames.has(paramName)) {
+      warnSchemaDefaultOverride(toolName, paramName, 'parameter is not defined in the tool schema', paramValue);
+      continue;
+    }
+    const propertySchema = findSchemaPropertySchema(schema, paramName);
+    const validation = propertySchema ? schemaAllowsValue(propertySchema, paramValue) : undefined;
+    if (validation === false) {
+      warnSchemaDefaultOverride(toolName, paramName, 'parameter value type does not match the tool schema', paramValue, propertySchema);
+      continue;
+    }
+    filtered[paramName] = paramValue;
+  }
+  return filtered;
+}
+
+function parseSchemaDefaultOverrides(value: unknown): SchemaDefaultOverrides {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) {
+      warnSchemaDefaultOverrideEntry(String(value), 'expected an array of strings');
+    }
+    return {};
+  }
+  const result: SchemaDefaultOverrides = {};
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      warnSchemaDefaultOverrideEntry(String(entry), 'entry is not a string');
+      continue;
+    }
+    const parsed = parseSchemaDefaultOverrideEntry(entry);
+    if (!parsed) {
+      continue;
+    }
+    const toolDefaults = result[parsed.toolName] ?? {};
+    toolDefaults[parsed.paramName] = parsed.paramValue;
+    result[parsed.toolName] = toolDefaults;
+  }
+  return result;
+}
+
+function parseSchemaDefaultOverrideEntry(
+  entry: string,
+): { toolName: string; paramName: string; paramValue: unknown } | undefined {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    warnSchemaDefaultOverrideEntry(entry, 'entry is empty');
+    return undefined;
+  }
+  const equalsIndex = trimmed.indexOf('=');
+  if (equalsIndex <= 0 || equalsIndex === trimmed.length - 1) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const key = trimmed.slice(0, equalsIndex).trim();
+  const rawValue = trimmed.slice(equalsIndex + 1).trim();
+  if (!key || rawValue.length === 0) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const parts = key.split('.');
+  if (parts.length !== 2) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const toolName = parts[0]?.trim();
+  const paramName = parts[1]?.trim();
+  if (!toolName || !paramName) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const parsedValue = parseSchemaDefaultOverrideValue(rawValue);
+  if (parsedValue === undefined) {
+    warnSchemaDefaultOverrideEntry(entry, 'value must be a quoted string, number, boolean, or array');
+    return undefined;
+  }
+  return { toolName, paramName, paramValue: parsedValue };
+}
+
+function parseSchemaDefaultOverrideValue(rawValue: string): unknown | undefined {
+  if (rawValue.startsWith('{')) {
+    if (!rawValue.endsWith('}')) {
+      return undefined;
+    }
+    return parseSchemaDefaultOverrideArray(rawValue.slice(1, -1));
+  }
+  if (rawValue.startsWith('[')) {
+    return undefined;
+  }
+  return parseSchemaDefaultOverrideScalar(rawValue);
+}
+
+function parseSchemaDefaultOverrideArray(rawValue: string): unknown[] | undefined {
+  if (rawValue.length === 0) {
+    return [];
+  }
+  const entries = rawValue.split(',');
+  const result: unknown[] = [];
+  for (const entry of entries) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) {
+      result.push('');
+      continue;
+    }
+    const parsed = parseSchemaDefaultOverrideArrayItem(trimmed);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    result.push(parsed);
+  }
+  return result;
+}
+
+function parseSchemaDefaultOverrideArrayItem(rawValue: string): unknown | undefined {
+  if (rawValue.startsWith('"') || rawValue.endsWith('"')) {
+    if (!(rawValue.startsWith('"') && rawValue.endsWith('"'))) {
+      return undefined;
+    }
+    return rawValue.slice(1, -1);
+  }
+  return parseSchemaDefaultOverrideScalar(rawValue);
+}
+
+function parseSchemaDefaultOverrideScalar(rawValue: string): unknown | undefined {
+  const normalized = rawValue.toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+  const numberValue = parseSchemaDefaultOverrideNumber(rawValue);
+  if (numberValue !== undefined) {
+    return numberValue;
+  }
+  if (rawValue.startsWith('"') || rawValue.endsWith('"')) {
+    if (!(rawValue.startsWith('"') && rawValue.endsWith('"'))) {
+      return undefined;
+    }
+    return rawValue.slice(1, -1);
+  }
+  return undefined;
+}
+
+function parseSchemaDefaultOverrideNumber(rawValue: string): number | undefined {
+  if (!/^-?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/u.test(rawValue)) {
+    return undefined;
+  }
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function warnSchemaDefaultOverride(
+  toolName: string,
+  paramName: string,
+  reason: string,
+  value: unknown,
+  propertySchema?: Record<string, unknown>,
+): void {
+  const key = `${toolName}.${paramName}:${reason}`;
+  if (schemaDefaultOverrideWarnings.has(key)) {
+    return;
+  }
+  schemaDefaultOverrideWarnings.add(key);
+  const valueText = formatSchemaDefaultValue(value);
+  const expectedText = propertySchema ? describeSchemaPropertyExpected(propertySchema) : undefined;
+  const details = expectedText ? `; expected ${expectedText}` : '';
+  logWarn(`lmToolsBridge.tools.schemaDefaults ignored: ${toolName}.${paramName}=${valueText} (${reason}${details}).`);
+}
+
+function warnSchemaDefaultOverrideEntry(entry: string, reason: string): void {
+  const key = `entry:${entry}:${reason}`;
+  if (schemaDefaultOverrideWarnings.has(key)) {
+    return;
+  }
+  schemaDefaultOverrideWarnings.add(key);
+  logWarn(`lmToolsBridge.tools.schemaDefaults ignored: "${entry}" (${reason}).`);
+}
+
+function formatSchemaDefaultValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return `"${value}"`;
+  }
+  const serialized = JSON.stringify(value);
+  return serialized ?? String(value);
+}
+
+function describeSchemaPropertyExpected(schema: Record<string, unknown>): string | undefined {
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  if (enumValues && enumValues.length > 0) {
+    return `enum ${JSON.stringify(enumValues)}`;
+  }
+  const typeValue = schema.type;
+  if (typeof typeValue === 'string') {
+    return typeValue;
+  }
+  if (Array.isArray(typeValue)) {
+    return typeValue.filter((entry) => typeof entry === 'string').join('|') || undefined;
+  }
+  return undefined;
+}
+
+function findSchemaPropertySchema(schema: unknown, name: string): Record<string, unknown> | undefined {
+  if (!schema || typeof schema !== 'object') {
+    return undefined;
+  }
+  if (Array.isArray(schema)) {
+    for (const entry of schema) {
+      const found = findSchemaPropertySchema(entry, name);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  const record = schema as Record<string, unknown>;
+  const props = record.properties;
+  if (props && typeof props === 'object' && !Array.isArray(props)) {
+    const propRecord = props as Record<string, unknown>;
+    const propSchema = propRecord[name];
+    if (propSchema && typeof propSchema === 'object' && !Array.isArray(propSchema)) {
+      return propSchema as Record<string, unknown>;
+    }
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const found = findSchemaPropertySchema(entry, name);
+        if (found) {
+          return found;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function schemaAllowsValue(schema: Record<string, unknown>, value: unknown): boolean | undefined {
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  if (enumValues) {
+    return enumValues.some((entry) => enumValueMatches(entry, value));
+  }
+  const typeValue = schema.type;
+  const types = Array.isArray(typeValue)
+    ? typeValue.filter((entry) => typeof entry === 'string')
+    : typeof typeValue === 'string'
+      ? [typeValue]
+      : [];
+  if (types.length === 0) {
+    return undefined;
+  }
+  return types.some((entry) => schemaAllowsValueForType(entry, schema, value));
+}
+
+function enumValueMatches(expected: unknown, actual: unknown): boolean {
+  if (Array.isArray(expected) && Array.isArray(actual)) {
+    if (expected.length !== actual.length) {
+      return false;
+    }
+    for (let index = 0; index < expected.length; index += 1) {
+      if (!Object.is(expected[index], actual[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return Object.is(expected, actual);
+}
+
+function schemaAllowsValueForType(typeValue: string, schema: Record<string, unknown>, value: unknown): boolean {
+  switch (typeValue) {
+    case 'string':
+      return typeof value === 'string';
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value);
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value);
+    case 'array':
+      return schemaAllowsArrayValue(schema, value);
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    case 'null':
+      return value === null;
+    default:
+      return true;
+  }
+}
+
+function schemaAllowsArrayValue(schema: Record<string, unknown>, value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const items = schema.items;
+  if (!items || typeof items !== 'object' || Array.isArray(items)) {
+    return true;
+  }
+  return value.every((entry) => schemaAllowsValue(items as Record<string, unknown>, entry) !== false);
 }
 
 function getResponseFormat(): ResponseFormat {

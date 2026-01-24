@@ -153,7 +153,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 - `lmToolsBridge.tools.enabled` (default: the list above)
 - `lmToolsBridge.tools.blacklist` (default: empty array; user-configurable blacklist, combined with internal blacklist)
 - `lmToolsBridge.tools.blacklistPatterns` (default: empty string; pipe-delimited wildcard patterns like `*gitk|mcp_*|*a*`; uses `*`, is case-insensitive, and is combined with `tools.blacklist` and the internal blacklist; matches are enforced and do not appear in the blacklist picker)
-- `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
+- `lmToolsBridge.tools.schemaDefaults` (default: `[ "copilot_findTextInFiles.maxResults=500" ]`; list of `toolName.paramName=value` entries injected into schemas and tool invocations when the caller omits them; entries not in this format are ignored; values accept quoted strings (`"OK"`), `true`/`false`, numbers, or arrays written as `{a,b,c}` where each element is a quoted string, number, or boolean (whitespace allowed, empty elements allowed); unquoted strings are rejected; JSON is not accepted; example: `[ tool.param=1, tool.param="MyStr", tool.param=true, tool.param={6,4} ]`)
 - `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
 - `lmToolsBridge.debug` (default: `off`; enum: `off` | `simple` | `detail`; controls log verbosity for tool calls)
 

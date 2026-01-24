@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.28",
+  "version": "1.0.29",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -108,11 +108,14 @@
           "description": "Pipe-delimited wildcard patterns to hide/disable tools (e.g. \"*gitk|mcp_*|*a*\"). Uses \"*\" as a wildcard and is combined with tools.blacklist."
         },
         "lmToolsBridge.tools.schemaDefaults": {
-          "type": "object",
-          "default": {
-            "maxResults": 1000
+          "type": "array",
+          "default": [
+            "copilot_findTextInFiles.maxResults=500"
+          ],
+          "items": {
+            "type": "string"
           },
-          "description": "Map of input property names to default values. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Example: { \"maxResults\": 1000 }."
+          "description": "List of input defaults in the \"toolName.paramName=value\" format. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Entries not in the \"toolName.paramName=value\" format are ignored. Values accept quoted strings (double quotes), true/false, numbers, or arrays written as \"{a,b,c}\" where each element is a quoted string, number, or boolean (whitespace allowed, empty elements allowed). Unquoted strings are rejected. JSON is not accepted. Example: [ tool.param=1, tool.param=\"MyStr\", tool.param=true, tool.param={6,4} ]."
         },
         "lmToolsBridge.tools.responseFormat": {
           "type": "string",

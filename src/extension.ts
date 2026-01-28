@@ -1194,7 +1194,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!tool) {
         return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
       }
-      return resourceJson(uri.toString(), { name: tool.name, inputSchema: applySchemaDefaults(tool.inputSchema ?? null, tool.name) });
+      return resourceJson(uri.toString(), { name: tool.name, inputSchema: buildToolInputSchema(tool) });
     },
   );
 
@@ -1500,17 +1500,25 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
       name: tool.name,
     };
   }
-  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
+  const inputSchema = buildToolInputSchema(tool);
 
   return {
     name: tool.name,
     description: tool.description,
     tags: tool.tags,
-    inputSchema: tool.name === 'copilot_findTextInFiles' ? patchFindTextInFilesSchema(inputSchema) : inputSchema,
+    inputSchema,
     toolUri: getToolUri(tool.name),
     schemaUri: getSchemaUri(tool.name),
     usageHint: getToolUsageHint(tool),
   };
+}
+
+function buildToolInputSchema(tool: vscode.LanguageModelToolInformation): unknown {
+  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
+  if (tool.name === 'copilot_findTextInFiles') {
+    return patchFindTextInFilesSchema(inputSchema);
+  }
+  return inputSchema;
 }
 
 function serializeToolResult(result: vscode.LanguageModelToolResult): Array<Record<string, unknown>> {

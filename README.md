@@ -159,6 +159,9 @@ Following these steps prevents validation errors such as missing `action` or sch
 - `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
 - `lmToolsBridge.debug` (default: `off`; enum: `off` | `simple` | `detail`; controls log verbosity for tool calls)
 
+`lm_findTextInFiles` extra params:
+- `caseSensitive` (boolean): enable case-sensitive matching; when false, smart-case is used by default (including regex); regex inline flags can override this setting.
+
 ### Configure exposed tools
 
 - Right-click the status bar item and select `LM Tools Bridge: Configure Tools`.

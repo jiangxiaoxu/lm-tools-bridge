@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import { TextDecoder } from 'node:util';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { rgPath } from '@vscode/ripgrep';
 import * as z from 'zod';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
@@ -125,6 +127,7 @@ const COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION = [
   'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
+  'When caseSensitive is false, smart-case is used by default (including regex searches). Set caseSensitive to true to force case-sensitive matching.',
   'Use this tool when you want to see an overview of a particular file, instead of using read_file many times to look for code within a file.',
 ].join('\n');
 
@@ -133,7 +136,11 @@ const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'The pattern to search for in files in the workspace. Use regex with alternation (e.g., \'word1|word2|word3\') or character classes to find multiple potential words in a single search. Be sure to set the isRegexp property properly to declare whether it\'s a regex or plain text pattern. Is case-insensitive. If you need case-sensitive matching, use a regex pattern with an inline case-sensitivity flag.',
+      description: 'The pattern to search for in files in the workspace. Use regex with alternation (e.g., \'word1|word2|word3\') or character classes to find multiple potential words in a single search. Be sure to set the isRegexp property properly to declare whether it\'s a regex or plain text pattern. When caseSensitive is false, smart-case is used by default. If you need case-sensitive matching, set caseSensitive to true or use a regex pattern with an inline case-sensitivity flag.',
+    },
+    caseSensitive: {
+      type: 'boolean',
+      description: 'Whether the search should be case-sensitive. When false, smart-case is used by default (including regex). Regex inline flags can override this setting.',
     },
     isRegexp: {
       type: 'boolean',
@@ -1746,31 +1753,25 @@ function normalizeFindTextInFilesText(text: string): string {
   return [...lines, ...matches.map((item) => item.raw)].join('\n');
 }
 
-type WorkspaceTextSearchQuery = {
-  pattern: string;
-  isRegExp?: boolean;
-  isCaseSensitive?: boolean;
+type RipgrepMatch = {
+  path: string;
+  line: number;
+  preview: string;
 };
 
-type WorkspaceTextSearchOptions = {
-  include?: vscode.GlobPattern;
-  maxResults?: number;
-  useIgnoreFiles?: boolean;
-  useGlobalIgnoreFiles?: boolean;
-};
-
-type WorkspaceTextSearchComplete = {
-  limitHit?: boolean;
+type RipgrepSearchResult = {
+  matches: RipgrepMatch[];
+  totalMatches: number;
+  capped: boolean;
 };
 
 function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
   const inputSchema = COPILOT_FIND_TEXT_IN_FILES_SCHEMA;
   const description = COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION;
-  const tags = ['vscode_codesearch'];
   return {
     name: FIND_TEXT_IN_FILES_TOOL_NAME,
     description,
-    tags,
+    tags: [],
     inputSchema,
     isCustom: true,
     invoke: runFindTextInFilesTool,
@@ -1780,11 +1781,10 @@ function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
 function buildFindFilesToolDefinition(): CustomToolDefinition {
   const inputSchema = COPILOT_FIND_FILES_SCHEMA;
   const description = COPILOT_FIND_FILES_DESCRIPTION;
-  const tags = ['vscode_codesearch'];
   return {
     name: FIND_FILES_TOOL_NAME,
     description,
-    tags,
+    tags: [],
     inputSchema,
     isCustom: true,
     invoke: runFindFilesTool,
@@ -1827,38 +1827,34 @@ async function executeFindTextInFilesSearch(input: Record<string, unknown>): Pro
     throw new Error('query must be a string');
   }
   const isRegexp = input.isRegexp === true;
+  const caseSensitive = input.caseSensitive === true;
   const includeIgnoredFiles = input.includeIgnoredFiles === true;
   const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
     ? input.maxResults
     : undefined;
-  const includePatterns = resolveFindTextInFilesIncludePatterns(input.includePattern);
-  const searchQuery: WorkspaceTextSearchQuery = {
-    pattern: queryValue,
-    isRegExp: isRegexp,
-    isCaseSensitive: false,
-  };
 
-  const combinedMatches: Array<{
-    path: string;
-    line: number;
-    preview: string;
-  }> = [];
+  const combinedMatches: RipgrepMatch[] = [];
   const seen = new Set<string>();
   let totalCount = 0;
-  let limitHit = false;
+  let capped = false;
+  let remaining = maxResults ?? Number.POSITIVE_INFINITY;
 
-  const patternsToSearch = includePatterns.length > 0 ? includePatterns : [undefined];
-  for (const includePattern of patternsToSearch) {
-    const options: WorkspaceTextSearchOptions = {
-      include: includePattern,
-      maxResults,
-      useIgnoreFiles: includeIgnoredFiles ? false : undefined,
-      useGlobalIgnoreFiles: includeIgnoredFiles ? false : undefined,
-    };
-    const { matches, matchCount, limitHit: hit } = await searchFindTextInFilesOnce(searchQuery, options);
-    limitHit = limitHit || hit;
-    totalCount += matchCount;
-    for (const match of matches) {
+  const targets = resolveRipgrepTargets(input.includePattern);
+  for (const target of targets) {
+    if (remaining <= 0) {
+      capped = true;
+      break;
+    }
+    const result = await runRipgrepSearch(target, {
+      query: queryValue,
+      isRegexp,
+      caseSensitive,
+      includeIgnoredFiles,
+      maxResults: maxResults !== undefined ? remaining : undefined,
+    });
+    capped = capped || result.capped;
+    totalCount += result.totalMatches;
+    for (const match of result.matches) {
       const key = `${match.path}:${match.line}:${match.preview}`;
       if (seen.has(key)) {
         continue;
@@ -1866,10 +1862,13 @@ async function executeFindTextInFilesSearch(input: Record<string, unknown>): Pro
       seen.add(key);
       combinedMatches.push(match);
     }
+    if (maxResults !== undefined) {
+      remaining = Math.max(0, maxResults - totalCount);
+    }
   }
 
   return {
-    capped: limitHit,
+    capped,
     uniqueMatches: combinedMatches.length,
     totalMatches: totalCount,
     matches: combinedMatches,
@@ -1903,99 +1902,234 @@ async function executeFindFilesSearch(input: Record<string, unknown>): Promise<R
   };
 }
 
-function formatFindTextInFilesPayloadText(payload: Record<string, unknown>): string {
-  const capped = payload.capped === true;
-  const uniqueMatches = typeof payload.uniqueMatches === 'number' ? payload.uniqueMatches : 0;
-  const totalMatches = typeof payload.totalMatches === 'number' ? payload.totalMatches : 0;
-  const matches = Array.isArray(payload.matches) ? payload.matches : [];
-  const lines: string[] = [];
-  if (capped) {
-    lines.push('Results capped by VS Code search, more results are available.');
-  }
-  lines.push(`Unique matches: ${uniqueMatches}, total matches: ${totalMatches}.`);
-  for (const match of matches) {
-    if (!match || typeof match !== 'object') {
-      continue;
-    }
-    const record = match as { path?: unknown; line?: unknown; preview?: unknown };
-    const pathValue = typeof record.path === 'string' ? record.path : '';
-    const lineValue = typeof record.line === 'number' ? record.line : 0;
-    const previewValue = typeof record.preview === 'string' ? record.preview : '';
-    lines.push(`<match path="${pathValue}" line="${lineValue}">${previewValue}</match>`);
-  }
-  return lines.join('\n');
+function formatSearchMatchPath(uri: vscode.Uri): string {
+  return uri.fsPath;
 }
 
-async function searchFindTextInFilesOnce(
-  query: WorkspaceTextSearchQuery,
-  options: WorkspaceTextSearchOptions,
-): Promise<{
-  matches: Array<{ path: string; line: number; preview: string }>;
-  matchCount: number;
-  limitHit: boolean;
-}> {
-  const matches: Array<{ path: string; line: number; preview: string }> = [];
-  let matchCount = 0;
-  const workspaceSearch = vscode.workspace as typeof vscode.workspace & {
-    findTextInFiles?: (
-      query: WorkspaceTextSearchQuery,
-      options: WorkspaceTextSearchOptions,
-      callback: (result: unknown) => void,
-      token?: vscode.CancellationToken,
-    ) => Thenable<WorkspaceTextSearchComplete>;
-  };
-  if (!workspaceSearch.findTextInFiles) {
-    throw new Error('workspace.findTextInFiles is not available in this VS Code version.');
+function resolveRipgrepTargets(
+  includePattern: unknown,
+): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) {
+    return [];
   }
-  const complete = await workspaceSearch.findTextInFiles(query, options, (result) => {
-    if (!isTextSearchMatch(result)) {
+  if (typeof includePattern !== 'string') {
+    return folders.map((folder) => ({ folder }));
+  }
+  const trimmed = includePattern.trim();
+  if (!trimmed) {
+    return folders.map((folder) => ({ folder }));
+  }
+  const parsed = parseWorkspacePrefixedIncludePattern(trimmed);
+  if (parsed) {
+    return [{ folder: parsed.workspaceFolder, glob: parsed.pattern }];
+  }
+  return folders.map((folder) => ({ folder, glob: trimmed }));
+}
+
+async function runRipgrepSearch(
+  target: { folder: vscode.WorkspaceFolder; glob?: string },
+  options: {
+    query: string;
+    isRegexp: boolean;
+    caseSensitive: boolean;
+    includeIgnoredFiles: boolean;
+    maxResults?: number;
+  },
+): Promise<RipgrepSearchResult> {
+  const matches: RipgrepMatch[] = [];
+  let totalMatches = 0;
+  let capped = false;
+  let stdoutBuffer = '';
+  const stderrChunks: string[] = [];
+  const args = buildRipgrepArgs(target, options);
+  const maxResults = options.maxResults;
+  const pushMatch = (match: RipgrepMatch) => {
+    if (maxResults !== undefined && totalMatches >= maxResults) {
       return;
     }
-    const ranges = Array.isArray(result.ranges) ? result.ranges : [result.ranges];
-    const previewText = result.preview.text.replace(/\r\n/g, '\n').trimEnd();
-    const pathText = formatSearchMatchPath(result.uri);
-    for (const range of ranges) {
-      matchCount += 1;
-      matches.push({
-        path: pathText,
-        line: range.start.line + 1,
-        preview: previewText,
-      });
+    totalMatches += 1;
+    matches.push(match);
+    if (maxResults !== undefined && totalMatches >= maxResults && !capped) {
+      capped = true;
+      try {
+        child.kill();
+      } catch {
+        // Ignore kill failures.
+      }
     }
+  };
+
+  const child = spawn(rgPath, args, {
+    cwd: target.folder.uri.fsPath,
+    windowsHide: true,
   });
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString('utf8');
+    stdoutBuffer = consumeRipgrepLines(stdoutBuffer, (line) => {
+      const match = parseRipgrepMatch(line, target.folder);
+      if (!match) {
+        return;
+      }
+      pushMatch(match);
+    });
+  });
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString('utf8'));
+  });
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', (error) => reject(error));
+    child.on('close', (code) => resolve(code));
+  });
+
+  if (stdoutBuffer.length > 0) {
+    consumeRipgrepLines(stdoutBuffer, (line) => {
+      const match = parseRipgrepMatch(line, target.folder);
+      if (!match) {
+        return;
+      }
+      pushMatch(match);
+    });
+  }
+
+  if (exitCode !== 0 && exitCode !== 1 && exitCode !== 2 && !capped) {
+    const stderrText = stderrChunks.join('').trim();
+    throw new Error(stderrText || `ripgrep exited with code ${exitCode ?? 'null'}`);
+  }
+
   return {
     matches,
-    matchCount,
-    limitHit: complete?.limitHit === true,
+    totalMatches,
+    capped,
   };
 }
 
-function isTextSearchMatch(result: unknown): result is {
-  uri: vscode.Uri;
-  ranges: vscode.Range | vscode.Range[];
-  preview: { text: string };
-} {
-  return !!result && typeof result === 'object' && 'preview' in result && 'uri' in result && 'ranges' in result;
+function consumeRipgrepLines(buffer: string, onLine: (line: string) => void): string {
+  let start = 0;
+  let index = buffer.indexOf('\n', start);
+  while (index !== -1) {
+    const line = buffer.slice(start, index).trim();
+    if (line.length > 0) {
+      onLine(line);
+    }
+    start = index + 1;
+    index = buffer.indexOf('\n', start);
+  }
+  return buffer.slice(start);
 }
 
-function formatSearchMatchPath(uri: vscode.Uri): string {
-  const relative = vscode.workspace.asRelativePath(uri, true);
-  return relative.replace(/\\/g, '/');
+function parseRipgrepMatch(line: string, folder: vscode.WorkspaceFolder): RipgrepMatch | undefined {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const record = payload as { type?: unknown; data?: unknown };
+  if (record.type !== 'match' || !record.data || typeof record.data !== 'object') {
+    return undefined;
+  }
+  const data = record.data as {
+    path?: { text?: string };
+    lines?: { text?: string };
+    line_number?: number;
+  };
+  const relPath = data.path?.text;
+  const previewText = data.lines?.text;
+  const lineNumber = data.line_number;
+  if (!relPath || previewText === undefined || typeof lineNumber !== 'number') {
+    return undefined;
+  }
+  let normalizedRelPath = relPath.replace(/\\/g, '/');
+  normalizedRelPath = normalizedRelPath.replace(/^\.\//u, '').replace(/\/\.\//g, '/');
+  const absolutePath = path.isAbsolute(relPath)
+    ? relPath
+    : path.resolve(folder.uri.fsPath, normalizedRelPath);
+  const preview = previewText.replace(/\r\n/g, '\n').trimEnd();
+  return {
+    path: absolutePath,
+    line: lineNumber,
+    preview,
+  };
 }
 
-function resolveFindTextInFilesIncludePatterns(value: unknown): Array<vscode.GlobPattern> {
-  if (typeof value === 'string') {
-    const entry = value.trim();
-    return entry.length > 0 ? [normalizeFindTextInFilesIncludeEntry(entry)] : [];
+function buildRipgrepArgs(
+  target: { folder: vscode.WorkspaceFolder; glob?: string },
+  options: { query: string; isRegexp: boolean; caseSensitive: boolean; includeIgnoredFiles: boolean },
+): string[] {
+  const args: string[] = ['--json', '--with-filename', '--line-number', '--no-messages'];
+
+  if (!options.isRegexp) {
+    if (options.caseSensitive) {
+      args.push('--case-sensitive');
+    } else {
+      args.push('--smart-case');
+    }
+    args.push('--fixed-strings');
+  } else if (options.caseSensitive) {
+    args.push('--case-sensitive');
+  } else {
+    args.push('--smart-case');
   }
-  if (Array.isArray(value)) {
-    const entries = value
-      .filter((entry): entry is string => typeof entry === 'string')
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-    return entries.map((entry) => normalizeFindTextInFilesIncludeEntry(entry));
+
+  const searchConfig = vscode.workspace.getConfiguration('search', target.folder.uri);
+  const filesConfig = vscode.workspace.getConfiguration('files', target.folder.uri);
+  const useIgnoreFiles = searchConfig.get<boolean>('useIgnoreFiles', true);
+  const useGlobalIgnoreFiles = searchConfig.get<boolean>('useGlobalIgnoreFiles', true);
+  const followSymlinks = searchConfig.get<boolean>('followSymlinks', true);
+
+  if (options.includeIgnoredFiles || !useIgnoreFiles) {
+    args.push('--no-ignore', '--no-ignore-parent');
   }
-  return [];
+  if (options.includeIgnoredFiles || !useGlobalIgnoreFiles) {
+    args.push('--no-ignore-global');
+  }
+  if (followSymlinks) {
+    args.push('--follow');
+  }
+
+  if (!options.includeIgnoredFiles) {
+    const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
+    const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+    const excludePatterns = new Set<string>();
+    for (const pattern of [...searchExclude, ...filesExclude]) {
+      const normalized = normalizeGlob(pattern);
+      if (!normalized) {
+        continue;
+      }
+      excludePatterns.add(normalized.startsWith('!') ? normalized : `!${normalized}`);
+      if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
+        const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
+        excludePatterns.add(withChildren.startsWith('!') ? withChildren : `!${withChildren}`);
+      }
+    }
+    for (const pattern of excludePatterns) {
+      args.push('--glob', pattern);
+    }
+  }
+
+  if (target.glob) {
+    args.push('--glob', normalizeGlob(target.glob));
+  }
+
+  args.push('-e', options.query, '.');
+  return args;
+}
+
+function collectExcludeGlobs(values: Record<string, unknown>): string[] {
+  return Object.entries(values)
+    .filter(([, value]) => value === true || (typeof value === 'object' && value !== null))
+    .map(([pattern]) => pattern);
+}
+
+function normalizeGlob(pattern: string): string {
+  return pattern.replace(/\\/g, '/');
 }
 
 function normalizeFindTextInFilesIncludeEntry(entry: string): vscode.GlobPattern {

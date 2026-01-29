@@ -15,15 +15,14 @@ The proxy uses the current working directory (`cwd`) to resolve the VS Code inst
 
 Codex does not pass `cwd` into `npx` MCP services, so the proxy requires an explicit workspace handshake before it forwards MCP requests.
 
-1. Call `lmTools/requestWorkspaceMCPServer` with `params.cwd`.
+1. Call `lmToolsBridgeProxy.requestWorkspaceMCPServer` with `params.cwd`.
 2. Wait for `ok: true` and a resolved target.
-3. Optionally call `lmTools/status` to confirm the target is still online.
 
-Until `lmTools/requestWorkspaceMCPServer` succeeds, the proxy rejects all MCP requests (including `roots/list`) with a workspace-not-ready error.
+Until `lmToolsBridgeProxy.requestWorkspaceMCPServer` succeeds, the proxy rejects all MCP requests (including `roots/list`) with a workspace-not-ready error.
 
 If the target MCP goes offline, the proxy marks itself disconnected and attempts auto-reconnect every second. `lmTools/status` returns `offlineDurationSec` to show how long it has been offline.
 
-When the proxy is not ready, it exposes a minimal MCP resource (`lm-tools-bridge-proxy://handshake`) via `resources/list` and also returns `lmTools/requestWorkspaceMCPServer` and `lmTools/status` from `tools/list` so clients can discover the exact method names.
+The proxy always exposes a minimal MCP resource (`lm-tools-bridge-proxy://handshake`) via `resources/list`, and it is pinned to the top of the list. It also returns `lmToolsBridgeProxy.requestWorkspaceMCPServer` from `tools/list` before handshake so clients can discover the exact method name.
 
 ## Logging
 

@@ -17,10 +17,12 @@ const ERROR_NO_MATCH = -32004;
 const ERROR_WORKSPACE_NOT_SET = -32005;
 const ERROR_MCP_OFFLINE = -32006;
 const STARTUP_TIME = Date.now();
-const REQUEST_WORKSPACE_METHOD = 'lmTools/requestWorkspaceMCPServer';
-const STATUS_METHOD = 'lmTools/status';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridgeProxy.requestWorkspaceMCPServer';
 const TOOLS_LIST_METHOD = 'tools/list';
 const TOOLS_CALL_METHOD = 'tools/call';
+const INITIALIZE_METHOD = 'initialize';
+const INITIALIZED_METHOD = 'initialized';
+const PING_METHOD = 'ping';
 const HEALTH_PATH = '/mcp/health';
 const HEALTH_TIMEOUT_MS = 1200;
 const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge-proxy://handshake';
@@ -251,58 +253,150 @@ function logDebug(tag: string, payload?: Record<string, unknown>) {
   appendLog(`[${tag}] ${JSON.stringify(payload)}`);
 }
 
+function getProxyVersion() {
+  try {
+    const pkgPath = path.resolve(__dirname, '..', 'package.json');
+    const text = fs.readFileSync(pkgPath, 'utf8');
+    const parsed = JSON.parse(text) as { version?: unknown } | undefined;
+    if (parsed && typeof parsed.version === 'string') {
+      return parsed.version;
+    }
+  } catch {
+    // Ignore read/parse failures.
+  }
+  return 'unknown';
+}
+
+async function requestTargetJson(target: ManagerMatch, payload: unknown) {
+  return new Promise<{ ok: boolean; data?: unknown }>((resolve) => {
+    const body = JSON.stringify(payload);
+    const request = http.request(
+      {
+        hostname: target.host,
+        port: Number(target.port),
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => {
+          try {
+            const text = Buffer.concat(chunks).toString('utf8');
+            const parsed = JSON.parse(text) as unknown;
+            resolve({ ok: true, data: parsed });
+          } catch {
+            resolve({ ok: false });
+          }
+        });
+      },
+    );
+    request.on('error', () => {
+      resolve({ ok: false });
+    });
+    request.write(body);
+    request.end();
+  });
+}
+
 function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
   return async (message) => {
     const state = stateGetter();
+    if (message?.method === 'resources/read' && message?.params?.uri === HANDSHAKE_RESOURCE_URI) {
+      logDebug('resources.read.handshake', { id: message.id ?? null });
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      const statusResult = await buildStatusPayload();
+      const content = [
+        'This MCP proxy requires an explicit workspace handshake.',
+        'Call lmToolsBridgeProxy.requestWorkspaceMCPServer with params.cwd, wait for ok:true.',
+        '',
+        'Status snapshot:',
+        JSON.stringify(statusResult.payload, null, 2),
+      ].join('\n');
+      const resultPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          contents: [
+            {
+              uri: HANDSHAKE_RESOURCE_URI,
+              mimeType: 'text/plain',
+              text: content,
+            },
+          ],
+        },
+      };
+      process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+      return;
+    }
+    if (message?.method === 'resources/list') {
+      logDebug('resources.list.handshake', { id: message.id ?? null });
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      const proxyResource = {
+        uri: HANDSHAKE_RESOURCE_URI,
+        name: 'MCP proxy handshake',
+        description: 'Call lmToolsBridgeProxy.requestWorkspaceMCPServer with params.cwd before using MCP.',
+        mimeType: 'text/plain',
+      };
+      if (!state.workspaceMatched) {
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            resources: [proxyResource],
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        return;
+      }
+      const target = targetGetter();
+      if (!target) {
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            resources: [proxyResource],
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        return;
+      }
+      const remote = await requestTargetJson(target, {
+        jsonrpc: '2.0',
+        id: message.id,
+        method: 'resources/list',
+        params: message?.params ?? {},
+      });
+      const remoteResources = (remote.ok && (remote.data as { result?: { resources?: unknown[] } })?.result?.resources)
+        ? (remote.data as { result: { resources: unknown[] } }).result.resources
+        : [];
+      const merged = [
+        proxyResource,
+        ...remoteResources.filter((entry) => {
+          const uri = (entry as { uri?: unknown })?.uri;
+          return uri !== HANDSHAKE_RESOURCE_URI;
+        }),
+      ];
+      const resultPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          resources: merged,
+        },
+      };
+      process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+      return;
+    }
     if (!state.workspaceMatched) {
-      if (message?.method === 'resources/list') {
-        logDebug('resources.list.handshake', { id: message.id ?? null });
-        if (message.id === undefined || message.id === null) {
-          return;
-        }
-        const resultPayload = {
-          jsonrpc: '2.0',
-          id: message.id,
-          result: {
-            resources: [
-              {
-                uri: HANDSHAKE_RESOURCE_URI,
-                name: 'MCP proxy handshake',
-                description: 'Call lmTools/requestWorkspaceMCPServer with params.cwd before using MCP.',
-                mimeType: 'text/plain',
-              },
-            ],
-          },
-        };
-        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
-        return;
-      }
-      if (message?.method === 'resources/read' && message?.params?.uri === HANDSHAKE_RESOURCE_URI) {
-        logDebug('resources.read.handshake', { id: message.id ?? null });
-        if (message.id === undefined || message.id === null) {
-          return;
-        }
-        const content = [
-          'This MCP proxy requires an explicit workspace handshake.',
-          'Call lmTools/requestWorkspaceMCPServer with params.cwd, wait for ok:true.',
-          'Then call lmTools/status to confirm online status.',
-        ].join('\n');
-        const resultPayload = {
-          jsonrpc: '2.0',
-          id: message.id,
-          result: {
-            contents: [
-              {
-                uri: HANDSHAKE_RESOURCE_URI,
-                mimeType: 'text/plain',
-                text: content,
-              },
-            ],
-          },
-        };
-        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
-        return;
-      }
       if (message.id === undefined || message.id === null) {
         return;
       }
@@ -312,8 +406,8 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
         error: {
           code: state.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
           message: state.workspaceSetExplicitly
-            ? 'Workspace not matched. Call lmTools/requestWorkspaceMCPServer with params.cwd and wait for success.'
-            : 'Workspace not set. Call lmTools/requestWorkspaceMCPServer with params.cwd before using MCP.',
+            ? 'Workspace not matched. Call lmToolsBridgeProxy.requestWorkspaceMCPServer with params.cwd and wait for success.'
+            : 'Workspace not set. Call lmToolsBridgeProxy.requestWorkspaceMCPServer with params.cwd before using MCP.',
         },
       };
       if (message?.method === 'roots/list') {
@@ -600,7 +694,8 @@ async function main() {
   let workspaceMatched = false;
   let offlineSince: number | undefined;
   let reconnectTimer: NodeJS.Timeout | undefined;
-  // Env snapshot logging removed to avoid noisy logs.
+  appendLog(`lm-tools-bridge-proxy version=${getProxyVersion()}`);
+  appendLog(`lm-tools-bridge-proxy cwd=${resolveCwd}`);
   let currentTarget;
 
   let resolveInFlight;
@@ -672,14 +767,6 @@ async function main() {
         required: ['cwd'],
       },
     },
-    {
-      name: STATUS_METHOD,
-      description: 'Get proxy status and online state for the current target.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-    },
   ];
   const respondToolCall = (id, payload) => {
     const resultPayload = {
@@ -704,6 +791,14 @@ async function main() {
       error: { code, message },
     };
     process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+  };
+  const respondJsonResult = (id, result) => {
+    const resultPayload = {
+      jsonrpc: '2.0',
+      id,
+      result,
+    };
+    process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
   };
   const buildStatusPayload = async () => {
     let resolveResult;
@@ -839,6 +934,40 @@ async function main() {
     };
   };
   const handleMessage = async (message) => {
+    if (message?.method === INITIALIZE_METHOD) {
+      logDebug('mcp.initialize', { id: message.id ?? null });
+      if (message.id !== undefined && message.id !== null) {
+        respondJsonResult(message.id, {
+          protocolVersion: '2024-11-05',
+          serverInfo: {
+            name: 'lm-tools-bridge-proxy',
+            version: getProxyVersion(),
+          },
+          capabilities: {
+            tools: {
+              list: true,
+              call: true,
+            },
+            resources: {
+              list: true,
+              read: true,
+            },
+          },
+        });
+      }
+      return;
+    }
+    if (message?.method === INITIALIZED_METHOD) {
+      logDebug('mcp.initialized', { id: message.id ?? null });
+      return;
+    }
+    if (message?.method === PING_METHOD) {
+      logDebug('mcp.ping', { id: message.id ?? null });
+      if (message.id !== undefined && message.id !== null) {
+        respondJsonResult(message.id, {});
+      }
+      return;
+    }
     if (message?.method === TOOLS_LIST_METHOD) {
       if (!workspaceMatched) {
         logDebug('tools.list.proxy', { id: message.id ?? null });
@@ -868,29 +997,10 @@ async function main() {
         respondToolCall(message.id, result.payload);
         return;
       }
-      if (name === STATUS_METHOD) {
-        const statusResult = await buildStatusPayload();
-        respondToolCall(message.id, statusResult.payload);
-        return;
-      }
       if (!workspaceMatched) {
         respondToolError(message.id, -32602, `Unknown tool: ${String(name)}`);
         return;
       }
-    }
-    if (message?.method === STATUS_METHOD) {
-      logDebug('status.request', { id: message.id ?? null });
-      const statusResult = await buildStatusPayload();
-      logDebug('status.state', statusResult.debug);
-      if (message.id !== undefined && message.id !== null) {
-        const resultPayload = {
-          jsonrpc: '2.0',
-          id: message.id,
-          result: statusResult.payload,
-        };
-        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
-      }
-      return;
     }
     if (message?.method === REQUEST_WORKSPACE_METHOD) {
       logDebug('requestWorkspaceMCPServer.request', { id: message.id ?? null, cwd: message?.params?.cwd ?? null });

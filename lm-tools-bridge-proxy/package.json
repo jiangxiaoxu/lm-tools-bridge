@@ -1,6 +1,6 @@
 {
   "name": "@jiangxiaoxu/lm-tools-bridge-proxy",
-  "version": "0.1.15",
+  "version": "0.1.19",
   "description": "Stdio MCP proxy for LM Tools Bridge (Windows Named Pipe resolve).",
   "license": "MIT",
   "bin": {

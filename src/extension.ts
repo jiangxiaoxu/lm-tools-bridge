@@ -21,7 +21,8 @@ const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
-const FIND_TEXT_IN_FILES_TOOL_NAME = 'findTextInFiles';
+const FIND_FILES_TOOL_NAME = 'lm_findFiles';
+const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
@@ -32,7 +33,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
-  'copilot_findFiles',
+  FIND_FILES_TOOL_NAME,
   FIND_TEXT_IN_FILES_TOOL_NAME,
   'copilot_getErrors',
   'copilot_readProjectStructure',
@@ -77,6 +78,7 @@ const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'get_terminal_output',
   'terminal_selection',
   'terminal_last_command',
+  'copilot_findFiles',
   'copilot_findTextInFiles',
   'copilot_findTestFiles',
   'copilot_getSearchResults',
@@ -89,8 +91,70 @@ type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;
 
 const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
   'copilot_findTextInFiles.maxResults=500',
-  'findTextInFiles.maxResults=500',
+  'lm_findTextInFiles.maxResults=500',
 ];
+
+const COPILOT_FIND_FILES_DESCRIPTION = [
+  'Search for files in the workspace by glob pattern. This only returns the paths of matching files.',
+  'Use this tool when you know the exact filename pattern of the files you\'re searching for.',
+  'Glob patterns match from the root of the workspace folder. Examples:',
+  '- **/*.{js,ts} to match all js/ts files in the workspace.',
+  '- src/** to match all files under the top-level src folder.',
+  '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
+].join('\n');
+
+const COPILOT_FIND_FILES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    query: {
+      type: 'string',
+      description: 'Search for files with names or paths matching this glob pattern.',
+    },
+    maxResults: {
+      type: 'number',
+      description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
+    },
+  },
+  required: ['query'],
+};
+
+const COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION = [
+  'Do a fast text search in the workspace. Use this tool when you want to search with an exact string or regex.',
+  'If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.',
+  'For example, use \'function|method|procedure\' to look for all of those words at once.',
+  'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
+  'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
+  'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
+  'Use this tool when you want to see an overview of a particular file, instead of using read_file many times to look for code within a file.',
+].join('\n');
+
+const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    query: {
+      type: 'string',
+      description: 'The pattern to search for in files in the workspace. Use regex with alternation (e.g., \'word1|word2|word3\') or character classes to find multiple potential words in a single search. Be sure to set the isRegexp property properly to declare whether it\'s a regex or plain text pattern. Is case-insensitive. If you need case-sensitive matching, use a regex pattern with an inline case-sensitivity flag.',
+    },
+    isRegexp: {
+      type: 'boolean',
+      description: 'Whether the pattern is a regex.',
+    },
+    includePattern: {
+      type: 'string',
+      description: 'Search files matching this glob pattern. Will be applied to the relative path of files within the workspace. To search recursively inside a folder, use a proper glob pattern like "src/folder/**". Do not use | in includePattern.',
+    },
+    maxResults: {
+      type: 'number',
+      description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
+      default: 500,
+    },
+    includeIgnoredFiles: {
+      type: 'boolean',
+      description: 'Whether to include files that would normally be ignored according to .gitignore, other ignore files and `files.exclude` and `search.exclude` settings. Warning: using this may cause the search to be slower. Only set it when you want to search in ignored folders like node_modules or build outputs.',
+    },
+  },
+  required: ['query', 'isRegexp'],
+};
 
 const schemaDefaultOverrideWarnings = new Set<string>();
 
@@ -995,7 +1059,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         const input = args.input ?? {};
         if (!isPlainObject(input)) {
           return toolErrorResultPayload({
-            error: 'Tool input must be an object (not a JSON string). Use lm-tools://schema/{name} for the expected shape.',
+            error: 'Tool input must be an object. Use lm-tools://schema/{name} for the expected shape.',
             name: tool.name,
             inputSchema: tool.inputSchema ?? null,
           });
@@ -1522,7 +1586,7 @@ function patchFindTextInFilesSchema(schema: unknown): unknown {
   };
 }
 
-function patchFindTextInFilesIncludePatternSchema(schema: unknown): unknown {
+function patchFindFilesSchema(schema: unknown): unknown {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
     return schema;
   }
@@ -1532,31 +1596,10 @@ function patchFindTextInFilesIncludePatternSchema(schema: unknown): unknown {
     return schema;
   }
   const propRecord = properties as Record<string, unknown>;
-  const includeSchema = propRecord.includePattern;
-  if (!includeSchema || typeof includeSchema !== 'object' || Array.isArray(includeSchema)) {
+  if (!propRecord.query) {
     return schema;
   }
-  const includeCopy = { ...(includeSchema as Record<string, unknown>) };
-  if (Array.isArray(includeCopy.anyOf) || Array.isArray(includeCopy.oneOf)) {
-    return schema;
-  }
-  const arraySchema = {
-    type: 'array',
-    items: { ...includeCopy },
-  };
-  const patchedInclude: Record<string, unknown> = {
-    anyOf: [includeCopy, arraySchema],
-  };
-  if (typeof includeCopy.description === 'string') {
-    patchedInclude.description = includeCopy.description;
-  }
-  return {
-    ...record,
-    properties: {
-      ...propRecord,
-      includePattern: patchedInclude,
-    },
-  };
+  return schema;
 }
 
 function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
@@ -1583,8 +1626,8 @@ function buildToolInputSchema(tool: ExposedTool): unknown {
   if (tool.name === 'copilot_findTextInFiles' || tool.name === FIND_TEXT_IN_FILES_TOOL_NAME) {
     inputSchema = patchFindTextInFilesSchema(inputSchema);
   }
-  if (tool.name === FIND_TEXT_IN_FILES_TOOL_NAME) {
-    inputSchema = patchFindTextInFilesIncludePatternSchema(inputSchema);
+  if (tool.name === FIND_FILES_TOOL_NAME) {
+    inputSchema = patchFindFilesSchema(inputSchema);
   }
   return inputSchema;
 }
@@ -1721,12 +1764,9 @@ type WorkspaceTextSearchComplete = {
 };
 
 function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
-  const baseTool = getAllLmToolsSnapshot().find((tool) => tool.name === 'copilot_findTextInFiles');
-  const fallbackSchema = buildFindTextInFilesFallbackSchema();
-  const inputSchema = baseTool?.inputSchema ?? fallbackSchema;
-  const description = baseTool?.description
-    ?? 'Do a fast text search in the workspace using VS Code search APIs.';
-  const tags = baseTool?.tags ? [...baseTool.tags] : ['vscode_codesearch'];
+  const inputSchema = COPILOT_FIND_TEXT_IN_FILES_SCHEMA;
+  const description = COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION;
+  const tags = ['vscode_codesearch'];
   return {
     name: FIND_TEXT_IN_FILES_TOOL_NAME,
     description,
@@ -1737,38 +1777,38 @@ function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
   };
 }
 
-function buildFindTextInFilesFallbackSchema(): Record<string, unknown> {
+function buildFindFilesToolDefinition(): CustomToolDefinition {
+  const inputSchema = COPILOT_FIND_FILES_SCHEMA;
+  const description = COPILOT_FIND_FILES_DESCRIPTION;
+  const tags = ['vscode_codesearch'];
   return {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description: 'The pattern to search for in files in the workspace.',
-      },
-      isRegexp: {
-        type: 'boolean',
-        description: 'Whether the pattern is a regex.',
-      },
-      includePattern: {
-        type: 'string',
-        description: 'Search files matching this glob pattern.',
-      },
-      maxResults: {
-        type: 'number',
-        description: 'The maximum number of results to return.',
-      },
-      includeIgnoredFiles: {
-        type: 'boolean',
-        description: 'Whether to include files that would normally be ignored.',
-      },
-    },
-    required: ['query', 'isRegexp'],
+    name: FIND_FILES_TOOL_NAME,
+    description,
+    tags,
+    inputSchema,
+    isCustom: true,
+    invoke: runFindFilesTool,
   };
 }
 
 async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   try {
     const payload = await executeFindTextInFilesSearch(input);
+    const text = safePrettyStringify(payload);
+    return {
+      content: [new vscode.LanguageModelTextPart(text)],
+    };
+  } catch (error) {
+    const message = String(error);
+    return {
+      content: [new vscode.LanguageModelTextPart(message)],
+    };
+  }
+}
+
+async function runFindFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  try {
+    const payload = await executeFindFilesSearch(input);
     const text = safePrettyStringify(payload);
     return {
       content: [new vscode.LanguageModelTextPart(text)],
@@ -1833,6 +1873,33 @@ async function executeFindTextInFilesSearch(input: Record<string, unknown>): Pro
     uniqueMatches: combinedMatches.length,
     totalMatches: totalCount,
     matches: combinedMatches,
+  };
+}
+
+async function executeFindFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const queryValue = input.query;
+  if (typeof queryValue !== 'string') {
+    throw new Error('query must be a string');
+  }
+  const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
+    ? input.maxResults
+    : undefined;
+  const includePattern = normalizeFindTextInFilesIncludeEntry(queryValue);
+  const uris = await vscode.workspace.findFiles(includePattern, null, maxResults);
+  const matched: string[] = [];
+  const seen = new Set<string>();
+  for (const uri of uris) {
+    const rel = formatSearchMatchPath(uri);
+    if (seen.has(rel)) {
+      continue;
+    }
+    seen.add(rel);
+    matched.push(rel);
+  }
+
+  return {
+    count: matched.length,
+    files: matched,
   };
 }
 
@@ -2090,15 +2157,10 @@ function getSchemaUri(name: string): string {
 
 function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
   const combined = `${tool.name} ${(tool.description ?? '')}`.toLowerCase();
-  const requiresObjectInput = schemaRequiresObjectInput(tool.inputSchema);
-  const toolkitInputNote = requiresObjectInput
-    ? 'vscodeLmToolkit input must be an object (not a JSON string).'
-    : undefined;
   if (combined.includes('do not use') || combined.includes('placeholder')) {
     return {
       mode: 'do-not-use',
       reason: 'Heuristic: description indicates do-not-use/placeholder.',
-      toolkitInputNote,
     };
   }
 
@@ -2106,15 +2168,13 @@ function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
     return {
       mode: 'toolkit',
       reason: 'Heuristic: codesearch tag; use vscodeLmToolkit.',
-      toolkitInputNote,
     };
   }
 
   return {
     mode: 'toolkit',
     reason: 'Heuristic: default to vscodeLmToolkit.',
-    requiresObjectInput: requiresObjectInput || undefined,
-    toolkitInputNote,
+    requiresObjectInput: schemaRequiresObjectInput(tool.inputSchema) || undefined,
   };
 }
 
@@ -2308,7 +2368,7 @@ function isCustomTool(tool: ExposedTool): tool is CustomToolDefinition {
 }
 
 function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
-  return [buildFindTextInFilesToolDefinition()];
+  return [buildFindFilesToolDefinition(), buildFindTextInFilesToolDefinition()];
 }
 
 function getAllToolsSnapshot(): readonly ExposedTool[] {

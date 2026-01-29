@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -12,6 +12,9 @@
   "engines": {
     "vscode": "^1.104.0"
   },
+  "enabledApiProposals": [
+    "findTextInFiles"
+  ],
   "categories": [
     "Other"
   ],
@@ -77,7 +80,7 @@
             "copilot_searchWorkspaceSymbols",
             "copilot_listCodeUsages",
             "copilot_findFiles",
-            "copilot_findTextInFiles",
+            "findTextInFiles",
             "copilot_readFile",
             "copilot_getErrors",
             "copilot_readProjectStructure",
@@ -110,7 +113,7 @@
         "lmToolsBridge.tools.schemaDefaults": {
           "type": "array",
           "default": [
-            "copilot_findTextInFiles.maxResults=500"
+            "findTextInFiles.maxResults=500"
           ],
           "items": {
             "type": "string"

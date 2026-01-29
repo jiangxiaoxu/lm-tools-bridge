@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
+import * as path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -20,6 +21,7 @@ const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
+const FIND_TEXT_IN_FILES_TOOL_NAME = 'findTextInFiles';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const CONTROL_STOP_PATH = '/mcp-control/stop';
@@ -31,7 +33,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
   'copilot_findFiles',
-  'copilot_findTextInFiles',
+  FIND_TEXT_IN_FILES_TOOL_NAME,
   'copilot_getErrors',
   'copilot_readProjectStructure',
   'copilot_getChangedFiles',
@@ -75,6 +77,7 @@ const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'get_terminal_output',
   'terminal_selection',
   'terminal_last_command',
+  'copilot_findTextInFiles',
   'copilot_findTestFiles',
   'copilot_getSearchResults',
   'copilot_githubRepo',
@@ -86,6 +89,7 @@ type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;
 
 const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
   'copilot_findTextInFiles.maxResults=500',
+  'findTextInFiles.maxResults=500',
 ];
 
 const schemaDefaultOverrideWarnings = new Set<string>();
@@ -101,6 +105,20 @@ interface ToolkitInput {
   detail?: ToolDetail;
   input?: unknown;
 }
+
+interface CustomToolInformation {
+  name: string;
+  description: string;
+  tags: string[];
+  inputSchema: unknown;
+  isCustom: true;
+}
+
+interface CustomToolDefinition extends CustomToolInformation {
+  invoke: (input: Record<string, unknown>) => Promise<unknown>;
+}
+
+type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
 
 interface ServerConfig {
   autoStart: boolean;
@@ -398,9 +416,9 @@ async function configureExposedTools(): Promise<void> {
     return;
   }
 
-  const allTools = getAllLmToolsSnapshot();
+  const allTools = getAllToolsSnapshot();
   if (allTools.length === 0) {
-    void vscode.window.showInformationMessage('No tools found in vscode.lm.tools.');
+    void vscode.window.showInformationMessage('No tools found for MCP exposure.');
     return;
   }
   const tools = getVisibleToolsSnapshot();
@@ -987,6 +1005,16 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         let outputText: string | undefined;
         let structuredOutput: { blocks: unknown[] } | undefined;
         try {
+          if (isCustomTool(tool)) {
+            const result = await tool.invoke(normalizedInput);
+            const serialized = serializeToolResult(result as vscode.LanguageModelToolResult);
+            outputText = serializedToolResultToText(serialized);
+            structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+            debugOutputText = outputText;
+            debugStructuredOutput = structuredOutput;
+            return buildToolResult(structuredOutput, false, outputText);
+          }
+
           const result = await lm.invokeTool(tool.name, {
             input: normalizedInput,
             toolInvocationToken: undefined,
@@ -1357,7 +1385,7 @@ function toolListToText(tools: readonly unknown[]): string {
   return entries.join('\n');
 }
 
-function formatToolNameList(tools: readonly vscode.LanguageModelToolInformation[]): string {
+function formatToolNameList(tools: readonly ExposedTool[]): string {
   const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
   return orderedTools.map((tool) => tool.name).join('\n');
 }
@@ -1454,7 +1482,7 @@ function resourceJson(uri: string, payload: unknown) {
   };
 }
 
-function listToolsPayload(tools: readonly vscode.LanguageModelToolInformation[], detail: ToolDetail) {
+function listToolsPayload(tools: readonly ExposedTool[], detail: ToolDetail) {
   const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
   if (detail === 'names') {
     return { tools: orderedTools.map((tool) => tool.name) };
@@ -1494,7 +1522,44 @@ function patchFindTextInFilesSchema(schema: unknown): unknown {
   };
 }
 
-function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: ToolDetail) {
+function patchFindTextInFilesIncludePatternSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return schema;
+  }
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return schema;
+  }
+  const propRecord = properties as Record<string, unknown>;
+  const includeSchema = propRecord.includePattern;
+  if (!includeSchema || typeof includeSchema !== 'object' || Array.isArray(includeSchema)) {
+    return schema;
+  }
+  const includeCopy = { ...(includeSchema as Record<string, unknown>) };
+  if (Array.isArray(includeCopy.anyOf) || Array.isArray(includeCopy.oneOf)) {
+    return schema;
+  }
+  const arraySchema = {
+    type: 'array',
+    items: { ...includeCopy },
+  };
+  const patchedInclude: Record<string, unknown> = {
+    anyOf: [includeCopy, arraySchema],
+  };
+  if (typeof includeCopy.description === 'string') {
+    patchedInclude.description = includeCopy.description;
+  }
+  return {
+    ...record,
+    properties: {
+      ...propRecord,
+      includePattern: patchedInclude,
+    },
+  };
+}
+
+function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
   if (detail === 'names') {
     return {
       name: tool.name,
@@ -1513,10 +1578,13 @@ function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: Tool
   };
 }
 
-function buildToolInputSchema(tool: vscode.LanguageModelToolInformation): unknown {
-  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
-  if (tool.name === 'copilot_findTextInFiles') {
-    return patchFindTextInFilesSchema(inputSchema);
+function buildToolInputSchema(tool: ExposedTool): unknown {
+  let inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
+  if (tool.name === 'copilot_findTextInFiles' || tool.name === FIND_TEXT_IN_FILES_TOOL_NAME) {
+    inputSchema = patchFindTextInFilesSchema(inputSchema);
+  }
+  if (tool.name === FIND_TEXT_IN_FILES_TOOL_NAME) {
+    inputSchema = patchFindTextInFilesIncludePatternSchema(inputSchema);
   }
   return inputSchema;
 }
@@ -1635,6 +1703,284 @@ function normalizeFindTextInFilesText(text: string): string {
   return [...lines, ...matches.map((item) => item.raw)].join('\n');
 }
 
+type WorkspaceTextSearchQuery = {
+  pattern: string;
+  isRegExp?: boolean;
+  isCaseSensitive?: boolean;
+};
+
+type WorkspaceTextSearchOptions = {
+  include?: vscode.GlobPattern;
+  maxResults?: number;
+  useIgnoreFiles?: boolean;
+  useGlobalIgnoreFiles?: boolean;
+};
+
+type WorkspaceTextSearchComplete = {
+  limitHit?: boolean;
+};
+
+function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
+  const baseTool = getAllLmToolsSnapshot().find((tool) => tool.name === 'copilot_findTextInFiles');
+  const fallbackSchema = buildFindTextInFilesFallbackSchema();
+  const inputSchema = baseTool?.inputSchema ?? fallbackSchema;
+  const description = baseTool?.description
+    ?? 'Do a fast text search in the workspace using VS Code search APIs.';
+  const tags = baseTool?.tags ? [...baseTool.tags] : ['vscode_codesearch'];
+  return {
+    name: FIND_TEXT_IN_FILES_TOOL_NAME,
+    description,
+    tags,
+    inputSchema,
+    isCustom: true,
+    invoke: runFindTextInFilesTool,
+  };
+}
+
+function buildFindTextInFilesFallbackSchema(): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'The pattern to search for in files in the workspace.',
+      },
+      isRegexp: {
+        type: 'boolean',
+        description: 'Whether the pattern is a regex.',
+      },
+      includePattern: {
+        type: 'string',
+        description: 'Search files matching this glob pattern.',
+      },
+      maxResults: {
+        type: 'number',
+        description: 'The maximum number of results to return.',
+      },
+      includeIgnoredFiles: {
+        type: 'boolean',
+        description: 'Whether to include files that would normally be ignored.',
+      },
+    },
+    required: ['query', 'isRegexp'],
+  };
+}
+
+async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  try {
+    const payload = await executeFindTextInFilesSearch(input);
+    const text = safePrettyStringify(payload);
+    return {
+      content: [new vscode.LanguageModelTextPart(text)],
+    };
+  } catch (error) {
+    const message = String(error);
+    return {
+      content: [new vscode.LanguageModelTextPart(message)],
+    };
+  }
+}
+
+async function executeFindTextInFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const queryValue = input.query;
+  if (typeof queryValue !== 'string') {
+    throw new Error('query must be a string');
+  }
+  const isRegexp = input.isRegexp === true;
+  const includeIgnoredFiles = input.includeIgnoredFiles === true;
+  const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
+    ? input.maxResults
+    : undefined;
+  const includePatterns = resolveFindTextInFilesIncludePatterns(input.includePattern);
+  const searchQuery: WorkspaceTextSearchQuery = {
+    pattern: queryValue,
+    isRegExp: isRegexp,
+    isCaseSensitive: false,
+  };
+
+  const combinedMatches: Array<{
+    path: string;
+    line: number;
+    preview: string;
+  }> = [];
+  const seen = new Set<string>();
+  let totalCount = 0;
+  let limitHit = false;
+
+  const patternsToSearch = includePatterns.length > 0 ? includePatterns : [undefined];
+  for (const includePattern of patternsToSearch) {
+    const options: WorkspaceTextSearchOptions = {
+      include: includePattern,
+      maxResults,
+      useIgnoreFiles: includeIgnoredFiles ? false : undefined,
+      useGlobalIgnoreFiles: includeIgnoredFiles ? false : undefined,
+    };
+    const { matches, matchCount, limitHit: hit } = await searchFindTextInFilesOnce(searchQuery, options);
+    limitHit = limitHit || hit;
+    totalCount += matchCount;
+    for (const match of matches) {
+      const key = `${match.path}:${match.line}:${match.preview}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      combinedMatches.push(match);
+    }
+  }
+
+  return {
+    capped: limitHit,
+    uniqueMatches: combinedMatches.length,
+    totalMatches: totalCount,
+    matches: combinedMatches,
+  };
+}
+
+function formatFindTextInFilesPayloadText(payload: Record<string, unknown>): string {
+  const capped = payload.capped === true;
+  const uniqueMatches = typeof payload.uniqueMatches === 'number' ? payload.uniqueMatches : 0;
+  const totalMatches = typeof payload.totalMatches === 'number' ? payload.totalMatches : 0;
+  const matches = Array.isArray(payload.matches) ? payload.matches : [];
+  const lines: string[] = [];
+  if (capped) {
+    lines.push('Results capped by VS Code search, more results are available.');
+  }
+  lines.push(`Unique matches: ${uniqueMatches}, total matches: ${totalMatches}.`);
+  for (const match of matches) {
+    if (!match || typeof match !== 'object') {
+      continue;
+    }
+    const record = match as { path?: unknown; line?: unknown; preview?: unknown };
+    const pathValue = typeof record.path === 'string' ? record.path : '';
+    const lineValue = typeof record.line === 'number' ? record.line : 0;
+    const previewValue = typeof record.preview === 'string' ? record.preview : '';
+    lines.push(`<match path="${pathValue}" line="${lineValue}">${previewValue}</match>`);
+  }
+  return lines.join('\n');
+}
+
+async function searchFindTextInFilesOnce(
+  query: WorkspaceTextSearchQuery,
+  options: WorkspaceTextSearchOptions,
+): Promise<{
+  matches: Array<{ path: string; line: number; preview: string }>;
+  matchCount: number;
+  limitHit: boolean;
+}> {
+  const matches: Array<{ path: string; line: number; preview: string }> = [];
+  let matchCount = 0;
+  const workspaceSearch = vscode.workspace as typeof vscode.workspace & {
+    findTextInFiles?: (
+      query: WorkspaceTextSearchQuery,
+      options: WorkspaceTextSearchOptions,
+      callback: (result: unknown) => void,
+      token?: vscode.CancellationToken,
+    ) => Thenable<WorkspaceTextSearchComplete>;
+  };
+  if (!workspaceSearch.findTextInFiles) {
+    throw new Error('workspace.findTextInFiles is not available in this VS Code version.');
+  }
+  const complete = await workspaceSearch.findTextInFiles(query, options, (result) => {
+    if (!isTextSearchMatch(result)) {
+      return;
+    }
+    const ranges = Array.isArray(result.ranges) ? result.ranges : [result.ranges];
+    const previewText = result.preview.text.replace(/\r\n/g, '\n').trimEnd();
+    const pathText = formatSearchMatchPath(result.uri);
+    for (const range of ranges) {
+      matchCount += 1;
+      matches.push({
+        path: pathText,
+        line: range.start.line + 1,
+        preview: previewText,
+      });
+    }
+  });
+  return {
+    matches,
+    matchCount,
+    limitHit: complete?.limitHit === true,
+  };
+}
+
+function isTextSearchMatch(result: unknown): result is {
+  uri: vscode.Uri;
+  ranges: vscode.Range | vscode.Range[];
+  preview: { text: string };
+} {
+  return !!result && typeof result === 'object' && 'preview' in result && 'uri' in result && 'ranges' in result;
+}
+
+function formatSearchMatchPath(uri: vscode.Uri): string {
+  const relative = vscode.workspace.asRelativePath(uri, true);
+  return relative.replace(/\\/g, '/');
+}
+
+function resolveFindTextInFilesIncludePatterns(value: unknown): Array<vscode.GlobPattern> {
+  if (typeof value === 'string') {
+    const entry = value.trim();
+    return entry.length > 0 ? [normalizeFindTextInFilesIncludeEntry(entry)] : [];
+  }
+  if (Array.isArray(value)) {
+    const entries = value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return entries.map((entry) => normalizeFindTextInFilesIncludeEntry(entry));
+  }
+  return [];
+}
+
+function normalizeFindTextInFilesIncludeEntry(entry: string): vscode.GlobPattern {
+  const parsed = parseWorkspacePrefixedIncludePattern(entry);
+  if (!parsed) {
+    return entry;
+  }
+  return new vscode.RelativePattern(parsed.workspaceFolder.uri, parsed.pattern);
+}
+
+function parseWorkspacePrefixedIncludePattern(entry: string): {
+  workspaceFolder: vscode.WorkspaceFolder;
+  pattern: string;
+} | undefined {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (path.isAbsolute(trimmed) || startsWithWindowsAbsolutePath(trimmed)) {
+    return undefined;
+  }
+  const withoutDotPrefix = trimmed.replace(/^\.[\\/]+/u, '');
+  const normalized = withoutDotPrefix.replace(/^[\\/]+/u, '');
+  const separatorIndex = normalized.search(/[\\/]/u);
+  const workspaceName = separatorIndex >= 0 ? normalized.slice(0, separatorIndex) : normalized;
+  if (!workspaceName) {
+    return undefined;
+  }
+  const workspaceFolder = findWorkspaceFolderByName(workspaceName);
+  if (!workspaceFolder) {
+    return undefined;
+  }
+  const remainder = separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) : '';
+  const normalizedRemainder = remainder ? remainder.replace(/^[\\/]+/u, '') : '**/*';
+  return {
+    workspaceFolder,
+    pattern: normalizedRemainder,
+  };
+}
+
+function findWorkspaceFolderByName(name: string): vscode.WorkspaceFolder | undefined {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return undefined;
+  }
+  const normalized = process.platform === 'win32' ? name.toLowerCase() : name;
+  return folders.find((folder) => {
+    const folderName = process.platform === 'win32' ? folder.name.toLowerCase() : folder.name;
+    return folderName === normalized;
+  });
+}
+
 function toolResultToStructuredBlocks(
   parts: readonly Record<string, unknown>[],
 ): Array<Record<string, unknown>> {
@@ -1742,7 +2088,7 @@ function getSchemaUri(name: string): string {
   return `lm-tools://schema/${name}`;
 }
 
-function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<string, unknown> {
+function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
   const combined = `${tool.name} ${(tool.description ?? '')}`.toLowerCase();
   const requiresObjectInput = schemaRequiresObjectInput(tool.inputSchema);
   const toolkitInputNote = requiresObjectInput
@@ -1776,7 +2122,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function schemaRequiresObjectInput(schema: object | undefined): boolean {
+function schemaRequiresObjectInput(schema: unknown): boolean {
   if (!schema || typeof schema !== 'object') {
     return false;
   }
@@ -1957,19 +2303,31 @@ function getAllLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[]
   return lm ? lm.tools : [];
 }
 
-function getVisibleToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+function isCustomTool(tool: ExposedTool): tool is CustomToolDefinition {
+  return (tool as CustomToolDefinition).isCustom === true;
+}
+
+function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
+  return [buildFindTextInFilesToolDefinition()];
+}
+
+function getAllToolsSnapshot(): readonly ExposedTool[] {
+  return [...getAllLmToolsSnapshot(), ...getCustomToolsSnapshot()];
+}
+
+function getVisibleToolsSnapshot(): readonly ExposedTool[] {
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
   const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
-  return getAllLmToolsSnapshot().filter((tool) => {
+  return getAllToolsSnapshot().filter((tool) => {
     return !isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns);
   });
 }
 
-function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+function getExposedToolsSnapshot(): readonly ExposedTool[] {
   const enabledSet = new Set(getEnabledToolsSetting());
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
   const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
-  return getAllLmToolsSnapshot().filter((tool) => {
+  return getAllToolsSnapshot().filter((tool) => {
     if (isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns)) {
       return false;
     }
@@ -2187,9 +2545,9 @@ function getOwnerWorkspacePath(): string {
 }
 
 function prioritizeTool(
-  tools: readonly vscode.LanguageModelToolInformation[],
+  tools: readonly ExposedTool[],
   preferredName: string,
-): vscode.LanguageModelToolInformation[] {
+): ExposedTool[] {
   const ordered = [...tools];
   ordered.sort((left, right) => {
     if (left.name === preferredName) {
@@ -2754,7 +3112,7 @@ function formatTags(tags: readonly string[]): string {
   return tags.length > 0 ? tags.join(', ') : '(none)';
 }
 
-function formatSchema(schema: object | undefined): string {
+function formatSchema(schema: unknown): string {
   if (!schema) {
     return '(none)';
   }

@@ -38,7 +38,7 @@ Workspace search/read/diagnostics:
 - `copilot_searchWorkspaceSymbols`
 - `copilot_listCodeUsages`
 - `copilot_findFiles`
-- `copilot_findTextInFiles`
+- `findTextInFiles`
 - `copilot_getErrors`
 - `copilot_readProjectStructure`
 - `copilot_getChangedFiles`
@@ -91,6 +91,7 @@ These tools are always hidden and cannot be configured or enabled via settings:
 - `copilot_githubRepo`
 - `copilot_testFailure`
 - `copilot_getChangedFiles`
+- `copilot_findTextInFiles`
 - `copilot_readFile`
 
 ### Tool input (vscodeLmToolkit)

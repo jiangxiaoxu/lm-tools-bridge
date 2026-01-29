@@ -307,6 +307,25 @@ async function requestTargetJson(target: ManagerMatch, payload: unknown) {
 function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
   return async (message) => {
     const state = stateGetter();
+    const getLiveTarget = async () => {
+      let target = await getLiveTarget();
+      if (target) {
+        const health = await checkTargetHealth(target);
+        if (!isHealthOk(health)) {
+          workspaceMatched = false;
+          currentTarget = undefined;
+          if (!offlineSince) {
+            offlineSince = Date.now();
+          }
+          target = undefined;
+        } else {
+          const refreshed = await targetRefresher(Date.now() + RESOLVE_RETRY_DELAY_MS);
+          return refreshed?.target ?? target;
+        }
+      }
+      const refreshed = await targetRefresher();
+      return refreshed?.target;
+    };
     if (message?.method === 'resources/read' && message?.params?.uri === HANDSHAKE_RESOURCE_URI) {
       logDebug('resources.read.handshake', { id: message.id ?? null });
       if (message.id === undefined || message.id === null) {
@@ -358,7 +377,7 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
         process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
         return;
       }
-      const target = targetGetter();
+      const target = await getLiveTarget();
       if (!target) {
         const resultPayload = {
           jsonrpc: '2.0',
@@ -376,6 +395,16 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
         method: 'resources/list',
         params: message?.params ?? {},
       });
+      if (!remote.ok) {
+        const retryHealth = await checkTargetHealth(target);
+        if (!isHealthOk(retryHealth)) {
+          workspaceMatched = false;
+          currentTarget = undefined;
+          if (!offlineSince) {
+            offlineSince = Date.now();
+          }
+        }
+      }
       const remoteResources = (remote.ok && (remote.data as { result?: { resources?: unknown[] } })?.result?.resources)
         ? (remote.data as { result: { resources: unknown[] } }).result.resources
         : [];
@@ -391,6 +420,63 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
         id: message.id,
         result: {
           resources: merged,
+        },
+      };
+      process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+      return;
+    }
+    if (message?.method === 'resources/templates/list') {
+      logDebug('resources.templates.list', { id: message.id ?? null });
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      if (!state.workspaceMatched) {
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            resourceTemplates: [],
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        return;
+      }
+      const target = await getLiveTarget();
+      if (!target) {
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            resourceTemplates: [],
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        return;
+      }
+      const remote = await requestTargetJson(target, {
+        jsonrpc: '2.0',
+        id: message.id,
+        method: 'resources/templates/list',
+        params: message?.params ?? {},
+      });
+      if (!remote.ok) {
+        const retryHealth = await checkTargetHealth(target);
+        if (!isHealthOk(retryHealth)) {
+          workspaceMatched = false;
+          currentTarget = undefined;
+          if (!offlineSince) {
+            offlineSince = Date.now();
+          }
+        }
+      }
+      const remoteTemplates = (remote.ok && (remote.data as { result?: { resourceTemplates?: unknown[] } })?.result?.resourceTemplates)
+        ? (remote.data as { result: { resourceTemplates: unknown[] } }).result.resourceTemplates
+        : [];
+      const resultPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          resourceTemplates: remoteTemplates,
         },
       };
       process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
@@ -419,7 +505,7 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
 
     if (message?.method === 'roots/list') {
       logDebug('roots.list.request', { id: message.id ?? null });
-      let target = targetGetter();
+      let target = await getLiveTarget();
       if (!target) {
         const now = Date.now();
         const graceDeadline = STARTUP_TIME + STARTUP_GRACE_MS;
@@ -484,7 +570,7 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
       return;
     }
     const payload = JSON.stringify(message);
-    let target = targetGetter();
+    let target = await getLiveTarget();
     if (!target) {
       const now = Date.now();
       const graceDeadline = STARTUP_TIME + STARTUP_GRACE_MS;

@@ -15,7 +15,7 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 
 The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed by `vscodeLmToolkit`.
 
-- Endpoint: `http://127.0.0.1:<port>/mcp` (host is fixed to `127.0.0.1`; port is the first available in `basePort..basePort+99`)
+- Endpoint: `http://127.0.0.1:48123/mcp` (host is fixed to `127.0.0.1`)
 - Tool names:
   - `vscodeLmToolkit`
   - `getVSCodeWorkspace` (call this first to confirm the workspace before using other tools)
@@ -29,10 +29,6 @@ The extension starts a local MCP Streamable HTTP server and exposes tools plus r
 Use `lm-tools://schema/{name}` to fetch input structure when needed.
 Resource list entries include `uri`, `name`, and `description` (no `title`) to minimize payload.
 
-### Manager (Windows)
-
-On Windows, the extension starts a lightweight Manager process (Named Pipe HTTP) to register active MCP instances via heartbeat. This enables Codex stdio proxies to resolve the correct VS Code instance by workspace. The Manager exits automatically when no instances remain.
-
 ### Default enabled tools
 
 By default, the following tools are enabled for MCP exposure (you can change this via the status bar or settings):
@@ -41,9 +37,8 @@ Workspace search/read/diagnostics:
 - `copilot_searchCodebase`
 - `copilot_searchWorkspaceSymbols`
 - `copilot_listCodeUsages`
-- `copilot_findFiles`
-- `copilot_findTextInFiles`
-- `copilot_readFile`
+- `lm_findFiles` (lm_ prefix indicates custom tool)
+- `lm_findTextInFiles` (lm_ prefix indicates custom tool)
 - `copilot_getErrors`
 - `copilot_readProjectStructure`
 - `copilot_getChangedFiles`
@@ -58,7 +53,7 @@ Terminal output read-only:
 
 ### Internal blacklist (always disabled)
 
-These tools are always hidden and cannot be enabled via settings:
+These tools are always hidden and cannot be configured or enabled via settings:
 
 - `copilot_applyPatch`
 - `copilot_insertEdit`
@@ -85,8 +80,20 @@ These tools are always hidden and cannot be enabled via settings:
 - `copilot_listDirectory`
 - `runSubagent`
 - `vscode_get_confirmation`
+- `vscode_get_terminal_confirmation`
 - `inline_chat_exit`
 - `copilot_getVSCodeAPI`
+- `get_terminal_output`
+- `terminal_selection`
+- `terminal_last_command`
+- `copilot_findTestFiles`
+- `copilot_getSearchResults`
+- `copilot_githubRepo`
+- `copilot_testFailure`
+- `copilot_getChangedFiles`
+- `copilot_findFiles`
+- `copilot_findTextInFiles`
+- `copilot_readFile`
 
 ### Tool input (vscodeLmToolkit)
 
@@ -143,12 +150,17 @@ Following these steps prevents validation errors such as missing `action` or sch
 ### Settings
 
 - `lmToolsBridge.server.autoStart` (default: true)
-- `lmToolsBridge.server.port` (default: 48123; base port for the 100-port scan range)
+- `lmToolsBridge.server.port` (default: 48123)
+- `lmToolsBridge.useWorkspaceSettings` (default: false; only honored in workspace settings; user/global settings are ignored; when enabled, workspace settings override user settings)
 - `lmToolsBridge.tools.enabled` (default: the list above)
-- `lmToolsBridge.tools.blacklist` (default: empty; comma-separated substrings, case-insensitive)
-- `lmToolsBridge.tools.schemaDefaults` (default: `{ "maxResults": 1000 }`; map of property names to default values injected into schemas and tool invocations when the caller omits them)
+- `lmToolsBridge.tools.blacklist` (default: empty array; user-configurable blacklist, combined with internal blacklist)
+- `lmToolsBridge.tools.blacklistPatterns` (default: empty string; pipe-delimited wildcard patterns like `*gitk|mcp_*|*a*`; uses `*`, is case-insensitive, and is combined with `tools.blacklist` and the internal blacklist; matches are enforced and do not appear in the blacklist picker)
+- `lmToolsBridge.tools.schemaDefaults` (default: `[ "lm_findTextInFiles.maxResults=500" ]`; list of `toolName.paramName=value` entries injected into schemas and tool invocations when the caller omits them; entries not in this format are ignored; values accept quoted strings (`"OK"`), `true`/`false`, numbers, or arrays written as `{a,b,c}` where each element is a quoted string, number, or boolean (whitespace allowed, empty elements allowed); unquoted strings are rejected; JSON is not accepted; example: `[ tool.param=1, tool.param="MyStr", tool.param=true, tool.param={6,4} ]`)
 - `lmToolsBridge.tools.responseFormat` (default: `text`; enum: `text` | `structured` | `both`; controls whether tool calls return text content, structuredContent, or both)
 - `lmToolsBridge.debug` (default: `off`; enum: `off` | `simple` | `detail`; controls log verbosity for tool calls)
+
+`lm_findTextInFiles` extra params:
+- `caseSensitive` (boolean): enable case-sensitive matching; when false, smart-case is used by default (including regex); regex inline flags can override this setting.
 
 ### Configure exposed tools
 
@@ -163,20 +175,25 @@ Following these steps prevents validation errors such as missing `action` or sch
 - The status menu includes **Help** (opens the GitHub README).
 - **Reload Window** triggers `Developer: Reload Window` to refresh the extension quickly.
 
+### Take over MCP server
+
+When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server` to stop the existing MCP server on the port and start it in the current instance.
+
 ### Status bar indicator
 
 The status bar shows the current-owner state:
 - `LM Tools Bridge: Current-owner` (this instance hosts the port)
+- `LM Tools Bridge: Other-owner` (another instance hosts the port)
 - `LM Tools Bridge: Off` (no server running)
 
-The tooltip includes the owner workspace path(s) and the MCP URL.
+The tooltip includes the owner workspace path(s) and the MCP URL. Click the status bar item to take over when this instance is not the current-owner.
 
 ### Logs
 
 Check Output -> `LM Tools Bridge` for MCP server logs.
 
 Debug levels:
-- `off`: only status logs (current-owner state + owner workspace path when known).
+- `off`: only status logs (current-owner state + owner workspace path when known). If other-owner and unknown, owner workspace is omitted.
 - `simple`: status logs + tool name/input + duration (ms) for listTools/getToolInfo/invokeTool.
 - `detail`: adds full tool outputs; if responseFormat is `structured` or `both`, logs structured content too.
 

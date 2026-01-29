@@ -1,31 +1,38 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
-import { TextDecoder } from 'node:util';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { getManagerPipeName } from './managerShared';
+import { TextDecoder } from 'node:util';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { rgPath } from '@vscode/ripgrep';
 import * as z from 'zod';
+import { getManagerPipeName } from './managerShared';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
 const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
+const TAKE_OVER_COMMAND_ID = 'lm-tools-bridge.takeOver';
 const CONFIGURE_COMMAND_ID = 'lm-tools-bridge.configureTools';
 const CONFIGURE_BLACKLIST_COMMAND_ID = 'lm-tools-bridge.configureBlacklist';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
 const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
 const CONFIG_SECTION = 'lmToolsBridge';
+const CONFIG_USE_WORKSPACE_SETTINGS = 'useWorkspaceSettings';
 const CONFIG_ENABLED_TOOLS = 'tools.enabled';
 const CONFIG_BLACKLIST = 'tools.blacklist';
+const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
+const FIND_FILES_TOOL_NAME = 'lm_findFiles';
+const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
+const CONTROL_STOP_PATH = '/mcp-control/stop';
+const CONTROL_STATUS_PATH = '/mcp-control/status';
 const HEALTH_PATH = '/mcp/health';
 const STATUS_REFRESH_INTERVAL_MS = 3000;
-const PORT_SCAN_RANGE = 100;
 const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
 const MANAGER_REQUEST_TIMEOUT_MS = 1500;
 const MANAGER_START_TIMEOUT_MS = 3000;
@@ -34,9 +41,8 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
-  'copilot_findFiles',
-  'copilot_findTextInFiles',
-  'copilot_readFile',
+  FIND_FILES_TOOL_NAME,
+  FIND_TEXT_IN_FILES_TOOL_NAME,
   'copilot_getErrors',
   'copilot_readProjectStructure',
   'copilot_getChangedFiles',
@@ -47,7 +53,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'terminal_selection',
   'terminal_last_command',
 ];
-const DEFAULT_BLACKLISTED_TOOL_NAMES = [
+const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'copilot_applyPatch',
   'copilot_insertEdit',
   'copilot_replaceString',
@@ -57,6 +63,7 @@ const DEFAULT_BLACKLISTED_TOOL_NAMES = [
   'copilot_createNewJupyterNotebook',
   'copilot_editNotebook',
   'copilot_runNotebookCell',
+  'copilot_readFile',
   'copilot_createNewWorkspace',
   'copilot_getVSCodeAPI',
   'copilot_installExtension',
@@ -74,12 +81,95 @@ const DEFAULT_BLACKLISTED_TOOL_NAMES = [
   'copilot_listDirectory',
   'runSubagent',
   'vscode_get_confirmation',
+  'vscode_get_terminal_confirmation',
   'inline_chat_exit',
+  'get_terminal_output',
+  'terminal_selection',
+  'terminal_last_command',
+  'copilot_findFiles',
+  'copilot_findTextInFiles',
+  'copilot_findTestFiles',
+  'copilot_getSearchResults',
+  'copilot_githubRepo',
+  'copilot_testFailure',
+  'copilot_getChangedFiles',
 ];
 
-const BUILTIN_SCHEMA_DEFAULTS: Record<string, unknown> = {
-  maxResults: 1000,
+type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;
+
+const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
+  'copilot_findTextInFiles.maxResults=500',
+  'lm_findTextInFiles.maxResults=500',
+];
+
+const COPILOT_FIND_FILES_DESCRIPTION = [
+  'Search for files in the workspace by glob pattern. This only returns the paths of matching files.',
+  'Use this tool when you know the exact filename pattern of the files you\'re searching for.',
+  'Glob patterns match from the root of the workspace folder. Examples:',
+  '- **/*.{js,ts} to match all js/ts files in the workspace.',
+  '- src/** to match all files under the top-level src folder.',
+  '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
+].join('\n');
+
+const COPILOT_FIND_FILES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    query: {
+      type: 'string',
+      description: 'Search for files with names or paths matching this glob pattern.',
+    },
+    maxResults: {
+      type: 'number',
+      description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
+    },
+  },
+  required: ['query'],
 };
+
+const COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION = [
+  'Do a fast text search in the workspace. Use this tool when you want to search with an exact string or regex.',
+  'If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.',
+  'For example, use \'function|method|procedure\' to look for all of those words at once.',
+  'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
+  'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
+  'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
+  'When caseSensitive is false, smart-case is used by default (including regex searches). Set caseSensitive to true to force case-sensitive matching.',
+  'Use this tool when you want to see an overview of a particular file, instead of using read_file many times to look for code within a file.',
+].join('\n');
+
+const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    query: {
+      type: 'string',
+      description: 'The pattern to search for in files in the workspace. Use regex with alternation (e.g., \'word1|word2|word3\') or character classes to find multiple potential words in a single search. Be sure to set the isRegexp property properly to declare whether it\'s a regex or plain text pattern. When caseSensitive is false, smart-case is used by default. If you need case-sensitive matching, set caseSensitive to true or use a regex pattern with an inline case-sensitivity flag.',
+    },
+    caseSensitive: {
+      type: 'boolean',
+      description: 'Whether the search should be case-sensitive. When false, smart-case is used by default (including regex). Regex inline flags can override this setting.',
+    },
+    isRegexp: {
+      type: 'boolean',
+      description: 'Whether the pattern is a regex.',
+    },
+    includePattern: {
+      type: 'string',
+      description: 'Search files matching this glob pattern. Will be applied to the relative path of files within the workspace. To search recursively inside a folder, use a proper glob pattern like "src/folder/**". Do not use | in includePattern.',
+    },
+    maxResults: {
+      type: 'number',
+      description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
+      default: 500,
+    },
+    includeIgnoredFiles: {
+      type: 'boolean',
+      description: 'Whether to include files that would normally be ignored according to .gitignore, other ignore files and `files.exclude` and `search.exclude` settings. Warning: using this may cause the search to be slower. Only set it when you want to search in ignored folders like node_modules or build outputs.',
+    },
+  },
+  required: ['query', 'isRegexp'],
+};
+
+const schemaDefaultOverrideWarnings = new Set<string>();
 
 type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
@@ -93,6 +183,20 @@ interface ToolkitInput {
   input?: unknown;
 }
 
+interface CustomToolInformation {
+  name: string;
+  description: string;
+  tags: string[];
+  inputSchema: unknown;
+  isCustom: true;
+}
+
+interface CustomToolDefinition extends CustomToolInformation {
+  invoke: (input: Record<string, unknown>) => Promise<unknown>;
+}
+
+type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
+
 interface ServerConfig {
   autoStart: boolean;
   host: string;
@@ -103,11 +207,10 @@ interface McpServerState {
   server: http.Server;
   host: string;
   port: number;
-  basePort: number;
   ownerWorkspacePath: string;
 }
 
-type OwnershipState = 'current-owner' | 'off';
+type OwnershipState = 'current-owner' | 'other-owner' | 'off';
 interface OwnershipInfo {
   state: OwnershipState;
   ownerWorkspacePath?: string;
@@ -118,7 +221,11 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
 let helpUrl: string | undefined;
 let statusRefreshTimer: NodeJS.Timeout | undefined;
+let lastOwnershipState: OwnershipState | undefined;
+let lastOwnerWorkspacePath: string | undefined;
+let lastRemoteStatusResult: 'success' | 'failure' | undefined;
 let lastStatusLogMessage: string | undefined;
+let workspaceSettingWarningEmitted = false;
 let extensionContext: vscode.ExtensionContext | undefined;
 let managerHeartbeatTimer: NodeJS.Timeout | undefined;
 let managerHeartbeatInFlight = false;
@@ -149,6 +256,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const statusMenuCommand = vscode.commands.registerCommand(STATUS_MENU_COMMAND_ID, () => {
     void showStatusMenu(outputChannel);
   });
+  const takeOverCommand = vscode.commands.registerCommand(TAKE_OVER_COMMAND_ID, () => {
+    void handleTakeOverCommand(outputChannel);
+  });
   const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration(CONFIG_SECTION)) {
       return;
@@ -172,6 +282,7 @@ export function activate(context: vscode.ExtensionContext): void {
     configureBlacklistCommand,
     helpCommand,
     statusMenuCommand,
+    takeOverCommand,
     configWatcher,
     workspaceWatcher,
     { dispose: () => { void stopMcpServer(outputChannel); } },
@@ -241,11 +352,10 @@ function showEnabledToolsDump(channel: vscode.OutputChannel): void {
 }
 
 function getServerConfig(): ServerConfig {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   return {
-    autoStart: config.get<boolean>('server.autoStart', true),
+    autoStart: getConfigValue<boolean>('server.autoStart', true),
     host: DEFAULT_HOST,
-    port: config.get<number>('server.port', DEFAULT_PORT),
+    port: getConfigValue<number>('server.port', DEFAULT_PORT),
   };
 }
 
@@ -253,37 +363,22 @@ function getConfigurationResource(): vscode.Uri | undefined {
   return vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
 }
 
-function getToolsConfiguration(): vscode.WorkspaceConfiguration {
-  return vscode.workspace.getConfiguration(CONFIG_SECTION, getConfigurationResource());
-}
-
-function getWorkspaceFolderForResource(resource?: vscode.Uri): vscode.WorkspaceFolder | undefined {
-  if (resource) {
-    const folder = vscode.workspace.getWorkspaceFolder(resource);
-    if (folder) {
-      return folder;
-    }
-  }
-  return vscode.workspace.workspaceFolders?.[0];
-}
-
-async function hasWorkspaceSettingsFile(resource?: vscode.Uri): Promise<boolean> {
-  const folder = getWorkspaceFolderForResource(resource);
-  if (!folder) {
-    return false;
-  }
-  const settingsUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'settings.json');
-  try {
-    await vscode.workspace.fs.stat(settingsUri);
+function isWorkspaceSettingsEnabled(resource?: vscode.Uri): boolean {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const inspection = config.inspect<boolean>(CONFIG_USE_WORKSPACE_SETTINGS);
+  const workspaceValue = inspection?.workspaceFolderValue ?? inspection?.workspaceValue;
+  if (workspaceValue === true) {
     return true;
-  } catch {
-    return false;
   }
+  if (!workspaceSettingWarningEmitted && inspection?.globalValue === true) {
+    workspaceSettingWarningEmitted = true;
+    logWarn('lmToolsBridge.useWorkspaceSettings is set in User settings but is only honored in Workspace settings.');
+  }
+  return false;
 }
 
 async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.ConfigurationTarget> {
-  const hasWorkspaceSettings = await hasWorkspaceSettingsFile(resource);
-  if (!hasWorkspaceSettings) {
+  if (!isWorkspaceSettingsEnabled(resource)) {
     return vscode.ConfigurationTarget.Global;
   }
   if (vscode.workspace.workspaceFile) {
@@ -292,20 +387,80 @@ async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.C
   return vscode.ConfigurationTarget.Workspace;
 }
 
+function getConfigValue<T>(key: string, fallback: T): T {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  if (isWorkspaceSettingsEnabled(resource)) {
+    return config.get<T>(key, fallback);
+  }
+  const inspection = config.inspect<T>(key);
+  if (!inspection) {
+    return fallback;
+  }
+  if (inspection.globalValue !== undefined) {
+    return inspection.globalValue as T;
+  }
+  if (inspection.defaultValue !== undefined) {
+    return inspection.defaultValue as T;
+  }
+  return fallback;
+}
+
 function getEnabledToolsSetting(): string[] {
-  const config = getToolsConfiguration();
-  const enabled = config.get<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
+  const enabled = getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
   return Array.isArray(enabled) ? enabled.filter((name) => typeof name === 'string') : [];
 }
 
 function getBlacklistedToolsSetting(): string[] {
-  const config = getToolsConfiguration();
-  const blacklisted = config.get<string[]>(CONFIG_BLACKLIST, DEFAULT_BLACKLISTED_TOOL_NAMES);
+  const blacklisted = getConfigValue<string[]>(CONFIG_BLACKLIST, []);
   return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
 }
 
-function isToolBlacklisted(name: string, blacklistedSet: ReadonlySet<string>): boolean {
-  return blacklistedSet.has(name);
+function getBlacklistedToolPatterns(): string[] {
+  const rawPatterns = getConfigValue<string>(CONFIG_BLACKLIST_PATTERNS, '');
+  if (!rawPatterns) {
+    return [];
+  }
+  return rawPatterns
+    .split('|')
+    .map((pattern) => pattern.trim())
+    .filter((pattern) => pattern.length > 0);
+}
+
+function compileBlacklistPatterns(patterns: readonly string[]): RegExp[] {
+  const compiled: RegExp[] = [];
+  for (const pattern of patterns) {
+    const escaped = escapeRegExp(pattern).replace(/\\\*/g, '.*');
+    try {
+      compiled.push(new RegExp(`^${escaped}$`, 'i'));
+    } catch {
+      // Ignore invalid patterns.
+    }
+  }
+  return compiled;
+}
+
+function matchesBlacklistPattern(name: string, patterns: readonly RegExp[]): boolean {
+  for (const pattern of patterns) {
+    if (pattern.test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isToolBlacklisted(
+  name: string,
+  blacklistedSet: ReadonlySet<string>,
+  blacklistPatterns: readonly RegExp[],
+): boolean {
+  return BUILTIN_BLACKLISTED_TOOL_NAMES.includes(name)
+    || blacklistedSet.has(name)
+    || matchesBlacklistPattern(name, blacklistPatterns);
 }
 
 async function setEnabledTools(enabled: string[]): Promise<void> {
@@ -335,7 +490,7 @@ async function resetEnabledTools(): Promise<void> {
 }
 
 async function resetBlacklistedTools(): Promise<boolean> {
-  return setBlacklistedTools([...DEFAULT_BLACKLISTED_TOOL_NAMES]);
+  return setBlacklistedTools([]);
 }
 
 async function configureExposedTools(): Promise<void> {
@@ -345,9 +500,9 @@ async function configureExposedTools(): Promise<void> {
     return;
   }
 
-  const allTools = getAllLmToolsSnapshot();
+  const allTools = getAllToolsSnapshot();
   if (allTools.length === 0) {
-    void vscode.window.showInformationMessage('No tools found in vscode.lm.tools.');
+    void vscode.window.showInformationMessage('No tools found for MCP exposure.');
     return;
   }
   const tools = getVisibleToolsSnapshot();
@@ -420,17 +575,24 @@ async function configureBlacklistedTools(): Promise<void> {
   }
 
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
+  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
   const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
 
   items.push({
     label: '$(refresh) Reset (default blacklist)',
-    description: 'Restore the default blacklist',
+    description: 'Clear the configured blacklist',
     alwaysShow: true,
     isReset: true,
   });
   items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
 
   for (const tool of tools) {
+    if (BUILTIN_BLACKLISTED_TOOL_NAMES.includes(tool.name)) {
+      continue;
+    }
+    if (matchesBlacklistPattern(tool.name, blacklistPatterns)) {
+      continue;
+    }
     items.push({
       label: tool.name,
       description: tool.description,
@@ -456,8 +618,8 @@ async function configureBlacklistedTools(): Promise<void> {
   if (shouldReset) {
     const removed = await resetBlacklistedTools();
     const message = removed
-      ? 'Blacklisted tools reset to defaults and removed from enabled list.'
-      : 'Blacklisted tools reset to defaults.';
+      ? 'Blacklisted tools cleared and removed from enabled list.'
+      : 'Blacklisted tools cleared.';
     void vscode.window.showInformationMessage(message);
     return;
   }
@@ -475,6 +637,44 @@ async function configureBlacklistedTools(): Promise<void> {
   void vscode.window.showInformationMessage(message);
 }
 
+async function takeOverMcpServer(channel: vscode.OutputChannel): Promise<void> {
+  const config = getServerConfig();
+  if (serverState && serverState.host === config.host && serverState.port === config.port) {
+    void vscode.window.showInformationMessage('MCP server is already running in this VS Code instance.');
+    return;
+  }
+
+  logStatusInfo(`Take over MCP server (${config.host}:${config.port})`);
+  const stopResult = await requestRemoteStop(config.host, config.port);
+  if (!stopResult) {
+    logStatusWarn('No remote MCP server responded to stop request (or it is not updated yet).');
+  }
+
+  const started = await startMcpServerWithRetry(channel, config.host, config.port, 6, 400);
+  if (!started) {
+    void vscode.window.showWarningMessage('Failed to take over MCP server. Port may still be in use.');
+  }
+}
+
+async function handleTakeOverCommand(channel: vscode.OutputChannel): Promise<void> {
+  const state = await getOwnershipState();
+  if (state.state === 'current-owner') {
+    void vscode.window.showInformationMessage('This VS Code instance is the current-owner of the MCP server.');
+    return;
+  }
+
+  const selection = await vscode.window.showWarningMessage(
+    'This VS Code instance is not the current-owner of the MCP server. Take over control?',
+    { modal: true },
+    'Take Over',
+  );
+  if (selection !== 'Take Over') {
+    return;
+  }
+
+  await takeOverMcpServer(channel);
+}
+
 async function reconcileServerState(channel: vscode.OutputChannel): Promise<void> {
   const config = getServerConfig();
   if (!config.autoStart) {
@@ -489,56 +689,68 @@ async function reconcileServerState(channel: vscode.OutputChannel): Promise<void
     return;
   }
 
-  if (serverState.host !== config.host || serverState.basePort !== config.port) {
+  if (serverState.host !== config.host || serverState.port !== config.port) {
     await stopMcpServer(channel);
     await startMcpServer(channel);
     await refreshStatusBar();
   }
 }
 
-async function startMcpServer(channel: vscode.OutputChannel): Promise<boolean> {
+async function startMcpServer(
+  channel: vscode.OutputChannel,
+  override?: { host: string; port: number; suppressPortInUseLog?: boolean },
+): Promise<boolean> {
   if (serverState) {
     logStatusInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
     updateStatusBar({ state: 'current-owner', ownerWorkspacePath: serverState.ownerWorkspacePath });
     return true;
   }
 
-  const config = getServerConfig();
-  const { host } = config;
-  const basePort = config.port;
+  const config = override ?? getServerConfig();
+  const { host, port } = config;
+  const suppressPortInUseLog = override?.suppressPortInUseLog ?? false;
   const ownerWorkspacePath = getOwnerWorkspacePath();
-  const portsToTry = Array.from({ length: PORT_SCAN_RANGE }, (_, index) => basePort + index);
-  for (const port of portsToTry) {
-    const server = http.createServer((req, res) => {
-      void handleMcpHttpRequest(req, res, channel);
+  const server = http.createServer((req, res) => {
+    void handleMcpHttpRequest(req, res, channel);
+  });
+
+  const started = await new Promise<boolean>((resolve) => {
+    server.once('error', (error) => {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'EADDRINUSE') {
+        if (!suppressPortInUseLog) {
+          logStatusWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
+          logStatusWarn('Use "LM Tools Bridge: Take Over Server" to reclaim the port.');
+        }
+        updateStatusBar({ state: 'other-owner' });
+      } else {
+        logStatusError(`Failed to start MCP server: ${String(error)}`);
+        updateStatusBar({ state: 'off' });
+      }
+      try {
+        server.close();
+      } catch {
+        // Ignore close errors.
+      }
+      resolve(false);
     });
-    const result = await listenOnPort(server, host, port);
-    if (result === 'in-use') {
-      continue;
-    }
-    if (result === 'error') {
-      continue;
-    }
+    server.listen(port, host, () => {
+      serverState = {
+        server,
+        host,
+        port,
+        ownerWorkspacePath,
+      };
+      logStatusInfo(`MCP server listening at http://${host}:${port}/mcp`);
+      updateStatusBar({ state: 'current-owner', ownerWorkspacePath });
+      resolve(true);
+    });
+  });
 
-    serverState = {
-      server,
-      host,
-      port,
-      basePort,
-      ownerWorkspacePath,
-    };
-    if (port !== basePort) {
-      logStatusInfo(`Base port ${basePort} is in use. Selected port ${port} instead.`);
-    }
-    logStatusInfo(`MCP server listening at http://${host}:${port}/mcp`);
-    updateStatusBar({ state: 'current-owner', ownerWorkspacePath });
+  if (started) {
     await startManagerHeartbeat();
-    return true;
   }
-
-  logStatusError(`No available port found in range ${basePort}-${basePort + PORT_SCAN_RANGE - 1}.`);
-  updateStatusBar({ state: 'off' });
-  return false;
+  return started;
 }
 
 async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
@@ -566,6 +778,16 @@ async function handleMcpHttpRequest(
   const requestUrl = getRequestUrl(req);
   if (!requestUrl) {
     respondJson(res, 400, { error: 'Bad Request' });
+    return;
+  }
+
+  if (requestUrl.pathname === CONTROL_STOP_PATH) {
+    await handleControlStop(req, res, channel);
+    return;
+  }
+
+  if (requestUrl.pathname === CONTROL_STATUS_PATH) {
+    await handleControlStatus(req, res);
     return;
   }
 
@@ -611,34 +833,151 @@ async function handleMcpHttpRequest(
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+async function handleControlStop(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  channel: vscode.OutputChannel,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    respondJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  respondJson(res, 200, { ok: true });
+  logStatusInfo('Received MCP take-over request, shutting down server.');
+  setImmediate(() => {
+    void stopMcpServer(channel);
   });
 }
 
-async function listenOnPort(server: http.Server, host: string, port: number): Promise<'started' | 'in-use' | 'error'> {
+async function handleControlStatus(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    respondJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  respondJson(res, 200, {
+    ownerWorkspacePath: serverState?.ownerWorkspacePath ?? null,
+  });
+}
+
+async function startMcpServerWithRetry(
+  channel: vscode.OutputChannel,
+  host: string,
+  port: number,
+  attempts: number,
+  delayMs: number,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const started = await startMcpServer(channel, { host, port, suppressPortInUseLog: true });
+    if (started) {
+      return true;
+    }
+    await delay(delayMs);
+  }
+
+  return false;
+}
+
+function requestRemoteStop(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    server.once('error', (error) => {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'EADDRINUSE') {
-        try {
-          server.close();
-        } catch {
-          // Ignore close errors.
-        }
-        resolve('in-use');
-        return;
-      }
-      logStatusWarn(`Failed to start MCP server on ${host}:${port}: ${String(error)}`);
-      try {
-        server.close();
-      } catch {
-        // Ignore close errors.
-      }
-      resolve('error');
+    const request = http.request(
+      {
+        host,
+        port,
+        path: CONTROL_STOP_PATH,
+        method: 'POST',
+      },
+      (response) => {
+        response.resume();
+        const ok = response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300;
+        resolve(ok);
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      request.destroy(new Error('Timeout'));
+    }, 1500);
+
+    request.on('error', () => {
+      clearTimeout(timeout);
+      resolve(false);
     });
-    server.listen(port, host, () => resolve('started'));
+    request.on('close', () => {
+      clearTimeout(timeout);
+    });
+    request.end();
+  });
+}
+
+function requestRemoteStatus(host: string, port: number): Promise<{ ownerWorkspacePath?: string } | undefined> {
+  return new Promise((resolve) => {
+    const request = http.request(
+      {
+        host,
+        port,
+        path: CONTROL_STATUS_PATH,
+        method: 'GET',
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.from(chunk));
+        });
+        response.on('end', () => {
+          if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+            if (lastRemoteStatusResult !== 'failure') {
+              logStatusWarn(`Port status read failed (${host}:${port})`);
+              lastRemoteStatusResult = 'failure';
+            }
+            resolve(undefined);
+            return;
+          }
+          try {
+            const text = Buffer.concat(chunks).toString('utf8');
+            const parsed = JSON.parse(text) as { ownerWorkspacePath?: string | null };
+            lastRemoteStatusResult = 'success';
+            resolve({
+              ownerWorkspacePath: parsed.ownerWorkspacePath ?? undefined,
+            });
+          } catch {
+            if (lastRemoteStatusResult !== 'failure') {
+              logStatusWarn(`Port status read failed (${host}:${port})`);
+              lastRemoteStatusResult = 'failure';
+            }
+            resolve(undefined);
+          }
+        });
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      request.destroy(new Error('Timeout'));
+    }, 1500);
+
+    request.on('error', () => {
+      clearTimeout(timeout);
+      if (lastRemoteStatusResult !== 'failure') {
+        logStatusWarn(`Port status read failed (${host}:${port})`);
+        lastRemoteStatusResult = 'failure';
+      }
+      resolve(undefined);
+    });
+    request.on('close', () => {
+      clearTimeout(timeout);
+    });
+    request.end();
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 
@@ -1011,16 +1350,26 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
         const input = args.input ?? {};
         if (!isPlainObject(input)) {
           return toolErrorResultPayload({
-            error: 'Tool input must be an object (not a JSON string). Use lm-tools://schema/{name} for the expected shape.',
+            error: 'Tool input must be an object. Use lm-tools://schema/{name} for the expected shape.',
             name: tool.name,
             inputSchema: tool.inputSchema ?? null,
           });
         }
-        const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema);
+        const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema, tool.name);
         debugInvokeInput = normalizedInput;
         let outputText: string | undefined;
         let structuredOutput: { blocks: unknown[] } | undefined;
         try {
+          if (isCustomTool(tool)) {
+            const result = await tool.invoke(normalizedInput);
+            const serialized = serializeToolResult(result as vscode.LanguageModelToolResult);
+            outputText = serializedToolResultToText(serialized);
+            structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+            debugOutputText = outputText;
+            debugStructuredOutput = structuredOutput;
+            return buildToolResult(structuredOutput, false, outputText);
+          }
+
           const result = await lm.invokeTool(tool.name, {
             input: normalizedInput,
             toolInvocationToken: undefined,
@@ -1228,7 +1577,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!tool) {
         return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
       }
-      return resourceJson(uri.toString(), { name: tool.name, inputSchema: applySchemaDefaults(tool.inputSchema ?? null) });
+      return resourceJson(uri.toString(), { name: tool.name, inputSchema: buildToolInputSchema(tool) });
     },
   );
 
@@ -1391,7 +1740,7 @@ function toolListToText(tools: readonly unknown[]): string {
   return entries.join('\n');
 }
 
-function formatToolNameList(tools: readonly vscode.LanguageModelToolInformation[]): string {
+function formatToolNameList(tools: readonly ExposedTool[]): string {
   const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
   return orderedTools.map((tool) => tool.name).join('\n');
 }
@@ -1488,7 +1837,7 @@ function resourceJson(uri: string, payload: unknown) {
   };
 }
 
-function listToolsPayload(tools: readonly vscode.LanguageModelToolInformation[], detail: ToolDetail) {
+function listToolsPayload(tools: readonly ExposedTool[], detail: ToolDetail) {
   const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
   if (detail === 'names') {
     return { tools: orderedTools.map((tool) => tool.name) };
@@ -1528,23 +1877,50 @@ function patchFindTextInFilesSchema(schema: unknown): unknown {
   };
 }
 
-function toolInfoPayload(tool: vscode.LanguageModelToolInformation, detail: ToolDetail) {
+function patchFindFilesSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return schema;
+  }
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return schema;
+  }
+  const propRecord = properties as Record<string, unknown>;
+  if (!propRecord.query) {
+    return schema;
+  }
+  return schema;
+}
+
+function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
   if (detail === 'names') {
     return {
       name: tool.name,
     };
   }
-  const inputSchema = applySchemaDefaults(tool.inputSchema ?? null);
+  const inputSchema = buildToolInputSchema(tool);
 
   return {
     name: tool.name,
     description: tool.description,
     tags: tool.tags,
-    inputSchema: tool.name === 'copilot_findTextInFiles' ? patchFindTextInFilesSchema(inputSchema) : inputSchema,
+    inputSchema,
     toolUri: getToolUri(tool.name),
     schemaUri: getSchemaUri(tool.name),
     usageHint: getToolUsageHint(tool),
   };
+}
+
+function buildToolInputSchema(tool: ExposedTool): unknown {
+  let inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
+  if (tool.name === 'copilot_findTextInFiles' || tool.name === FIND_TEXT_IN_FILES_TOOL_NAME) {
+    inputSchema = patchFindTextInFilesSchema(inputSchema);
+  }
+  if (tool.name === FIND_FILES_TOOL_NAME) {
+    inputSchema = patchFindFilesSchema(inputSchema);
+  }
+  return inputSchema;
 }
 
 function serializeToolResult(result: vscode.LanguageModelToolResult): Array<Record<string, unknown>> {
@@ -1661,6 +2037,435 @@ function normalizeFindTextInFilesText(text: string): string {
   return [...lines, ...matches.map((item) => item.raw)].join('\n');
 }
 
+type RipgrepMatch = {
+  path: string;
+  line: number;
+  preview: string;
+};
+
+type RipgrepSearchResult = {
+  matches: RipgrepMatch[];
+  totalMatches: number;
+  capped: boolean;
+};
+
+function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
+  const inputSchema = COPILOT_FIND_TEXT_IN_FILES_SCHEMA;
+  const description = COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION;
+  return {
+    name: FIND_TEXT_IN_FILES_TOOL_NAME,
+    description,
+    tags: [],
+    inputSchema,
+    isCustom: true,
+    invoke: runFindTextInFilesTool,
+  };
+}
+
+function buildFindFilesToolDefinition(): CustomToolDefinition {
+  const inputSchema = COPILOT_FIND_FILES_SCHEMA;
+  const description = COPILOT_FIND_FILES_DESCRIPTION;
+  return {
+    name: FIND_FILES_TOOL_NAME,
+    description,
+    tags: [],
+    inputSchema,
+    isCustom: true,
+    invoke: runFindFilesTool,
+  };
+}
+
+async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  try {
+    const payload = await executeFindTextInFilesSearch(input);
+    const text = safePrettyStringify(payload);
+    return {
+      content: [new vscode.LanguageModelTextPart(text)],
+    };
+  } catch (error) {
+    const message = String(error);
+    return {
+      content: [new vscode.LanguageModelTextPart(message)],
+    };
+  }
+}
+
+async function runFindFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  try {
+    const payload = await executeFindFilesSearch(input);
+    const text = safePrettyStringify(payload);
+    return {
+      content: [new vscode.LanguageModelTextPart(text)],
+    };
+  } catch (error) {
+    const message = String(error);
+    return {
+      content: [new vscode.LanguageModelTextPart(message)],
+    };
+  }
+}
+
+async function executeFindTextInFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const queryValue = input.query;
+  if (typeof queryValue !== 'string') {
+    throw new Error('query must be a string');
+  }
+  const isRegexp = input.isRegexp === true;
+  const caseSensitive = input.caseSensitive === true;
+  const includeIgnoredFiles = input.includeIgnoredFiles === true;
+  const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
+    ? input.maxResults
+    : undefined;
+
+  const combinedMatches: RipgrepMatch[] = [];
+  const seen = new Set<string>();
+  let totalCount = 0;
+  let capped = false;
+  let remaining = maxResults ?? Number.POSITIVE_INFINITY;
+
+  const targets = resolveRipgrepTargets(input.includePattern);
+  for (const target of targets) {
+    if (remaining <= 0) {
+      capped = true;
+      break;
+    }
+    const result = await runRipgrepSearch(target, {
+      query: queryValue,
+      isRegexp,
+      caseSensitive,
+      includeIgnoredFiles,
+      maxResults: maxResults !== undefined ? remaining : undefined,
+    });
+    capped = capped || result.capped;
+    totalCount += result.totalMatches;
+    for (const match of result.matches) {
+      const key = `${match.path}:${match.line}:${match.preview}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      combinedMatches.push(match);
+    }
+    if (maxResults !== undefined) {
+      remaining = Math.max(0, maxResults - totalCount);
+    }
+  }
+
+  return {
+    capped,
+    uniqueMatches: combinedMatches.length,
+    totalMatches: totalCount,
+    matches: combinedMatches,
+  };
+}
+
+async function executeFindFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const queryValue = input.query;
+  if (typeof queryValue !== 'string') {
+    throw new Error('query must be a string');
+  }
+  const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
+    ? input.maxResults
+    : undefined;
+  const includePattern = normalizeFindTextInFilesIncludeEntry(queryValue);
+  const uris = await vscode.workspace.findFiles(includePattern, null, maxResults);
+  const matched: string[] = [];
+  const seen = new Set<string>();
+  for (const uri of uris) {
+    const rel = formatSearchMatchPath(uri);
+    if (seen.has(rel)) {
+      continue;
+    }
+    seen.add(rel);
+    matched.push(rel);
+  }
+
+  return {
+    count: matched.length,
+    files: matched,
+  };
+}
+
+function formatSearchMatchPath(uri: vscode.Uri): string {
+  return uri.fsPath;
+}
+
+function resolveRipgrepTargets(
+  includePattern: unknown,
+): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) {
+    return [];
+  }
+  if (typeof includePattern !== 'string') {
+    return folders.map((folder) => ({ folder }));
+  }
+  const trimmed = includePattern.trim();
+  if (!trimmed) {
+    return folders.map((folder) => ({ folder }));
+  }
+  const parsed = parseWorkspacePrefixedIncludePattern(trimmed);
+  if (parsed) {
+    return [{ folder: parsed.workspaceFolder, glob: parsed.pattern }];
+  }
+  return folders.map((folder) => ({ folder, glob: trimmed }));
+}
+
+async function runRipgrepSearch(
+  target: { folder: vscode.WorkspaceFolder; glob?: string },
+  options: {
+    query: string;
+    isRegexp: boolean;
+    caseSensitive: boolean;
+    includeIgnoredFiles: boolean;
+    maxResults?: number;
+  },
+): Promise<RipgrepSearchResult> {
+  const matches: RipgrepMatch[] = [];
+  let totalMatches = 0;
+  let capped = false;
+  let stdoutBuffer = '';
+  const stderrChunks: string[] = [];
+  const args = buildRipgrepArgs(target, options);
+  const maxResults = options.maxResults;
+  const pushMatch = (match: RipgrepMatch) => {
+    if (maxResults !== undefined && totalMatches >= maxResults) {
+      return;
+    }
+    totalMatches += 1;
+    matches.push(match);
+    if (maxResults !== undefined && totalMatches >= maxResults && !capped) {
+      capped = true;
+      try {
+        child.kill();
+      } catch {
+        // Ignore kill failures.
+      }
+    }
+  };
+
+  const child = spawn(rgPath, args, {
+    cwd: target.folder.uri.fsPath,
+    windowsHide: true,
+  });
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString('utf8');
+    stdoutBuffer = consumeRipgrepLines(stdoutBuffer, (line) => {
+      const match = parseRipgrepMatch(line, target.folder);
+      if (!match) {
+        return;
+      }
+      pushMatch(match);
+    });
+  });
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString('utf8'));
+  });
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', (error) => reject(error));
+    child.on('close', (code) => resolve(code));
+  });
+
+  if (stdoutBuffer.length > 0) {
+    consumeRipgrepLines(stdoutBuffer, (line) => {
+      const match = parseRipgrepMatch(line, target.folder);
+      if (!match) {
+        return;
+      }
+      pushMatch(match);
+    });
+  }
+
+  if (exitCode !== 0 && exitCode !== 1 && exitCode !== 2 && !capped) {
+    const stderrText = stderrChunks.join('').trim();
+    throw new Error(stderrText || `ripgrep exited with code ${exitCode ?? 'null'}`);
+  }
+
+  return {
+    matches,
+    totalMatches,
+    capped,
+  };
+}
+
+function consumeRipgrepLines(buffer: string, onLine: (line: string) => void): string {
+  let start = 0;
+  let index = buffer.indexOf('\n', start);
+  while (index !== -1) {
+    const line = buffer.slice(start, index).trim();
+    if (line.length > 0) {
+      onLine(line);
+    }
+    start = index + 1;
+    index = buffer.indexOf('\n', start);
+  }
+  return buffer.slice(start);
+}
+
+function parseRipgrepMatch(line: string, folder: vscode.WorkspaceFolder): RipgrepMatch | undefined {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const record = payload as { type?: unknown; data?: unknown };
+  if (record.type !== 'match' || !record.data || typeof record.data !== 'object') {
+    return undefined;
+  }
+  const data = record.data as {
+    path?: { text?: string };
+    lines?: { text?: string };
+    line_number?: number;
+  };
+  const relPath = data.path?.text;
+  const previewText = data.lines?.text;
+  const lineNumber = data.line_number;
+  if (!relPath || previewText === undefined || typeof lineNumber !== 'number') {
+    return undefined;
+  }
+  let normalizedRelPath = relPath.replace(/\\/g, '/');
+  normalizedRelPath = normalizedRelPath.replace(/^\.\//u, '').replace(/\/\.\//g, '/');
+  const absolutePath = path.isAbsolute(relPath)
+    ? relPath
+    : path.resolve(folder.uri.fsPath, normalizedRelPath);
+  const preview = previewText.replace(/\r\n/g, '\n').trimEnd();
+  return {
+    path: absolutePath,
+    line: lineNumber,
+    preview,
+  };
+}
+
+function buildRipgrepArgs(
+  target: { folder: vscode.WorkspaceFolder; glob?: string },
+  options: { query: string; isRegexp: boolean; caseSensitive: boolean; includeIgnoredFiles: boolean },
+): string[] {
+  const args: string[] = ['--json', '--with-filename', '--line-number', '--no-messages'];
+
+  if (!options.isRegexp) {
+    if (options.caseSensitive) {
+      args.push('--case-sensitive');
+    } else {
+      args.push('--smart-case');
+    }
+    args.push('--fixed-strings');
+  } else if (options.caseSensitive) {
+    args.push('--case-sensitive');
+  } else {
+    args.push('--smart-case');
+  }
+
+  const searchConfig = vscode.workspace.getConfiguration('search', target.folder.uri);
+  const filesConfig = vscode.workspace.getConfiguration('files', target.folder.uri);
+  const useIgnoreFiles = searchConfig.get<boolean>('useIgnoreFiles', true);
+  const useGlobalIgnoreFiles = searchConfig.get<boolean>('useGlobalIgnoreFiles', true);
+  const followSymlinks = searchConfig.get<boolean>('followSymlinks', true);
+
+  if (options.includeIgnoredFiles || !useIgnoreFiles) {
+    args.push('--no-ignore', '--no-ignore-parent');
+  }
+  if (options.includeIgnoredFiles || !useGlobalIgnoreFiles) {
+    args.push('--no-ignore-global');
+  }
+  if (followSymlinks) {
+    args.push('--follow');
+  }
+
+  if (!options.includeIgnoredFiles) {
+    const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
+    const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+    const excludePatterns = new Set<string>();
+    for (const pattern of [...searchExclude, ...filesExclude]) {
+      const normalized = normalizeGlob(pattern);
+      if (!normalized) {
+        continue;
+      }
+      excludePatterns.add(normalized.startsWith('!') ? normalized : `!${normalized}`);
+      if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
+        const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
+        excludePatterns.add(withChildren.startsWith('!') ? withChildren : `!${withChildren}`);
+      }
+    }
+    for (const pattern of excludePatterns) {
+      args.push('--glob', pattern);
+    }
+  }
+
+  if (target.glob) {
+    args.push('--glob', normalizeGlob(target.glob));
+  }
+
+  args.push('-e', options.query, '.');
+  return args;
+}
+
+function collectExcludeGlobs(values: Record<string, unknown>): string[] {
+  return Object.entries(values)
+    .filter(([, value]) => value === true || (typeof value === 'object' && value !== null))
+    .map(([pattern]) => pattern);
+}
+
+function normalizeGlob(pattern: string): string {
+  return pattern.replace(/\\/g, '/');
+}
+
+function normalizeFindTextInFilesIncludeEntry(entry: string): vscode.GlobPattern {
+  const parsed = parseWorkspacePrefixedIncludePattern(entry);
+  if (!parsed) {
+    return entry;
+  }
+  return new vscode.RelativePattern(parsed.workspaceFolder.uri, parsed.pattern);
+}
+
+function parseWorkspacePrefixedIncludePattern(entry: string): {
+  workspaceFolder: vscode.WorkspaceFolder;
+  pattern: string;
+} | undefined {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (path.isAbsolute(trimmed) || startsWithWindowsAbsolutePath(trimmed)) {
+    return undefined;
+  }
+  const withoutDotPrefix = trimmed.replace(/^\.[\\/]+/u, '');
+  const normalized = withoutDotPrefix.replace(/^[\\/]+/u, '');
+  const separatorIndex = normalized.search(/[\\/]/u);
+  const workspaceName = separatorIndex >= 0 ? normalized.slice(0, separatorIndex) : normalized;
+  if (!workspaceName) {
+    return undefined;
+  }
+  const workspaceFolder = findWorkspaceFolderByName(workspaceName);
+  if (!workspaceFolder) {
+    return undefined;
+  }
+  const remainder = separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) : '';
+  const normalizedRemainder = remainder ? remainder.replace(/^[\\/]+/u, '') : '**/*';
+  return {
+    workspaceFolder,
+    pattern: normalizedRemainder,
+  };
+}
+
+function findWorkspaceFolderByName(name: string): vscode.WorkspaceFolder | undefined {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return undefined;
+  }
+  const normalized = process.platform === 'win32' ? name.toLowerCase() : name;
+  return folders.find((folder) => {
+    const folderName = process.platform === 'win32' ? folder.name.toLowerCase() : folder.name;
+    return folderName === normalized;
+  });
+}
+
 function toolResultToStructuredBlocks(
   parts: readonly Record<string, unknown>[],
 ): Array<Record<string, unknown>> {
@@ -1768,17 +2573,12 @@ function getSchemaUri(name: string): string {
   return `lm-tools://schema/${name}`;
 }
 
-function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<string, unknown> {
+function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
   const combined = `${tool.name} ${(tool.description ?? '')}`.toLowerCase();
-  const requiresObjectInput = schemaRequiresObjectInput(tool.inputSchema);
-  const toolkitInputNote = requiresObjectInput
-    ? 'vscodeLmToolkit input must be an object (not a JSON string).'
-    : undefined;
   if (combined.includes('do not use') || combined.includes('placeholder')) {
     return {
       mode: 'do-not-use',
       reason: 'Heuristic: description indicates do-not-use/placeholder.',
-      toolkitInputNote,
     };
   }
 
@@ -1786,15 +2586,13 @@ function getToolUsageHint(tool: vscode.LanguageModelToolInformation): Record<str
     return {
       mode: 'toolkit',
       reason: 'Heuristic: codesearch tag; use vscodeLmToolkit.',
-      toolkitInputNote,
     };
   }
 
   return {
     mode: 'toolkit',
     reason: 'Heuristic: default to vscodeLmToolkit.',
-    requiresObjectInput: requiresObjectInput || undefined,
-    toolkitInputNote,
+    requiresObjectInput: schemaRequiresObjectInput(tool.inputSchema) || undefined,
   };
 }
 
@@ -1802,7 +2600,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function schemaRequiresObjectInput(schema: object | undefined): boolean {
+function schemaRequiresObjectInput(schema: unknown): boolean {
   if (!schema || typeof schema !== 'object') {
     return false;
   }
@@ -1983,18 +2781,32 @@ function getAllLmToolsSnapshot(): readonly vscode.LanguageModelToolInformation[]
   return lm ? lm.tools : [];
 }
 
-function getVisibleToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+function isCustomTool(tool: ExposedTool): tool is CustomToolDefinition {
+  return (tool as CustomToolDefinition).isCustom === true;
+}
+
+function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
+  return [buildFindFilesToolDefinition(), buildFindTextInFilesToolDefinition()];
+}
+
+function getAllToolsSnapshot(): readonly ExposedTool[] {
+  return [...getAllLmToolsSnapshot(), ...getCustomToolsSnapshot()];
+}
+
+function getVisibleToolsSnapshot(): readonly ExposedTool[] {
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
-  return getAllLmToolsSnapshot().filter((tool) => {
-    return !isToolBlacklisted(tool.name, blacklistedSet);
+  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
+  return getAllToolsSnapshot().filter((tool) => {
+    return !isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns);
   });
 }
 
-function getExposedToolsSnapshot(): readonly vscode.LanguageModelToolInformation[] {
+function getExposedToolsSnapshot(): readonly ExposedTool[] {
   const enabledSet = new Set(getEnabledToolsSetting());
   const blacklistedSet = new Set(getBlacklistedToolsSetting());
-  return getAllLmToolsSnapshot().filter((tool) => {
-    if (isToolBlacklisted(tool.name, blacklistedSet)) {
+  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
+  return getAllToolsSnapshot().filter((tool) => {
+    if (isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns)) {
       return false;
     }
     return enabledSet.has(tool.name);
@@ -2009,7 +2821,17 @@ async function getOwnershipState(): Promise<OwnershipInfo> {
     };
   }
 
-  return { state: 'off' };
+  const config = getServerConfig();
+  const available = await isPortAvailable(config.host, config.port);
+  if (available) {
+    return { state: 'off' };
+  }
+
+  const remote = await requestRemoteStatus(config.host, config.port);
+  return {
+    state: 'other-owner',
+    ownerWorkspacePath: remote?.ownerWorkspacePath,
+  };
 }
 
 function updateStatusBar(info: OwnershipInfo): void {
@@ -2018,34 +2840,48 @@ function updateStatusBar(info: OwnershipInfo): void {
   }
 
   const config = getServerConfig();
-  const host = serverState?.host ?? config.host;
-  const port = serverState?.port ?? config.port;
   const ownerWorkspacePath = normalizeWorkspacePath(info.ownerWorkspacePath);
-  const stateLabel = info.state === 'current-owner' ? 'current-owner' : 'off';
-  let summary = `State: ${stateLabel} (${host}:${port})`;
-  if (info.state !== 'off') {
+  const stateLabel = info.state === 'current-owner'
+    ? 'current-owner'
+    : (info.state === 'other-owner' ? 'other-owner' : 'off');
+  let summary = `State: ${stateLabel} (${config.host}:${config.port})`;
+  if (info.state === 'other-owner' && info.ownerWorkspacePath === undefined) {
+    summary = '';
+  } else if (info.state !== 'off') {
     summary = `${summary} workspace=${ownerWorkspacePath}`;
   }
   if (summary && summary !== lastStatusLogMessage) {
     logStatusInfo(summary);
     lastStatusLogMessage = summary;
+    lastOwnershipState = info.state;
+    lastOwnerWorkspacePath = ownerWorkspacePath;
   }
-  const tooltip = buildStatusTooltip(info.ownerWorkspacePath, host, port);
+  const tooltip = buildStatusTooltip(info.ownerWorkspacePath, config.host, config.port);
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
   if (info.state === 'current-owner') {
     statusBarItem.text = '$(lock) LM Tools Bridge: Current-owner';
     statusBarItem.tooltip = tooltip;
     statusBarItem.color = undefined;
+  } else if (info.state === 'other-owner') {
+    statusBarItem.text = '$(debug-disconnect) LM Tools Bridge: Other-owner';
+    statusBarItem.tooltip = `${tooltip}\nClick to take over.`;
+    statusBarItem.color = undefined;
   } else {
     statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
-    statusBarItem.tooltip = `LM Tools Bridge server is not running (${host}:${port}).`;
+    statusBarItem.tooltip = `LM Tools Bridge server is not running (${config.host}:${config.port}). Click to take over.`;
     statusBarItem.color = undefined;
   }
   statusBarItem.show();
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & { action?: 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
+  const ownership = await getOwnershipState();
+  const items: Array<vscode.QuickPickItem & { action?: 'takeOver' | 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
+    {
+      label: '$(debug-disconnect) Take Over MCP',
+      description: ownership.state === 'current-owner' ? 'Already the current-owner of the MCP server' : 'Acquire current-owner control of the MCP port',
+      action: 'takeOver',
+    },
     {
       label: '$(settings-gear) Configure Exposed Tools',
       description: 'Enable/disable tools exposed via MCP',
@@ -2079,6 +2915,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
     placeHolder: 'Select an action',
   });
   if (!selection || !selection.action) {
+    return;
+  }
+
+  if (selection.action === 'takeOver') {
+    await handleTakeOverCommand(channel);
     return;
   }
 
@@ -2155,6 +2996,24 @@ async function refreshStatusBar(): Promise<void> {
   updateStatusBar(info);
 }
 
+function isPortAvailable(host: string, port: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const tester = http.createServer();
+    tester.once('error', (error) => {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'EADDRINUSE') {
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+    tester.once('listening', () => {
+      tester.close(() => resolve(true));
+    });
+    tester.listen(port, host);
+  });
+}
+
 function getOwnerWorkspacePath(): string {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
@@ -2164,9 +3023,9 @@ function getOwnerWorkspacePath(): string {
 }
 
 function prioritizeTool(
-  tools: readonly vscode.LanguageModelToolInformation[],
+  tools: readonly ExposedTool[],
   preferredName: string,
-): vscode.LanguageModelToolInformation[] {
+): ExposedTool[] {
   const ordered = [...tools];
   ordered.sort((left, right) => {
     if (left.name === preferredName) {
@@ -2263,16 +3122,17 @@ function resolveHelpUrl(context: vscode.ExtensionContext): string | undefined {
   return homepage && homepage.length > 0 ? homepage : undefined;
 }
 
-function applySchemaDefaults(schema: unknown): unknown {
-  const overrides = getSchemaDefaultOverrides();
+function applySchemaDefaults(schema: unknown, toolName: string): unknown {
+  const overrides = getSchemaDefaultOverridesForTool(toolName, schema);
   return applySchemaDefaultsInternal(schema, overrides, undefined);
 }
 
 function applyInputDefaultsToToolInput(
   input: Record<string, unknown>,
   schema: unknown,
+  toolName: string,
 ): Record<string, unknown> {
-  const overrides = getSchemaDefaultOverrides();
+  const overrides = getSchemaDefaultOverridesForTool(toolName, schema);
   const allowed = extractSchemaPropertyNames(schema);
   const required = extractSchemaRequiredNames(schema);
   const result: Record<string, unknown> = { ...input };
@@ -2353,18 +3213,337 @@ function extractRequired(schemaRecord: Record<string, unknown>): Set<string> | u
   return undefined;
 }
 
-function getSchemaDefaultOverrides(): Record<string, unknown> {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const fromConfig = config.get<unknown>('tools.schemaDefaults', {});
-  if (!fromConfig || typeof fromConfig !== 'object' || Array.isArray(fromConfig)) {
-    return { ...BUILTIN_SCHEMA_DEFAULTS };
+function getSchemaDefaultOverrides(): SchemaDefaultOverrides {
+  const fromConfig = getConfigValue<unknown>('tools.schemaDefaults', []);
+  const overrides = parseSchemaDefaultOverrides(fromConfig);
+  const merged: SchemaDefaultOverrides = {};
+  const builtinOverrides = parseSchemaDefaultOverrides(BUILTIN_SCHEMA_DEFAULT_OVERRIDES);
+  for (const [toolName, toolDefaults] of Object.entries(builtinOverrides)) {
+    merged[toolName] = { ...toolDefaults };
   }
-  return { ...BUILTIN_SCHEMA_DEFAULTS, ...(fromConfig as Record<string, unknown>) };
+  for (const [toolName, toolDefaults] of Object.entries(overrides)) {
+    merged[toolName] = { ...(merged[toolName] ?? {}), ...toolDefaults };
+  }
+  return merged;
+}
+
+function getSchemaDefaultOverridesForTool(toolName: string, schema: unknown): Record<string, unknown> {
+  if (!toolName) {
+    return {};
+  }
+  const overrides = getSchemaDefaultOverrides();
+  const toolOverrides = overrides[toolName];
+  if (!toolOverrides) {
+    return {};
+  }
+  const allowedNames = extractSchemaPropertyNames(schema);
+  if (!allowedNames || allowedNames.size === 0) {
+    return { ...toolOverrides };
+  }
+  const filtered: Record<string, unknown> = {};
+  for (const [paramName, paramValue] of Object.entries(toolOverrides)) {
+    if (!allowedNames.has(paramName)) {
+      warnSchemaDefaultOverride(toolName, paramName, 'parameter is not defined in the tool schema', paramValue);
+      continue;
+    }
+    const propertySchema = findSchemaPropertySchema(schema, paramName);
+    const validation = propertySchema ? schemaAllowsValue(propertySchema, paramValue) : undefined;
+    if (validation === false) {
+      warnSchemaDefaultOverride(toolName, paramName, 'parameter value type does not match the tool schema', paramValue, propertySchema);
+      continue;
+    }
+    filtered[paramName] = paramValue;
+  }
+  return filtered;
+}
+
+function parseSchemaDefaultOverrides(value: unknown): SchemaDefaultOverrides {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) {
+      warnSchemaDefaultOverrideEntry(String(value), 'expected an array of strings');
+    }
+    return {};
+  }
+  const result: SchemaDefaultOverrides = {};
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      warnSchemaDefaultOverrideEntry(String(entry), 'entry is not a string');
+      continue;
+    }
+    const parsed = parseSchemaDefaultOverrideEntry(entry);
+    if (!parsed) {
+      continue;
+    }
+    const toolDefaults = result[parsed.toolName] ?? {};
+    toolDefaults[parsed.paramName] = parsed.paramValue;
+    result[parsed.toolName] = toolDefaults;
+  }
+  return result;
+}
+
+function parseSchemaDefaultOverrideEntry(
+  entry: string,
+): { toolName: string; paramName: string; paramValue: unknown } | undefined {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    warnSchemaDefaultOverrideEntry(entry, 'entry is empty');
+    return undefined;
+  }
+  const equalsIndex = trimmed.indexOf('=');
+  if (equalsIndex <= 0 || equalsIndex === trimmed.length - 1) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const key = trimmed.slice(0, equalsIndex).trim();
+  const rawValue = trimmed.slice(equalsIndex + 1).trim();
+  if (!key || rawValue.length === 0) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const parts = key.split('.');
+  if (parts.length !== 2) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const toolName = parts[0]?.trim();
+  const paramName = parts[1]?.trim();
+  if (!toolName || !paramName) {
+    warnSchemaDefaultOverrideEntry(entry, 'expected "tool.param=value" format');
+    return undefined;
+  }
+  const parsedValue = parseSchemaDefaultOverrideValue(rawValue);
+  if (parsedValue === undefined) {
+    warnSchemaDefaultOverrideEntry(entry, 'value must be a quoted string, number, boolean, or array');
+    return undefined;
+  }
+  return { toolName, paramName, paramValue: parsedValue };
+}
+
+function parseSchemaDefaultOverrideValue(rawValue: string): unknown | undefined {
+  if (rawValue.startsWith('{')) {
+    if (!rawValue.endsWith('}')) {
+      return undefined;
+    }
+    return parseSchemaDefaultOverrideArray(rawValue.slice(1, -1));
+  }
+  if (rawValue.startsWith('[')) {
+    return undefined;
+  }
+  return parseSchemaDefaultOverrideScalar(rawValue);
+}
+
+function parseSchemaDefaultOverrideArray(rawValue: string): unknown[] | undefined {
+  if (rawValue.length === 0) {
+    return [];
+  }
+  const entries = rawValue.split(',');
+  const result: unknown[] = [];
+  for (const entry of entries) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) {
+      result.push('');
+      continue;
+    }
+    const parsed = parseSchemaDefaultOverrideArrayItem(trimmed);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    result.push(parsed);
+  }
+  return result;
+}
+
+function parseSchemaDefaultOverrideArrayItem(rawValue: string): unknown | undefined {
+  if (rawValue.startsWith('"') || rawValue.endsWith('"')) {
+    if (!(rawValue.startsWith('"') && rawValue.endsWith('"'))) {
+      return undefined;
+    }
+    return rawValue.slice(1, -1);
+  }
+  return parseSchemaDefaultOverrideScalar(rawValue);
+}
+
+function parseSchemaDefaultOverrideScalar(rawValue: string): unknown | undefined {
+  const normalized = rawValue.toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+  const numberValue = parseSchemaDefaultOverrideNumber(rawValue);
+  if (numberValue !== undefined) {
+    return numberValue;
+  }
+  if (rawValue.startsWith('"') || rawValue.endsWith('"')) {
+    if (!(rawValue.startsWith('"') && rawValue.endsWith('"'))) {
+      return undefined;
+    }
+    return rawValue.slice(1, -1);
+  }
+  return undefined;
+}
+
+function parseSchemaDefaultOverrideNumber(rawValue: string): number | undefined {
+  if (!/^-?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/u.test(rawValue)) {
+    return undefined;
+  }
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function warnSchemaDefaultOverride(
+  toolName: string,
+  paramName: string,
+  reason: string,
+  value: unknown,
+  propertySchema?: Record<string, unknown>,
+): void {
+  const key = `${toolName}.${paramName}:${reason}`;
+  if (schemaDefaultOverrideWarnings.has(key)) {
+    return;
+  }
+  schemaDefaultOverrideWarnings.add(key);
+  const valueText = formatSchemaDefaultValue(value);
+  const expectedText = propertySchema ? describeSchemaPropertyExpected(propertySchema) : undefined;
+  const details = expectedText ? `; expected ${expectedText}` : '';
+  logWarn(`lmToolsBridge.tools.schemaDefaults ignored: ${toolName}.${paramName}=${valueText} (${reason}${details}).`);
+}
+
+function warnSchemaDefaultOverrideEntry(entry: string, reason: string): void {
+  const key = `entry:${entry}:${reason}`;
+  if (schemaDefaultOverrideWarnings.has(key)) {
+    return;
+  }
+  schemaDefaultOverrideWarnings.add(key);
+  logWarn(`lmToolsBridge.tools.schemaDefaults ignored: "${entry}" (${reason}).`);
+}
+
+function formatSchemaDefaultValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return `"${value}"`;
+  }
+  const serialized = JSON.stringify(value);
+  return serialized ?? String(value);
+}
+
+function describeSchemaPropertyExpected(schema: Record<string, unknown>): string | undefined {
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  if (enumValues && enumValues.length > 0) {
+    return `enum ${JSON.stringify(enumValues)}`;
+  }
+  const typeValue = schema.type;
+  if (typeof typeValue === 'string') {
+    return typeValue;
+  }
+  if (Array.isArray(typeValue)) {
+    return typeValue.filter((entry) => typeof entry === 'string').join('|') || undefined;
+  }
+  return undefined;
+}
+
+function findSchemaPropertySchema(schema: unknown, name: string): Record<string, unknown> | undefined {
+  if (!schema || typeof schema !== 'object') {
+    return undefined;
+  }
+  if (Array.isArray(schema)) {
+    for (const entry of schema) {
+      const found = findSchemaPropertySchema(entry, name);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  const record = schema as Record<string, unknown>;
+  const props = record.properties;
+  if (props && typeof props === 'object' && !Array.isArray(props)) {
+    const propRecord = props as Record<string, unknown>;
+    const propSchema = propRecord[name];
+    if (propSchema && typeof propSchema === 'object' && !Array.isArray(propSchema)) {
+      return propSchema as Record<string, unknown>;
+    }
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const found = findSchemaPropertySchema(entry, name);
+        if (found) {
+          return found;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function schemaAllowsValue(schema: Record<string, unknown>, value: unknown): boolean | undefined {
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  if (enumValues) {
+    return enumValues.some((entry) => enumValueMatches(entry, value));
+  }
+  const typeValue = schema.type;
+  const types = Array.isArray(typeValue)
+    ? typeValue.filter((entry) => typeof entry === 'string')
+    : typeof typeValue === 'string'
+      ? [typeValue]
+      : [];
+  if (types.length === 0) {
+    return undefined;
+  }
+  return types.some((entry) => schemaAllowsValueForType(entry, schema, value));
+}
+
+function enumValueMatches(expected: unknown, actual: unknown): boolean {
+  if (Array.isArray(expected) && Array.isArray(actual)) {
+    if (expected.length !== actual.length) {
+      return false;
+    }
+    for (let index = 0; index < expected.length; index += 1) {
+      if (!Object.is(expected[index], actual[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return Object.is(expected, actual);
+}
+
+function schemaAllowsValueForType(typeValue: string, schema: Record<string, unknown>, value: unknown): boolean {
+  switch (typeValue) {
+    case 'string':
+      return typeof value === 'string';
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value);
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value);
+    case 'array':
+      return schemaAllowsArrayValue(schema, value);
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    case 'null':
+      return value === null;
+    default:
+      return true;
+  }
+}
+
+function schemaAllowsArrayValue(schema: Record<string, unknown>, value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const items = schema.items;
+  if (!items || typeof items !== 'object' || Array.isArray(items)) {
+    return true;
+  }
+  return value.every((entry) => schemaAllowsValue(items as Record<string, unknown>, entry) !== false);
 }
 
 function getResponseFormat(): ResponseFormat {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const rawValue = normalizeConfigString(config.get<string>(CONFIG_RESPONSE_FORMAT));
+  const rawValue = normalizeConfigString(getConfigValue<string>(CONFIG_RESPONSE_FORMAT, 'text'));
   const value = rawValue ? rawValue.toLowerCase() : '';
   if (value === 'structured' || value === 'both') {
     return value;
@@ -2373,8 +3552,7 @@ function getResponseFormat(): ResponseFormat {
 }
 
 function getDebugLevel(): DebugLevel {
-  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const rawValue = normalizeConfigString(config.get<string>(CONFIG_DEBUG));
+  const rawValue = normalizeConfigString(getConfigValue<string>(CONFIG_DEBUG, 'off'));
   const value = rawValue ? rawValue.toLowerCase() : '';
   if (value === 'detail' || value === 'simple') {
     return value;
@@ -2412,7 +3590,7 @@ function formatTags(tags: readonly string[]): string {
   return tags.length > 0 ? tags.join(', ') : '(none)';
 }
 
-function formatSchema(schema: object | undefined): string {
+function formatSchema(schema: unknown): string {
   if (!schema) {
     return '(none)';
   }

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.27",
+  "version": "1.0.34",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -28,6 +28,10 @@
       {
         "command": "lm-tools-bridge.stop",
         "title": "LM Tools Bridge: Stop Server"
+      },
+      {
+        "command": "lm-tools-bridge.takeOver",
+        "title": "LM Tools Bridge: Take Over Server"
       },
       {
         "command": "lm-tools-bridge.configureTools",
@@ -59,7 +63,12 @@
           "default": 48123,
           "minimum": 1,
           "maximum": 65535,
-          "description": "Base port for the MCP server; the extension scans basePort..basePort+99 and picks the first available."
+          "description": "Port for the MCP server."
+        },
+        "lmToolsBridge.useWorkspaceSettings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Only honored when set in workspace settings. User/global settings are ignored. When enabled, lmToolsBridge settings are read/written at the workspace scope and override user settings."
         },
         "lmToolsBridge.tools.enabled": {
           "type": "array",
@@ -67,8 +76,8 @@
             "copilot_searchCodebase",
             "copilot_searchWorkspaceSymbols",
             "copilot_listCodeUsages",
-            "copilot_findFiles",
-            "copilot_findTextInFiles",
+            "lm_findFiles",
+            "lm_findTextInFiles",
             "copilot_readFile",
             "copilot_getErrors",
             "copilot_readProjectStructure",
@@ -87,46 +96,26 @@
         },
         "lmToolsBridge.tools.blacklist": {
           "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "List of LM tool names to hide/disable. Blacklist takes precedence over enabled list and is combined with the built-in blacklist."
+        },
+        "lmToolsBridge.tools.blacklistPatterns": {
+          "type": "string",
+          "default": "",
+          "description": "Pipe-delimited wildcard patterns to hide/disable tools (e.g. \"*gitk|mcp_*|*a*\"). Uses \"*\" as a wildcard and is combined with tools.blacklist."
+        },
+        "lmToolsBridge.tools.schemaDefaults": {
+          "type": "array",
           "default": [
-            "copilot_applyPatch",
-            "copilot_insertEdit",
-            "copilot_replaceString",
-            "copilot_multiReplaceString",
-            "copilot_createFile",
-            "copilot_createDirectory",
-            "copilot_createNewJupyterNotebook",
-            "copilot_editNotebook",
-            "copilot_runNotebookCell",
-            "copilot_createNewWorkspace",
-            "copilot_getVSCodeAPI",
-            "copilot_installExtension",
-            "copilot_runVscodeCommand",
-            "create_and_run_task",
-            "run_in_terminal",
-            "manage_todo_list",
-            "copilot_memory",
-            "copilot_getNotebookSummary",
-            "copilot_fetchWebPage",
-            "copilot_openSimpleBrowser",
-            "copilot_editFiles",
-            "copilot_getProjectSetupInfo",
-            "copilot_getDocInfo",
-            "copilot_listDirectory",
-            "runSubagent",
-            "vscode_get_confirmation",
-            "inline_chat_exit"
+            "lm_findTextInFiles.maxResults=500"
           ],
           "items": {
             "type": "string"
           },
-          "description": "List of LM tool names to hide/disable. Blacklist takes precedence over enabled list."
-        },
-        "lmToolsBridge.tools.schemaDefaults": {
-          "type": "object",
-          "default": {
-            "maxResults": 1000
-          },
-          "description": "Map of input property names to default values. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Example: { \"maxResults\": 1000 }."
+          "description": "List of input defaults in the \"toolName.paramName=value\" format. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Entries not in the \"toolName.paramName=value\" format are ignored. Values accept quoted strings (double quotes), true/false, numbers, or arrays written as \"{a,b,c}\" where each element is a quoted string, number, or boolean (whitespace allowed, empty elements allowed). Unquoted strings are rejected. JSON is not accepted. Example: [ tool.param=1, tool.param=\"MyStr\", tool.param=true, tool.param={6,4} ]."
         },
         "lmToolsBridge.tools.responseFormat": {
           "type": "string",
@@ -160,6 +149,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",
+    "@vscode/ripgrep": "^1.17.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {

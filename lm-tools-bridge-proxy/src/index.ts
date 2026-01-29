@@ -15,8 +15,12 @@ const LOG_ENV = 'LM_TOOLS_BRIDGE_PROXY_LOG';
 const ERROR_MANAGER_UNREACHABLE = -32003;
 const ERROR_NO_MATCH = -32004;
 const ERROR_WORKSPACE_NOT_SET = -32005;
+const ERROR_MCP_OFFLINE = -32006;
 const STARTUP_TIME = Date.now();
-const SET_WORKSPACE_METHOD = 'lmTools/setWorkspace';
+const REQUEST_WORKSPACE_METHOD = 'lmTools/requestWorkspaceMCPServer';
+const STATUS_METHOD = 'lmTools/status';
+const HEALTH_PATH = '/mcp/health';
+const HEALTH_TIMEOUT_MS = 1200;
 
 type ManagerMatch = {
   sessionId: string;
@@ -92,6 +96,77 @@ function buildRoots(match: ManagerMatch) {
   });
 }
 
+function normalizeFsPath(value: string) {
+  return path.resolve(value).toLowerCase();
+}
+
+function isCwdWithinWorkspaceFolders(cwd: string, workspaceFolders: string[]) {
+  const normalizedCwd = normalizeFsPath(cwd);
+  return workspaceFolders.some((folder) => {
+    const normalizedFolder = normalizeFsPath(folder);
+    const relative = path.relative(normalizedFolder, normalizedCwd);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+}
+
+async function checkTargetHealth(target: ManagerMatch) {
+  return new Promise<{ ok: boolean; status?: number; data?: unknown }>((resolve) => {
+    const request = http.request(
+      {
+        hostname: target.host,
+        port: Number(target.port),
+        path: HEALTH_PATH,
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => {
+          const status = response.statusCode ?? 500;
+          if (chunks.length === 0) {
+            resolve({ ok: status >= 200 && status < 300, status });
+            return;
+          }
+          try {
+            const text = Buffer.concat(chunks).toString('utf8');
+            const parsed = JSON.parse(text) as unknown;
+            resolve({ ok: status >= 200 && status < 300, status, data: parsed });
+          } catch {
+            resolve({ ok: false, status });
+          }
+        });
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      request.destroy(new Error('Timeout'));
+    }, HEALTH_TIMEOUT_MS);
+
+    request.on('error', () => {
+      clearTimeout(timeout);
+      resolve({ ok: false });
+    });
+    request.on('close', () => {
+      clearTimeout(timeout);
+    });
+    request.end();
+  });
+}
+
+function isHealthOk(health?: { ok?: boolean } | null) {
+  return health?.ok === true;
+}
+
+function toOfflineDurationSec(startedAt?: number) {
+  if (!startedAt) {
+    return null;
+  }
+  return Math.floor((Date.now() - startedAt) / 1000);
+}
+
 async function managerRequest(method, requestPath, body) {
   return new Promise((resolve) => {
     const payload = body ? JSON.stringify(body) : undefined;
@@ -165,9 +240,40 @@ function appendLog(message) {
   }
 }
 
-function createStdioMessageHandler(targetGetter, targetRefresher) {
+function logDebug(tag: string, payload?: Record<string, unknown>) {
+  if (!payload) {
+    appendLog(`[${tag}]`);
+    return;
+  }
+  appendLog(`[${tag}] ${JSON.stringify(payload)}`);
+}
+
+function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
   return async (message) => {
+    const state = stateGetter();
+    if (!state.workspaceMatched) {
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      const errorPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        error: {
+          code: state.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
+          message: state.workspaceSetExplicitly
+            ? 'Workspace not matched. Call lmTools/requestWorkspaceMCPServer with params.cwd and wait for success.'
+            : 'Workspace not set. Call lmTools/requestWorkspaceMCPServer with params.cwd before using MCP.',
+        },
+      };
+      if (message?.method === 'roots/list') {
+        appendLog(`roots/list => ${JSON.stringify({ error: errorPayload.error })}`);
+      }
+      process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+      return;
+    }
+
     if (message?.method === 'roots/list') {
+      logDebug('roots.list.request', { id: message.id ?? null });
       let target = targetGetter();
       if (!target) {
         const now = Date.now();
@@ -194,9 +300,30 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
           return;
         }
       }
+      const health = await checkTargetHealth(target);
+      if (!isHealthOk(health)) {
+        workspaceMatched = false;
+        currentTarget = undefined;
+        if (!offlineSince) {
+          offlineSince = Date.now();
+        }
+        const errorPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          error: {
+            code: ERROR_MCP_OFFLINE,
+            message: 'Resolved MCP server is offline.',
+          },
+        };
+        logDebug('roots.list.offline', { target: `${target.host}:${target.port}`, health });
+        appendLog(`roots/list => ${JSON.stringify({ error: errorPayload.error })}`);
+        process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+        return;
+      }
       const rootsResult = {
         roots: buildRoots(target),
       };
+      logDebug('roots.list.ok', { target: `${target.host}:${target.port}`, roots: rootsResult.roots.length });
       appendLog(`roots/list => ${JSON.stringify(rootsResult)}`);
       if (message.id === undefined || message.id === null) {
         return;
@@ -297,18 +424,55 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
       });
     };
 
+    logDebug('mcp.forward.start', {
+      id: message.id ?? null,
+      method: message?.method ?? null,
+      target: `${target.host}:${target.port}`,
+    });
     const firstAttempt = await attemptSend(target);
     if (firstAttempt.ok) {
+      logDebug('mcp.forward.ok', { id: message.id ?? null, target: `${target.host}:${target.port}` });
       return;
     }
 
     appendLog(`MCP proxy request failed: ${String(firstAttempt.error)}`);
+    logDebug('mcp.forward.error', {
+      id: message.id ?? null,
+      target: `${target.host}:${target.port}`,
+      error: String(firstAttempt.error),
+    });
+    const firstHealth = await checkTargetHealth(target);
+    if (!isHealthOk(firstHealth)) {
+      workspaceMatched = false;
+      currentTarget = undefined;
+      if (!offlineSince) {
+        offlineSince = Date.now();
+      }
+      logDebug('mcp.forward.offline', { id: message.id ?? null, target: `${target.host}:${target.port}` });
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      const errorPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        error: {
+          code: ERROR_MCP_OFFLINE,
+          message: 'Resolved MCP server is offline.',
+        },
+      };
+      process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+      return;
+    }
     const now = Date.now();
     const graceDeadline = STARTUP_TIME + STARTUP_GRACE_MS;
     const refreshResult = await targetRefresher(now < graceDeadline ? graceDeadline : undefined);
     const refreshed = refreshResult?.target;
     if (!refreshed || isSameTarget(target, refreshed)) {
       const errorKind = refreshResult?.errorKind ?? 'unreachable';
+      logDebug('mcp.forward.noRefresh', {
+        id: message.id ?? null,
+        errorKind,
+      });
       if (message.id === undefined || message.id === null) {
         return;
       }
@@ -326,12 +490,44 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
       return;
     }
 
+    const refreshedHealth = await checkTargetHealth(refreshed);
+    if (!isHealthOk(refreshedHealth)) {
+      workspaceMatched = false;
+      currentTarget = undefined;
+      if (!offlineSince) {
+        offlineSince = Date.now();
+      }
+      logDebug('mcp.forward.refreshedOffline', {
+        id: message.id ?? null,
+        target: `${refreshed.host}:${refreshed.port}`,
+        health: refreshedHealth,
+      });
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      const errorPayload = {
+        jsonrpc: '2.0',
+        id: message.id,
+        error: {
+          code: ERROR_MCP_OFFLINE,
+          message: 'Resolved MCP server is offline.',
+        },
+      };
+      process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+      return;
+    }
     const retryAttempt = await attemptSend(refreshed);
     if (retryAttempt.ok) {
+      logDebug('mcp.forward.retryOk', { id: message.id ?? null, target: `${refreshed.host}:${refreshed.port}` });
       return;
     }
 
     appendLog(`MCP proxy retry failed: ${String(retryAttempt.error)}`);
+    logDebug('mcp.forward.retryError', {
+      id: message.id ?? null,
+      target: `${refreshed.host}:${refreshed.port}`,
+      error: String(retryAttempt.error),
+    });
     if (message.id === undefined || message.id === null) {
       return;
     }
@@ -350,15 +546,13 @@ function createStdioMessageHandler(targetGetter, targetRefresher) {
 async function main() {
   let resolveCwd = process.cwd();
   let workspaceSetExplicitly = false;
-  const envSnapshot = Object.entries(process.env)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}=${value ?? ''}`)
-    .join('\n');
-  appendLog(`ENV_VARS_BEGIN\n${envSnapshot}\nENV_VARS_END`);
+  let workspaceMatched = false;
+  let offlineSince: number | undefined;
+  let reconnectTimer: NodeJS.Timeout | undefined;
+  // Env snapshot logging removed to avoid noisy logs.
   const vscodeCwd = process.env.VSCODE_CWD;
   if (vscodeCwd) {
     resolveCwd = path.resolve(vscodeCwd);
-    workspaceSetExplicitly = true;
     appendLog(`VSCODE_CWD=${vscodeCwd}`);
   } else {
     appendLog('VSCODE_CWD not found');
@@ -385,8 +579,229 @@ async function main() {
     return resolved;
   };
 
-  const handler = createStdioMessageHandler(() => currentTarget, refreshTarget);
+  const getState = () => ({
+    workspaceSetExplicitly,
+    workspaceMatched,
+  });
+
+  const handler = createStdioMessageHandler(() => currentTarget, refreshTarget, getState);
   let buffer = '';
+  const reconnectLoop = async () => {
+    if (!workspaceSetExplicitly || workspaceMatched || resolveInFlight) {
+      return;
+    }
+    logDebug('reconnect.attempt', { cwd: resolveCwd });
+    const resolveResult = await refreshTarget();
+    const resolvedTarget = resolveResult?.target;
+    if (!resolvedTarget) {
+      logDebug('reconnect.noMatch', { errorKind: resolveResult?.errorKind ?? 'unreachable' });
+      return;
+    }
+    if (!isCwdWithinWorkspaceFolders(resolveCwd, resolvedTarget.workspaceFolders)) {
+      logDebug('reconnect.cwdMismatch', { cwd: resolveCwd, workspaceFolders: resolvedTarget.workspaceFolders });
+      return;
+    }
+    const resolvedHealth = await checkTargetHealth(resolvedTarget);
+    if (!isHealthOk(resolvedHealth)) {
+      if (!offlineSince) {
+        offlineSince = Date.now();
+      }
+      logDebug('reconnect.offline', {
+        target: `${resolvedTarget.host}:${resolvedTarget.port}`,
+        health: resolvedHealth,
+      });
+      return;
+    }
+    currentTarget = resolvedTarget;
+    workspaceMatched = true;
+    offlineSince = undefined;
+    logDebug('reconnect.ok', { target: `${resolvedTarget.host}:${resolvedTarget.port}` });
+  };
+  reconnectTimer = setInterval(() => {
+    void reconnectLoop();
+  }, 1000);
+  const handleMessage = async (message) => {
+    if (message?.method === STATUS_METHOD) {
+      logDebug('status.request', { id: message.id ?? null });
+      let resolveResult;
+      if (workspaceSetExplicitly && !workspaceMatched) {
+        const deadline = Date.now() + RESOLVE_RETRY_DELAY_MS;
+        resolveResult = await refreshTarget(deadline);
+      }
+      const target = workspaceSetExplicitly ? currentTarget : undefined;
+      const health = target ? await checkTargetHealth(target) : undefined;
+      const online = isHealthOk(health);
+      if (!online && target) {
+        workspaceMatched = false;
+        currentTarget = undefined;
+        if (!offlineSince) {
+          offlineSince = Date.now();
+        }
+      } else if (online) {
+        offlineSince = undefined;
+      }
+      const ready = workspaceMatched && Boolean(target) && online;
+      logDebug('status.state', {
+        ready,
+        online,
+        workspaceSetExplicitly,
+        workspaceMatched,
+        offlineDurationSec: toOfflineDurationSec(offlineSince),
+        target: target ? `${target.host}:${target.port}` : null,
+        resolveErrorKind: resolveResult?.errorKind ?? null,
+      });
+      if (message.id !== undefined && message.id !== null) {
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ready,
+            online,
+            workspaceSetExplicitly,
+            cwd: resolveCwd,
+            offlineDurationSec: toOfflineDurationSec(offlineSince),
+            target: target
+              ? {
+                sessionId: target.sessionId,
+                host: target.host,
+                port: target.port,
+                workspaceFolders: target.workspaceFolders,
+                workspaceFile: target.workspaceFile ?? null,
+              }
+              : null,
+            resolveErrorKind: resolveResult?.errorKind,
+            health,
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+      }
+      return;
+    }
+    if (message?.method === REQUEST_WORKSPACE_METHOD) {
+      logDebug('requestWorkspaceMCPServer.request', { id: message.id ?? null, cwd: message?.params?.cwd ?? null });
+      const nextCwd = message?.params?.cwd;
+      if (typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
+        if (message.id !== undefined && message.id !== null) {
+          const errorPayload = {
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: -32602,
+              message: 'Invalid params: expected params.cwd (string).',
+            },
+          };
+          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+        }
+        logDebug('requestWorkspaceMCPServer.invalidParams');
+        return;
+      }
+      resolveCwd = path.resolve(nextCwd);
+      workspaceSetExplicitly = true;
+      workspaceMatched = false;
+      currentTarget = undefined;
+      resolveInFlight = undefined;
+      const resolveResult = await refreshTarget();
+      const matchedTarget = resolveResult?.target;
+      if (!matchedTarget) {
+        if (!offlineSince) {
+          offlineSince = Date.now();
+        }
+        logDebug('requestWorkspaceMCPServer.noMatch', {
+          errorKind: resolveResult?.errorKind ?? 'unreachable',
+          cwd: resolveCwd,
+        });
+        if (message.id !== undefined && message.id !== null) {
+          const errorKind = resolveResult?.errorKind ?? 'unreachable';
+          const errorPayload = {
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
+              message: errorKind === 'no_match'
+                ? 'No matching VS Code instance for provided workspace.'
+                : 'Manager unreachable.',
+            },
+          };
+          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+        }
+        return;
+      }
+      if (!isCwdWithinWorkspaceFolders(resolveCwd, matchedTarget.workspaceFolders)) {
+        if (!offlineSince) {
+          offlineSince = Date.now();
+        }
+        logDebug('requestWorkspaceMCPServer.cwdMismatch', {
+          cwd: resolveCwd,
+          workspaceFolders: matchedTarget.workspaceFolders,
+        });
+        if (message.id !== undefined && message.id !== null) {
+          const errorPayload = {
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: ERROR_NO_MATCH,
+              message: 'Provided cwd is not within resolved workspace folders.',
+            },
+          };
+          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+        }
+        return;
+      }
+      const health = await checkTargetHealth(matchedTarget);
+      if (!isHealthOk(health)) {
+        workspaceMatched = false;
+        currentTarget = undefined;
+        if (!offlineSince) {
+          offlineSince = Date.now();
+        }
+        logDebug('requestWorkspaceMCPServer.offline', {
+          target: `${matchedTarget.host}:${matchedTarget.port}`,
+          health,
+        });
+        if (message.id !== undefined && message.id !== null) {
+          const errorPayload = {
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: ERROR_MCP_OFFLINE,
+              message: 'Resolved MCP server is offline.',
+            },
+          };
+          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+        }
+        return;
+      }
+      workspaceMatched = true;
+      currentTarget = matchedTarget;
+      offlineSince = undefined;
+      logDebug('requestWorkspaceMCPServer.ok', {
+        cwd: resolveCwd,
+        target: `${matchedTarget.host}:${matchedTarget.port}`,
+      });
+      if (message.id !== undefined && message.id !== null) {
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            cwd: resolveCwd,
+            target: {
+              sessionId: matchedTarget.sessionId,
+              host: matchedTarget.host,
+              port: matchedTarget.port,
+              workspaceFolders: matchedTarget.workspaceFolders,
+              workspaceFile: matchedTarget.workspaceFile ?? null,
+            },
+            online: true,
+            health,
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+      }
+      return;
+    }
+    void handler(message);
+  };
 
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
@@ -398,56 +813,7 @@ async function main() {
       if (line.length > 0) {
         try {
           const message = JSON.parse(line);
-          if (message?.method === SET_WORKSPACE_METHOD) {
-            const nextCwd = message?.params?.cwd;
-            if (typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
-              if (message.id !== undefined && message.id !== null) {
-                const errorPayload = {
-                  jsonrpc: '2.0',
-                  id: message.id,
-                  error: {
-                    code: -32602,
-                    message: 'Invalid params: expected params.cwd (string).',
-                  },
-                };
-                process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
-              }
-              return;
-            }
-            resolveCwd = path.resolve(nextCwd);
-            workspaceSetExplicitly = true;
-            currentTarget = undefined;
-            void refreshTarget();
-            if (message.id !== undefined && message.id !== null) {
-              const resultPayload = {
-                jsonrpc: '2.0',
-                id: message.id,
-                result: {
-                  ok: true,
-                  cwd: resolveCwd,
-                },
-              };
-              process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
-            }
-            return;
-          }
-          if (!workspaceSetExplicitly) {
-            if (message?.method === 'roots/list' || message?.method === undefined) {
-              const errorPayload = {
-                jsonrpc: '2.0',
-                id: message?.id ?? null,
-                error: {
-                  code: ERROR_WORKSPACE_NOT_SET,
-                  message: 'Workspace not set. Call lmTools/setWorkspace with params.cwd before using MCP.',
-                },
-              };
-              if (message?.id !== undefined && message?.id !== null) {
-                process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
-              }
-              return;
-            }
-          }
-          void handler(message);
+          void handleMessage(message);
         } catch {
           appendLog('Invalid JSON received by MCP proxy.');
           const errorPayload = {
@@ -466,10 +832,12 @@ async function main() {
   });
 
   process.stdin.on('end', () => {
+    if (reconnectTimer) {
+      clearInterval(reconnectTimer);
+      reconnectTimer = undefined;
+    }
     process.exit(0);
   });
-
-  void handler({ jsonrpc: '2.0', id: null, method: 'roots/list' });
 }
 
 main().catch((error) => {

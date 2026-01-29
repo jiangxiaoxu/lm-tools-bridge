@@ -15,13 +15,12 @@ interface InstanceRecord {
   normalizedWorkspaceFile?: string;
 }
 
-const TTL_MS = 10000;
-const PRUNE_INTERVAL_MS = 3000;
+const TTL_MS = 4000;
+const PRUNE_INTERVAL_MS = 1000;
 const IDLE_GRACE_MS = 10000;
 
 const instances = new Map<string, InstanceRecord>();
 let lastNonEmptyAt = Date.now();
-let hasEverRegistered = false;
 
 function getPipeNameFromArgs(): string | undefined {
   const index = process.argv.indexOf('--pipe');
@@ -124,10 +123,6 @@ function pruneInstances(): void {
     return;
   }
 
-  if (!hasEverRegistered) {
-    return;
-  }
-
   if (now - lastNonEmptyAt >= IDLE_GRACE_MS) {
     shutdown();
   }
@@ -181,7 +176,6 @@ const server = http.createServer(async (req, res) => {
       });
 
       lastNonEmptyAt = now;
-      hasEverRegistered = true;
       respondJson(res, 200, { ok: true });
       return;
     } catch {

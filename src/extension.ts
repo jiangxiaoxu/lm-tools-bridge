@@ -34,6 +34,9 @@ const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
 const MANAGER_REQUEST_TIMEOUT_MS = 1500;
 const MANAGER_START_TIMEOUT_MS = 3000;
 const MANAGER_LOCK_STALE_MS = 5000;
+const PORT_RETRY_LIMIT = 50;
+const PORT_MIN_VALUE = 1;
+const PORT_MAX_VALUE = 65535;
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
@@ -205,12 +208,15 @@ interface McpServerState {
   host: string;
   port: number;
   ownerWorkspacePath: string;
+  requestedPort: number;
 }
 
 type ServerStatusState = 'running' | 'off' | 'port-in-use';
 interface ServerStatusInfo {
   state: ServerStatusState;
   ownerWorkspacePath?: string;
+  host?: string;
+  port?: number;
 }
 
 let serverState: McpServerState | undefined;
@@ -349,6 +355,13 @@ function getServerConfig(): ServerConfig {
     host: DEFAULT_HOST,
     port: getConfigValue<number>('server.port', DEFAULT_PORT),
   };
+}
+
+function isValidPort(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= PORT_MIN_VALUE
+    && value <= PORT_MAX_VALUE;
 }
 
 function getConfigurationResource(): vscode.Uri | undefined {
@@ -643,7 +656,7 @@ async function reconcileServerState(channel: vscode.OutputChannel): Promise<void
     return;
   }
 
-  if (serverState.host !== config.host || serverState.port !== config.port) {
+  if (serverState.host !== config.host || serverState.requestedPort !== config.port) {
     await stopMcpServer(channel);
     await startMcpServer(channel);
     await refreshStatusBar();
@@ -656,54 +669,104 @@ async function startMcpServer(
 ): Promise<boolean> {
   if (serverState) {
     logStatusInfo(`MCP server already running at http://${serverState.host}:${serverState.port}/mcp`);
-    updateStatusBar({ state: 'running', ownerWorkspacePath: serverState.ownerWorkspacePath });
+    updateStatusBar({
+      state: 'running',
+      ownerWorkspacePath: serverState.ownerWorkspacePath,
+      host: serverState.host,
+      port: serverState.port,
+    });
     return true;
   }
 
   const config = override ?? getServerConfig();
-  const { host, port } = config;
+  const { host } = config;
   const suppressPortInUseLog = override?.suppressPortInUseLog ?? false;
   const ownerWorkspacePath = getOwnerWorkspacePath();
-  const server = http.createServer((req, res) => {
-    void handleMcpHttpRequest(req, res, channel);
-  });
+  const preferredPort = config.port;
+  let nextPort = preferredPort;
+  let managerAvailable = await ensureManagerRunning();
+  let lastError: NodeJS.ErrnoException | undefined;
+  let lastTriedPort = preferredPort;
 
-  const started = await new Promise<boolean>((resolve) => {
-    server.once('error', (error) => {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'EADDRINUSE') {
-        if (!suppressPortInUseLog) {
-          logStatusWarn(`Port ${port} is already in use. Another VS Code instance may be hosting MCP.`);
-        }
-        updateStatusBar({ state: 'port-in-use' });
+  for (let attempt = 0; attempt < PORT_RETRY_LIMIT; attempt += 1) {
+    if (nextPort > PORT_MAX_VALUE) {
+      break;
+    }
+    let portToTry = nextPort;
+    if (managerAvailable) {
+      const managerPort = await requestManagerPortAllocation(
+        preferredPort,
+        attempt === 0 ? undefined : nextPort,
+      );
+      if (managerPort !== undefined) {
+        portToTry = managerPort;
       } else {
-        logStatusError(`Failed to start MCP server: ${String(error)}`);
-        updateStatusBar({ state: 'off' });
+        managerAvailable = false;
       }
+    }
+    lastTriedPort = portToTry;
+
+    const server = http.createServer((req, res) => {
+      void handleMcpHttpRequest(req, res, channel);
+    });
+
+    const started = await new Promise<{ ok: boolean; error?: NodeJS.ErrnoException }>((resolve) => {
+      server.once('error', (error) => {
+        resolve({ ok: false, error: error as NodeJS.ErrnoException });
+      });
+      server.listen(portToTry, host, () => {
+        resolve({ ok: true });
+      });
+    });
+
+    if (started.ok) {
+      serverState = {
+        server,
+        host,
+        port: portToTry,
+        ownerWorkspacePath,
+        requestedPort: preferredPort,
+      };
+      if (portToTry !== preferredPort) {
+        logStatusInfo(`MCP server auto-selected port ${portToTry} (requested ${preferredPort}).`);
+      }
+      logStatusInfo(`MCP server listening at http://${host}:${portToTry}/mcp`);
+      updateStatusBar({ state: 'running', ownerWorkspacePath, host, port: portToTry });
+      await startManagerHeartbeat();
+      return true;
+    }
+
+    const error = started.error;
+    lastError = error;
+    if (error?.code !== 'EADDRINUSE') {
+      logStatusError(`Failed to start MCP server: ${String(error)}`);
+      updateStatusBar({ state: 'off', host, port: portToTry });
       try {
         server.close();
       } catch {
         // Ignore close errors.
       }
-      resolve(false);
-    });
-    server.listen(port, host, () => {
-      serverState = {
-        server,
-        host,
-        port,
-        ownerWorkspacePath,
-      };
-      logStatusInfo(`MCP server listening at http://${host}:${port}/mcp`);
-      updateStatusBar({ state: 'running', ownerWorkspacePath });
-      resolve(true);
-    });
-  });
+      return false;
+    }
 
-  if (started) {
-    await startManagerHeartbeat();
+    if (!suppressPortInUseLog) {
+      logDebugDetail(`Port ${portToTry} is already in use. Trying next port.`);
+    }
+    try {
+      server.close();
+    } catch {
+      // Ignore close errors.
+    }
+    nextPort = portToTry + 1;
   }
-  return started;
+
+  if (lastError?.code === 'EADDRINUSE' && !suppressPortInUseLog) {
+    logStatusWarn(`Port ${lastTriedPort} is already in use. Another VS Code instance may be hosting MCP.`);
+    updateStatusBar({ state: 'port-in-use', host, port: lastTriedPort });
+  } else {
+    updateStatusBar({ state: 'off', host, port: lastTriedPort });
+  }
+  return false;
 }
 
 async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
@@ -865,6 +928,29 @@ function buildManagerHeartbeatPayload(): {
     port: serverState.port,
     lastSeen: Date.now(),
   };
+}
+
+async function requestManagerPortAllocation(preferredPort: number, minPort?: number): Promise<number | undefined> {
+  const sessionId = vscode.env.sessionId;
+  if (!sessionId) {
+    return undefined;
+  }
+  if (!isValidPort(preferredPort)) {
+    return undefined;
+  }
+  if (minPort !== undefined && !isValidPort(minPort)) {
+    return undefined;
+  }
+  const response = await managerRequest<{ ok?: boolean; port?: number }>('POST', '/allocate', {
+    sessionId,
+    preferredPort,
+    minPort,
+  });
+  if (!response.ok || !response.data) {
+    return undefined;
+  }
+  const port = (response.data as { port?: unknown }).port;
+  return isValidPort(port) ? port : undefined;
 }
 
 async function ensureManagerRunning(): Promise<boolean> {
@@ -2619,6 +2705,8 @@ async function getServerStatus(): Promise<ServerStatusInfo> {
     return {
       state: 'running',
       ownerWorkspacePath: serverState.ownerWorkspacePath,
+      host: serverState.host,
+      port: serverState.port,
     };
   }
   return { state: 'off' };
@@ -2630,9 +2718,12 @@ function updateStatusBar(info: ServerStatusInfo): void {
   }
 
   const config = getServerConfig();
+  const host = info.host ?? config.host;
+  const port = info.port ?? config.port;
   const ownerWorkspacePath = normalizeWorkspacePath(info.ownerWorkspacePath);
+  const workspaceSuffix = ` (${ownerWorkspacePath})`;
   const stateLabel = info.state;
-  let summary = `State: ${stateLabel} (${config.host}:${config.port})`;
+  let summary = `State: ${stateLabel} (${host}:${port})`;
   if (info.state !== 'off') {
     summary = `${summary} workspace=${ownerWorkspacePath}`;
   }
@@ -2645,15 +2736,15 @@ function updateStatusBar(info: ServerStatusInfo): void {
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
   if (info.state === 'running') {
     statusBarItem.text = '$(play-circle) LM Tools Bridge: Running';
-    statusBarItem.tooltip = `LM Tools Bridge server is running (${config.host}:${config.port})`;
+    statusBarItem.tooltip = `LM Tools Bridge server is running (${host}:${port})${workspaceSuffix}`;
     statusBarItem.color = undefined;
   } else if (info.state === 'port-in-use') {
     statusBarItem.text = '$(warning) LM Tools Bridge: Port In Use';
-    statusBarItem.tooltip = `Port ${config.port} is already in use (${config.host}).`;
+    statusBarItem.tooltip = `Port ${port} is already in use (${host}).${workspaceSuffix}`;
     statusBarItem.color = undefined;
   } else {
     statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
-    statusBarItem.tooltip = `LM Tools Bridge server is not running (${config.host}:${config.port}).`;
+    statusBarItem.tooltip = `LM Tools Bridge server is not running (${host}:${port}).${workspaceSuffix}`;
     statusBarItem.color = undefined;
   }
   statusBarItem.show();

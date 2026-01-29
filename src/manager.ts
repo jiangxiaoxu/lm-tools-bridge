@@ -18,8 +18,12 @@ interface InstanceRecord {
 const TTL_MS = 4000;
 const PRUNE_INTERVAL_MS = 1000;
 const IDLE_GRACE_MS = 10000;
+const PORT_RESERVATION_TTL_MS = 15000;
+const PORT_MIN_VALUE = 1;
+const PORT_MAX_VALUE = 65535;
 
 const instances = new Map<string, InstanceRecord>();
+const reservedPorts = new Map<string, { port: number; reservedAt: number }>();
 let lastNonEmptyAt = Date.now();
 
 function getPipeNameFromArgs(): string | undefined {
@@ -41,6 +45,37 @@ function normalizeFolders(value: unknown): string[] {
   return value
     .filter((entry): entry is string => typeof entry === 'string')
     .map((entry) => normalizePath(entry));
+}
+
+function isValidPort(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= PORT_MIN_VALUE
+    && value <= PORT_MAX_VALUE;
+}
+
+function prunePortReservations(now: number): void {
+  for (const [sessionId, reservation] of reservedPorts.entries()) {
+    if (now - reservation.reservedAt > PORT_RESERVATION_TTL_MS) {
+      reservedPorts.delete(sessionId);
+    }
+  }
+}
+
+function getUsedPorts(now: number): Set<number> {
+  prunePortReservations(now);
+  const used = new Set<number>();
+  for (const record of getAliveRecords()) {
+    if (isValidPort(record.port)) {
+      used.add(record.port);
+    }
+  }
+  for (const reservation of reservedPorts.values()) {
+    if (isValidPort(reservation.port)) {
+      used.add(reservation.port);
+    }
+  }
+  return used;
 }
 
 function respondJson(res: http.ServerResponse, status: number, payload: unknown): void {
@@ -112,13 +147,14 @@ function getAliveRecords(): InstanceRecord[] {
 
 function pruneInstances(): void {
   const now = Date.now();
+  prunePortReservations(now);
   for (const [key, record] of instances.entries()) {
     if (now - record.lastSeen > TTL_MS) {
       instances.delete(key);
     }
   }
 
-  if (instances.size > 0) {
+  if (instances.size > 0 || reservedPorts.size > 0) {
     lastNonEmptyAt = now;
     return;
   }
@@ -174,6 +210,7 @@ const server = http.createServer(async (req, res) => {
         normalizedFolders,
         normalizedWorkspaceFile,
       });
+      reservedPorts.delete(record.sessionId);
 
       lastNonEmptyAt = now;
       respondJson(res, 200, { ok: true });
@@ -190,8 +227,64 @@ const server = http.createServer(async (req, res) => {
       const sessionId = (payload as { sessionId?: string } | undefined)?.sessionId;
       if (sessionId) {
         instances.delete(sessionId);
+        reservedPorts.delete(sessionId);
       }
       respondJson(res, 200, { ok: true });
+      return;
+    } catch {
+      respondJson(res, 400, { ok: false, reason: 'invalid_json' });
+      return;
+    }
+  }
+
+  if (req.method === 'POST' && url === '/allocate') {
+    try {
+      const payload = await readJsonBody(req);
+      const request = payload as { sessionId?: string; preferredPort?: number; minPort?: number };
+      const sessionId = request?.sessionId;
+      const preferredPort = request?.preferredPort;
+      const minPort = request?.minPort;
+      if (!sessionId || !isValidPort(preferredPort) || (minPort !== undefined && !isValidPort(minPort))) {
+        respondJson(res, 400, { ok: false, reason: 'invalid_payload' });
+        return;
+      }
+
+      const now = Date.now();
+      const existingRecord = instances.get(sessionId);
+      if (existingRecord && now - existingRecord.lastSeen <= TTL_MS && isValidPort(existingRecord.port)) {
+        respondJson(res, 200, { ok: true, port: existingRecord.port });
+        return;
+      }
+
+      const startPort = Math.max(minPort ?? preferredPort, preferredPort);
+      if (!isValidPort(startPort)) {
+        respondJson(res, 409, { ok: false, reason: 'port_exhausted' });
+        return;
+      }
+
+      const existingReservation = reservedPorts.get(sessionId);
+      if (existingReservation) {
+        if (now - existingReservation.reservedAt <= PORT_RESERVATION_TTL_MS && existingReservation.port >= startPort) {
+          respondJson(res, 200, { ok: true, port: existingReservation.port });
+          return;
+        }
+        if (existingReservation.port < startPort) {
+          reservedPorts.delete(sessionId);
+        }
+      }
+
+      const usedPorts = getUsedPorts(now);
+      let candidate = startPort;
+      while (candidate <= PORT_MAX_VALUE && usedPorts.has(candidate)) {
+        candidate += 1;
+      }
+      if (!isValidPort(candidate)) {
+        respondJson(res, 409, { ok: false, reason: 'port_exhausted' });
+        return;
+      }
+
+      reservedPorts.set(sessionId, { port: candidate, reservedAt: now });
+      respondJson(res, 200, { ok: true, port: candidate });
       return;
     } catch {
       respondJson(res, 400, { ok: false, reason: 'invalid_json' });

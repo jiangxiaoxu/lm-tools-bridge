@@ -175,25 +175,21 @@ Following these steps prevents validation errors such as missing `action` or sch
 - The status menu includes **Help** (opens the GitHub README).
 - **Reload Window** triggers `Developer: Reload Window` to refresh the extension quickly.
 
-### Take over MCP server
-
-When multiple VS Code instances are open, use `LM Tools Bridge: Take Over Server` to stop the existing MCP server on the port and start it in the current instance.
-
 ### Status bar indicator
 
-The status bar shows the current-owner state:
-- `LM Tools Bridge: Current-owner` (this instance hosts the port)
-- `LM Tools Bridge: Other-owner` (another instance hosts the port)
-- `LM Tools Bridge: Off` (no server running)
+The status bar shows the server state:
+- `LM Tools Bridge: Running`
+- `LM Tools Bridge: Port In Use`
+- `LM Tools Bridge: Off`
 
-The tooltip includes the owner workspace path(s) and the MCP URL. Click the status bar item to take over when this instance is not the current-owner.
+The tooltip includes the MCP URL and basic state details.
 
 ### Logs
 
 Check Output -> `LM Tools Bridge` for MCP server logs.
 
 Debug levels:
-- `off`: only status logs (current-owner state + owner workspace path when known). If other-owner and unknown, owner workspace is omitted.
+- `off`: only status logs (running/off state + workspace path when known).
 - `simple`: status logs + tool name/input + duration (ms) for listTools/getToolInfo/invokeTool.
 - `detail`: adds full tool outputs; if responseFormat is `structured` or `both`, logs structured content too.
 

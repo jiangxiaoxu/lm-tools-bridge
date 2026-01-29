@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -28,10 +28,6 @@
       {
         "command": "lm-tools-bridge.stop",
         "title": "LM Tools Bridge: Stop Server"
-      },
-      {
-        "command": "lm-tools-bridge.takeOver",
-        "title": "LM Tools Bridge: Take Over Server"
       },
       {
         "command": "lm-tools-bridge.configureTools",

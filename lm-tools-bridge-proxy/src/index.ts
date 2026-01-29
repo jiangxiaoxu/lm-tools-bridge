@@ -19,8 +19,11 @@ const ERROR_MCP_OFFLINE = -32006;
 const STARTUP_TIME = Date.now();
 const REQUEST_WORKSPACE_METHOD = 'lmTools/requestWorkspaceMCPServer';
 const STATUS_METHOD = 'lmTools/status';
+const TOOLS_LIST_METHOD = 'tools/list';
+const TOOLS_CALL_METHOD = 'tools/call';
 const HEALTH_PATH = '/mcp/health';
 const HEALTH_TIMEOUT_MS = 1200;
+const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge-proxy://handshake';
 
 type ManagerMatch = {
   sessionId: string;
@@ -252,6 +255,54 @@ function createStdioMessageHandler(targetGetter, targetRefresher, stateGetter) {
   return async (message) => {
     const state = stateGetter();
     if (!state.workspaceMatched) {
+      if (message?.method === 'resources/list') {
+        logDebug('resources.list.handshake', { id: message.id ?? null });
+        if (message.id === undefined || message.id === null) {
+          return;
+        }
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            resources: [
+              {
+                uri: HANDSHAKE_RESOURCE_URI,
+                name: 'MCP proxy handshake',
+                description: 'Call lmTools/requestWorkspaceMCPServer with params.cwd before using MCP.',
+                mimeType: 'text/plain',
+              },
+            ],
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        return;
+      }
+      if (message?.method === 'resources/read' && message?.params?.uri === HANDSHAKE_RESOURCE_URI) {
+        logDebug('resources.read.handshake', { id: message.id ?? null });
+        if (message.id === undefined || message.id === null) {
+          return;
+        }
+        const content = [
+          'This MCP proxy requires an explicit workspace handshake.',
+          'Call lmTools/requestWorkspaceMCPServer with params.cwd, wait for ok:true.',
+          'Then call lmTools/status to confirm online status.',
+        ].join('\n');
+        const resultPayload = {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            contents: [
+              {
+                uri: HANDSHAKE_RESOURCE_URI,
+                mimeType: 'text/plain',
+                text: content,
+              },
+            ],
+          },
+        };
+        process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        return;
+      }
       if (message.id === undefined || message.id === null) {
         return;
       }
@@ -550,18 +601,7 @@ async function main() {
   let offlineSince: number | undefined;
   let reconnectTimer: NodeJS.Timeout | undefined;
   // Env snapshot logging removed to avoid noisy logs.
-  const vscodeCwd = process.env.VSCODE_CWD;
-  if (vscodeCwd) {
-    resolveCwd = path.resolve(vscodeCwd);
-    appendLog(`VSCODE_CWD=${vscodeCwd}`);
-  } else {
-    appendLog('VSCODE_CWD not found');
-  }
-  let currentTargetResult = await resolveTarget(resolveCwd);
-  let currentTarget = currentTargetResult.target;
-  if (!currentTarget) {
-    appendLog(`No VS Code instance registered for cwd: ${resolveCwd}`);
-  }
+  let currentTarget;
 
   let resolveInFlight;
   const refreshTarget = async (deadlineMs) => {
@@ -620,28 +660,90 @@ async function main() {
   reconnectTimer = setInterval(() => {
     void reconnectLoop();
   }, 1000);
-  const handleMessage = async (message) => {
-    if (message?.method === STATUS_METHOD) {
-      logDebug('status.request', { id: message.id ?? null });
-      let resolveResult;
-      if (workspaceSetExplicitly && !workspaceMatched) {
-        const deadline = Date.now() + RESOLVE_RETRY_DELAY_MS;
-        resolveResult = await refreshTarget(deadline);
+  const proxyToolsList = [
+    {
+      name: REQUEST_WORKSPACE_METHOD,
+      description: 'Resolve and bind a workspace MCP server. Input: { cwd: string }.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Workspace path to resolve.' },
+        },
+        required: ['cwd'],
+      },
+    },
+    {
+      name: STATUS_METHOD,
+      description: 'Get proxy status and online state for the current target.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  ];
+  const respondToolCall = (id, payload) => {
+    const resultPayload = {
+      jsonrpc: '2.0',
+      id,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload),
+          },
+        ],
+        structuredContent: payload,
+      },
+    };
+    process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+  };
+  const respondToolError = (id, code, message) => {
+    const errorPayload = {
+      jsonrpc: '2.0',
+      id,
+      error: { code, message },
+    };
+    process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
+  };
+  const buildStatusPayload = async () => {
+    let resolveResult;
+    if (workspaceSetExplicitly && !workspaceMatched) {
+      const deadline = Date.now() + RESOLVE_RETRY_DELAY_MS;
+      resolveResult = await refreshTarget(deadline);
+    }
+    const target = workspaceSetExplicitly ? currentTarget : undefined;
+    const health = target ? await checkTargetHealth(target) : undefined;
+    const online = isHealthOk(health);
+    if (!online && target) {
+      workspaceMatched = false;
+      currentTarget = undefined;
+      if (!offlineSince) {
+        offlineSince = Date.now();
       }
-      const target = workspaceSetExplicitly ? currentTarget : undefined;
-      const health = target ? await checkTargetHealth(target) : undefined;
-      const online = isHealthOk(health);
-      if (!online && target) {
-        workspaceMatched = false;
-        currentTarget = undefined;
-        if (!offlineSince) {
-          offlineSince = Date.now();
-        }
-      } else if (online) {
-        offlineSince = undefined;
-      }
-      const ready = workspaceMatched && Boolean(target) && online;
-      logDebug('status.state', {
+    } else if (online) {
+      offlineSince = undefined;
+    }
+    const ready = workspaceMatched && Boolean(target) && online;
+    return {
+      payload: {
+        ready,
+        online,
+        workspaceSetExplicitly,
+        cwd: resolveCwd,
+        offlineDurationSec: toOfflineDurationSec(offlineSince),
+        target: target
+          ? {
+            sessionId: target.sessionId,
+            host: target.host,
+            port: target.port,
+            workspaceFolders: target.workspaceFolders,
+            workspaceFile: target.workspaceFile ?? null,
+          }
+          : null,
+        resolveErrorKind: resolveResult?.errorKind,
+        health,
+      },
+      debug: {
         ready,
         online,
         workspaceSetExplicitly,
@@ -649,29 +751,142 @@ async function main() {
         offlineDurationSec: toOfflineDurationSec(offlineSince),
         target: target ? `${target.host}:${target.port}` : null,
         resolveErrorKind: resolveResult?.errorKind ?? null,
-      });
+      },
+    };
+  };
+  const handleRequestWorkspace = async (cwdValue) => {
+    if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
+      return { error: { code: -32602, message: 'Invalid params: expected params.cwd (string).' } };
+    }
+    resolveCwd = path.resolve(cwdValue);
+    workspaceSetExplicitly = true;
+    workspaceMatched = false;
+    currentTarget = undefined;
+    resolveInFlight = undefined;
+    const resolveResult = await refreshTarget();
+    const matchedTarget = resolveResult?.target;
+    if (!matchedTarget) {
+      if (!offlineSince) {
+        offlineSince = Date.now();
+      }
+      return {
+        error: {
+          code: resolveResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
+          message: resolveResult?.errorKind === 'no_match'
+            ? 'No matching VS Code instance for provided workspace.'
+            : 'Manager unreachable.',
+        },
+        debug: {
+          errorKind: resolveResult?.errorKind ?? 'unreachable',
+          cwd: resolveCwd,
+        },
+      };
+    }
+    if (!isCwdWithinWorkspaceFolders(resolveCwd, matchedTarget.workspaceFolders)) {
+      if (!offlineSince) {
+        offlineSince = Date.now();
+      }
+      return {
+        error: {
+          code: ERROR_NO_MATCH,
+          message: 'Provided cwd is not within resolved workspace folders.',
+        },
+        debug: {
+          cwd: resolveCwd,
+          workspaceFolders: matchedTarget.workspaceFolders,
+        },
+      };
+    }
+    const health = await checkTargetHealth(matchedTarget);
+    if (!isHealthOk(health)) {
+      workspaceMatched = false;
+      currentTarget = undefined;
+      if (!offlineSince) {
+        offlineSince = Date.now();
+      }
+      return {
+        error: {
+          code: ERROR_MCP_OFFLINE,
+          message: 'Resolved MCP server is offline.',
+        },
+        debug: {
+          target: `${matchedTarget.host}:${matchedTarget.port}`,
+          health,
+        },
+      };
+    }
+    workspaceMatched = true;
+    currentTarget = matchedTarget;
+    offlineSince = undefined;
+    return {
+      payload: {
+        ok: true,
+        cwd: resolveCwd,
+        target: {
+          sessionId: matchedTarget.sessionId,
+          host: matchedTarget.host,
+          port: matchedTarget.port,
+          workspaceFolders: matchedTarget.workspaceFolders,
+          workspaceFile: matchedTarget.workspaceFile ?? null,
+        },
+        online: true,
+        health,
+      },
+      debug: {
+        cwd: resolveCwd,
+        target: `${matchedTarget.host}:${matchedTarget.port}`,
+      },
+    };
+  };
+  const handleMessage = async (message) => {
+    if (message?.method === TOOLS_LIST_METHOD) {
+      if (!workspaceMatched) {
+        logDebug('tools.list.proxy', { id: message.id ?? null });
+        if (message.id !== undefined && message.id !== null) {
+          const resultPayload = {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: { tools: proxyToolsList },
+          };
+          process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
+        }
+        return;
+      }
+    }
+    if (message?.method === TOOLS_CALL_METHOD) {
+      const name = message?.params?.name;
+      const args = message?.params?.arguments ?? {};
+      if (message.id === undefined || message.id === null) {
+        return;
+      }
+      if (name === REQUEST_WORKSPACE_METHOD) {
+        const result = await handleRequestWorkspace(args?.cwd);
+        if (result.error) {
+          respondToolError(message.id, result.error.code, result.error.message);
+          return;
+        }
+        respondToolCall(message.id, result.payload);
+        return;
+      }
+      if (name === STATUS_METHOD) {
+        const statusResult = await buildStatusPayload();
+        respondToolCall(message.id, statusResult.payload);
+        return;
+      }
+      if (!workspaceMatched) {
+        respondToolError(message.id, -32602, `Unknown tool: ${String(name)}`);
+        return;
+      }
+    }
+    if (message?.method === STATUS_METHOD) {
+      logDebug('status.request', { id: message.id ?? null });
+      const statusResult = await buildStatusPayload();
+      logDebug('status.state', statusResult.debug);
       if (message.id !== undefined && message.id !== null) {
         const resultPayload = {
           jsonrpc: '2.0',
           id: message.id,
-          result: {
-            ready,
-            online,
-            workspaceSetExplicitly,
-            cwd: resolveCwd,
-            offlineDurationSec: toOfflineDurationSec(offlineSince),
-            target: target
-              ? {
-                sessionId: target.sessionId,
-                host: target.host,
-                port: target.port,
-                workspaceFolders: target.workspaceFolders,
-                workspaceFile: target.workspaceFile ?? null,
-              }
-              : null,
-            resolveErrorKind: resolveResult?.errorKind,
-            health,
-          },
+          result: statusResult.payload,
         };
         process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
       }
@@ -679,122 +894,31 @@ async function main() {
     }
     if (message?.method === REQUEST_WORKSPACE_METHOD) {
       logDebug('requestWorkspaceMCPServer.request', { id: message.id ?? null, cwd: message?.params?.cwd ?? null });
-      const nextCwd = message?.params?.cwd;
-      if (typeof nextCwd !== 'string' || nextCwd.trim().length === 0) {
-        if (message.id !== undefined && message.id !== null) {
-          const errorPayload = {
-            jsonrpc: '2.0',
-            id: message.id,
-            error: {
-              code: -32602,
-              message: 'Invalid params: expected params.cwd (string).',
-            },
-          };
-          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
-        }
-        logDebug('requestWorkspaceMCPServer.invalidParams');
-        return;
-      }
-      resolveCwd = path.resolve(nextCwd);
-      workspaceSetExplicitly = true;
-      workspaceMatched = false;
-      currentTarget = undefined;
-      resolveInFlight = undefined;
-      const resolveResult = await refreshTarget();
-      const matchedTarget = resolveResult?.target;
-      if (!matchedTarget) {
-        if (!offlineSince) {
-          offlineSince = Date.now();
-        }
-        logDebug('requestWorkspaceMCPServer.noMatch', {
-          errorKind: resolveResult?.errorKind ?? 'unreachable',
-          cwd: resolveCwd,
-        });
-        if (message.id !== undefined && message.id !== null) {
-          const errorKind = resolveResult?.errorKind ?? 'unreachable';
-          const errorPayload = {
-            jsonrpc: '2.0',
-            id: message.id,
-            error: {
-              code: errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
-              message: errorKind === 'no_match'
-                ? 'No matching VS Code instance for provided workspace.'
-                : 'Manager unreachable.',
-            },
-          };
-          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
-        }
-        return;
-      }
-      if (!isCwdWithinWorkspaceFolders(resolveCwd, matchedTarget.workspaceFolders)) {
-        if (!offlineSince) {
-          offlineSince = Date.now();
-        }
-        logDebug('requestWorkspaceMCPServer.cwdMismatch', {
-          cwd: resolveCwd,
-          workspaceFolders: matchedTarget.workspaceFolders,
+      const result = await handleRequestWorkspace(message?.params?.cwd);
+      if (result.error) {
+        logDebug('requestWorkspaceMCPServer.error', {
+          code: result.error.code,
+          message: result.error.message,
+          ...(result.debug ?? {}),
         });
         if (message.id !== undefined && message.id !== null) {
           const errorPayload = {
             jsonrpc: '2.0',
             id: message.id,
-            error: {
-              code: ERROR_NO_MATCH,
-              message: 'Provided cwd is not within resolved workspace folders.',
-            },
+            error: result.error,
           };
           process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
         }
         return;
       }
-      const health = await checkTargetHealth(matchedTarget);
-      if (!isHealthOk(health)) {
-        workspaceMatched = false;
-        currentTarget = undefined;
-        if (!offlineSince) {
-          offlineSince = Date.now();
-        }
-        logDebug('requestWorkspaceMCPServer.offline', {
-          target: `${matchedTarget.host}:${matchedTarget.port}`,
-          health,
-        });
-        if (message.id !== undefined && message.id !== null) {
-          const errorPayload = {
-            jsonrpc: '2.0',
-            id: message.id,
-            error: {
-              code: ERROR_MCP_OFFLINE,
-              message: 'Resolved MCP server is offline.',
-            },
-          };
-          process.stdout.write(`${JSON.stringify(errorPayload)}\n`);
-        }
-        return;
+      if (result.debug) {
+        logDebug('requestWorkspaceMCPServer.ok', result.debug);
       }
-      workspaceMatched = true;
-      currentTarget = matchedTarget;
-      offlineSince = undefined;
-      logDebug('requestWorkspaceMCPServer.ok', {
-        cwd: resolveCwd,
-        target: `${matchedTarget.host}:${matchedTarget.port}`,
-      });
       if (message.id !== undefined && message.id !== null) {
         const resultPayload = {
           jsonrpc: '2.0',
           id: message.id,
-          result: {
-            ok: true,
-            cwd: resolveCwd,
-            target: {
-              sessionId: matchedTarget.sessionId,
-              host: matchedTarget.host,
-              port: matchedTarget.port,
-              workspaceFolders: matchedTarget.workspaceFolders,
-              workspaceFile: matchedTarget.workspaceFile ?? null,
-            },
-            online: true,
-            health,
-          },
+          result: result.payload,
         };
         process.stdout.write(`${JSON.stringify(resultPayload)}\n`);
       }

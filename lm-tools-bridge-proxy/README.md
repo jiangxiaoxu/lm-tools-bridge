@@ -23,6 +23,8 @@ Until `lmTools/requestWorkspaceMCPServer` succeeds, the proxy rejects all MCP re
 
 If the target MCP goes offline, the proxy marks itself disconnected and attempts auto-reconnect every second. `lmTools/status` returns `offlineDurationSec` to show how long it has been offline.
 
+When the proxy is not ready, it exposes a minimal MCP resource (`lm-tools-bridge-proxy://handshake`) via `resources/list` and also returns `lmTools/requestWorkspaceMCPServer` and `lmTools/status` from `tools/list` so clients can discover the exact method names.
+
 ## Logging
 
 Set `LM_TOOLS_BRIDGE_PROXY_LOG` to a file path to enable log output. If unset, the proxy emits no logs.

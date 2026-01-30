@@ -136,12 +136,12 @@ Write-Host "Sample file: $sampleFile"
 $toolsRes = Invoke-McpJson @{
   jsonrpc = '2.0'
   id = 2
-  method = 'tools/call'
-  params = @{ name = 'vscodeLmToolkit'; arguments = @{ action = 'listTools'; detail = 'names' } }
+  method = 'tools/list'
+  params = @{}
 }
 $available = @()
-if ($toolsRes.result.content -and $toolsRes.result.content.Count -gt 0) {
-  $available = ($toolsRes.result.content[0].text | ConvertFrom-Json).tools
+if ($toolsRes.result.tools -and $toolsRes.result.tools.Count -gt 0) {
+  $available = $toolsRes.result.tools | ForEach-Object { $_.name }
 }
 
 $candidateTools = @(
@@ -166,18 +166,18 @@ foreach ($toolName in $toolsToCheck) {
   $toolInfoRes = Invoke-McpJson @{
     jsonrpc = '2.0'
     id = $id
-    method = 'tools/call'
-    params = @{ name = 'vscodeLmToolkit'; arguments = @{ action = 'getToolInfo'; name = $toolName } }
+    method = 'resources/read'
+    params = @{ uri = "lm-tools://schema/$toolName" }
   }
   $id += 1
-  $toolInfo = $toolInfoRes.result.content[0].text | ConvertFrom-Json
+  $toolInfo = $toolInfoRes.result.contents[0].text | ConvertFrom-Json
   $input = Build-ToolInput -ToolName $toolName -ToolInfo $toolInfo -SampleFile $sampleFile -SampleDir $sampleDir -WorkspacePath $workspacePath -QueryText $Query
 
   $invokeRes = Invoke-McpJson @{
     jsonrpc = '2.0'
     id = $id
     method = 'tools/call'
-    params = @{ name = 'vscodeLmToolkit'; arguments = @{ action = 'invokeTool'; name = $toolName; input = $input } }
+    params = @{ name = $toolName; arguments = $input }
   }
   $id += 1
 
@@ -190,10 +190,9 @@ foreach ($toolName in $toolsToCheck) {
     error = $null
   }
 
-  if ($invokeRes.result -and $invokeRes.result.content -and $invokeRes.result.content.Count -gt 0) {
-    $inner = $invokeRes.result.content[0].text | ConvertFrom-Json
-    if ($inner.result) {
-      foreach ($part in $inner.result) {
+  if ($invokeRes.result) {
+    if ($invokeRes.result.structuredContent -and $invokeRes.result.structuredContent.blocks) {
+      foreach ($part in $invokeRes.result.structuredContent.blocks) {
         if ($part.type -eq 'prompt-tsx') {
           $entry.promptTsx = $true
           if ($part.PSObject.Properties.Name -contains 'textParts') {
@@ -207,6 +206,8 @@ foreach ($toolName in $toolsToCheck) {
       $entry.ok = $entry.promptTsx -and $entry.hasTextParts -and -not $entry.hasText
     } elseif ($invokeRes.result.isError) {
       $entry.error = 'tool_error'
+    } else {
+      $entry.ok = $true
     }
   } elseif ($invokeRes.error) {
     $entry.error = $invokeRes.error.message

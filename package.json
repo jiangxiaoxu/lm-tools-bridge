@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.38",
+  "version": "1.0.39",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -60,6 +60,13 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Port for the MCP server."
+        },
+        "lmToolsBridge.manager.httpPort": {
+          "type": "number",
+          "default": 47100,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port for the LM Tools Bridge manager HTTP MCP gateway."
         },
         "lmToolsBridge.useWorkspaceSettings": {
           "type": "boolean",

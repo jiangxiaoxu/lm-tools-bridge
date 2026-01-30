@@ -13,17 +13,18 @@ VS Code extension that exposes MCP tools backed by the VS Code Language Model AP
 
 ## MCP Server
 
-The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed by `vscodeLmToolkit`.
+The extension starts a local MCP Streamable HTTP server and exposes tools plus resources. Only tools enabled in settings and not blacklisted are exposed directly via MCP (`tools/list` + `tools/call`).
 
 - Endpoint: `http://127.0.0.1:48123/mcp` (host is fixed to `127.0.0.1`)
+- Manager status endpoint: `http://127.0.0.1:47100/mcp/status`
 - Tool names:
-  - `vscodeLmToolkit`
   - `getVSCodeWorkspace` (call this first to confirm the workspace before using other tools)
+  - All enabled tools from `lmToolsBridge.tools.enabled` (filtered by blacklist settings)
 - Resources:
   - `lm-tools://names` (tool names only)
   - `lm-tools://tool/{name}` (full tool detail)
   - `lm-tools://schema/{name}` (input schema only; not listed by `list_mcp_resources`)
-  - `lm-tools://policy` (recommended call order policy; use lm-tools://mcp-tool/getVSCodeWorkspace, then lm-tools://schema/{name}, then invokeTool with lm-tools://tool/{name})
+  - `lm-tools://policy` (recommended call order policy; use lm-tools://mcp-tool/getVSCodeWorkspace, then lm-tools://schema/{name}, then tools/call)
   - `lm-tools://mcp-tool/getVSCodeWorkspace` (MCP-native tool description)
 
 Use `lm-tools://schema/{name}` to fetch input structure when needed.
@@ -95,18 +96,24 @@ These tools are always hidden and cannot be configured or enabled via settings:
 - `copilot_findTextInFiles`
 - `copilot_readFile`
 
-### Tool input (vscodeLmToolkit)
+### Tool input (tools/call)
 
 ```json
 {
-  "action": "listTools | getToolInfo | invokeTool",
-  "name": "toolName",
-  "detail": "names | full",
-  "input": {}
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "lm_findFiles",
+    "arguments": {
+      "query": "src/**/*.ts",
+      "maxResults": 20
+    }
+  }
 }
 ```
 
-Note: `action` is **only** for `vscodeLmToolkit` itself. Valid actions: `listTools` | `getToolInfo` | `invokeTool`. `listTools` only allows `action` and optional `detail` and defaults to `detail: "names"`; use `detail: "full"` if you need complete tool info. `getToolInfo` does not accept `detail` and always returns full detail (including `inputSchema`). `invokeTool` requires `name` and optional `input`, which must be an object. The `input` field is for the target tool and must follow its schema (`lm-tools://schema/{name}`).
+Use `lm-tools://schema/{name}` to fetch the tool input schema before calling. The `arguments` field must be an object that matches the schema.
 
 ### MCP native tool: getVSCodeWorkspace
 
@@ -142,8 +149,8 @@ Example result (multiple workspaces):
 ### Recommended tool call order
 
 1. Call `getVSCodeWorkspace` to verify the workspace matches the status bar tooltip.
-2. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `listTools detail:"full"`); the schema must be read before invoking.
-3. Invoke the tool with `vscodeLmToolkit` once the schema is known.
+2. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `lm-tools://tool/{name}` for full metadata).
+3. Invoke the tool with `tools/call` once the schema is known.
 
 Following these steps prevents validation errors such as missing `action` or schema mismatches.
 
@@ -151,6 +158,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 
 - `lmToolsBridge.server.autoStart` (default: true)
 - `lmToolsBridge.server.port` (default: 48123)
+- `lmToolsBridge.manager.httpPort` (default: 47100)
 - `lmToolsBridge.useWorkspaceSettings` (default: false; only honored in workspace settings; user/global settings are ignored; when enabled, workspace settings override user settings)
 - `lmToolsBridge.tools.enabled` (default: the list above)
 - `lmToolsBridge.tools.blacklist` (default: empty array; user-configurable blacklist, combined with internal blacklist)
@@ -167,7 +175,7 @@ Following these steps prevents validation errors such as missing `action` or sch
 - Right-click the status bar item and select `LM Tools Bridge: Configure Tools`.
 - Use the multi-select list to enable tools. Click **Reset** to restore defaults.
 - Tools matching the blacklist are hidden from the picker and are always disabled.
-- These controls apply to `vscodeLmToolkit` only.
+- These controls apply to the MCP-exposed tool list.
 - `lmToolsBridge.tools.responseFormat` controls tool responses: `text` returns only content.text (human-readable), `structured` returns only structuredContent (machine-readable) with empty content, `both` returns both content.text and structuredContent. Applies to all tools.
 
 ### Help and reload
@@ -190,7 +198,7 @@ Check Output -> `LM Tools Bridge` for MCP server logs.
 
 Debug levels:
 - `off`: only status logs (running/off state + workspace path when known).
-- `simple`: status logs + tool name/input + duration (ms) for listTools/getToolInfo/invokeTool.
+- `simple`: status logs + tool name/input + duration (ms) for tools/call.
 - `detail`: adds full tool outputs; if responseFormat is `structured` or `both`, logs structured content too.
 
 ### Consent notes

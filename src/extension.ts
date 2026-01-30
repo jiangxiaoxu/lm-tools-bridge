@@ -24,10 +24,12 @@ const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
+const CONFIG_MANAGER_HTTP_PORT = 'manager.httpPort';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
+const DEFAULT_MANAGER_HTTP_PORT = 47100;
 const HEALTH_PATH = '/mcp/health';
 const STATUS_REFRESH_INTERVAL_MS = 3000;
 const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
@@ -171,17 +173,9 @@ const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
 
 const schemaDefaultOverrideWarnings = new Set<string>();
 
-type ToolAction = 'listTools' | 'getToolInfo' | 'invokeTool';
 type ToolDetail = 'names' | 'full';
 type ResponseFormat = 'text' | 'structured' | 'both';
 type DebugLevel = 'off' | 'simple' | 'detail';
-
-interface ToolkitInput {
-  action: ToolAction;
-  name?: string;
-  detail?: ToolDetail;
-  input?: unknown;
-}
 
 interface CustomToolInformation {
   name: string;
@@ -1027,7 +1021,8 @@ async function startManagerProcess(): Promise<void> {
     return;
   }
   const pipeName = getManagerPipeName();
-  const child = spawn(process.execPath, [managerPath, '--pipe', pipeName], {
+  const managerHttpPort = getConfigValue<number>(CONFIG_MANAGER_HTTP_PORT, DEFAULT_MANAGER_HTTP_PORT);
+  const child = spawn(process.execPath, [managerPath, '--pipe', pipeName, '--http-port', String(managerHttpPort)], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
@@ -1146,165 +1141,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
-  const toolDetailSchema = z.enum(['names', 'full'])
-    .describe('Detail level for listTools only. Use full to get complete tool info if needed.');
-  const listToolsSchema = z.object({
-    action: z.literal('listTools'),
-    detail: toolDetailSchema.optional(),
-  }).strict().describe('List tools with optional detail. Only "action" (must be "listTools") and optional "detail" are allowed.');
-  const getToolInfoSchema = z.object({
-    action: z.literal('getToolInfo'),
-    name: z.string()
-      .describe('Target tool name. Required for getToolInfo.'),
-  }).strict().describe('Get tool info. Always returns full detail including inputSchema.');
-  const invokeToolSchema = z.object({
-    action: z.literal('invokeTool'),
-    name: z.string()
-      .describe('Target tool name. Required for invokeTool.'),
-    input: z.object({}).passthrough()
-      .describe('Target tool input object. See lm-tools://schema/{name}.')
-      .optional(),
-  }).strict().describe('Invoke a tool with input.');
-  const toolkitSchema: z.ZodTypeAny = z.discriminatedUnion('action', [
-    listToolsSchema,
-    getToolInfoSchema,
-    invokeToolSchema,
-  ]).describe('Toolkit wrapper for listing/inspecting/invoking tools. listTools only supports action/detail; getToolInfo always returns full detail.');
-
-  // @ts-expect-error TS2589: Deep instantiation from SDK tool generics.
-  server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
-    'vscodeLmToolkit',
-    {
-      description: [
-        'List, inspect, and invoke tools from vscode.lm.tools.',
-        'Valid actions: "listTools" | "getToolInfo" | "invokeTool".',
-        '• listTools only allows { action, detail? } and defaults to detail="names". Use detail="full" when you need all tool info.',
-        '• getToolInfo requires { action:"getToolInfo", name } and always returns full detail (no detail parameter).',
-        '• invokeTool requires { action:"invokeTool", name, input? } and the input must be an object.',
-        'Use lm-tools://schema/{name} for tool input shapes before invoking.',
-      ].join('\n'),
-      inputSchema: toolkitSchema,
-    },
-    async (args: ToolkitInput) => {
-      const debugLevel = getDebugLevel();
-      const requestStartTime = Date.now();
-      let debugInput: unknown = args;
-      let debugOutputText: string | undefined;
-      let debugStructuredOutput: unknown;
-      let debugInvokeInput: Record<string, unknown> | undefined;
-      let debugError: unknown;
-      try {
-        const lm = getLanguageModelNamespace();
-        if (!lm) {
-          return toolErrorResult('vscode.lm is not available in this VS Code version.');
-        }
-
-        const tools = getExposedToolsSnapshot();
-        const detail: ToolDetail = args.detail ?? 'names';
-
-        if (args.action === 'listTools') {
-          const payload = listToolsPayload(tools, detail);
-          const text = detail === 'full'
-            ? tools.map((tool) => formatToolInfoText(toolInfoPayload(tool, 'full'))).join('\n\n')
-            : formatToolNameList(tools);
-          debugInput = { action: 'listTools', detail };
-          debugOutputText = text;
-          debugStructuredOutput = payload;
-          return buildToolResult(payload, false, text);
-        }
-
-        if (!args.name) {
-          return toolErrorResult('Tool name is required for this action. Valid actions: listTools | getToolInfo | invokeTool.');
-        }
-
-        const tool = tools.find((candidate) => candidate.name === args.name);
-        if (!tool) {
-          return toolErrorResult(`Tool not found or disabled: ${args.name}`);
-        }
-
-        if (args.action === 'getToolInfo') {
-          if (args.detail !== undefined) {
-            return toolErrorResult('detail is not supported for getToolInfo; full detail is always returned.');
-          }
-          const payload = toolInfoPayload(tool, 'full');
-          const text = formatToolInfoText(payload);
-          debugInput = { action: 'getToolInfo', name: tool.name };
-          debugOutputText = text;
-          debugStructuredOutput = payload;
-          return buildToolResult(payload, false, text);
-        }
-
-        const input = args.input ?? {};
-        if (!isPlainObject(input)) {
-          return toolErrorResultPayload({
-            error: 'Tool input must be an object. Use lm-tools://schema/{name} for the expected shape.',
-            name: tool.name,
-            inputSchema: tool.inputSchema ?? null,
-          });
-        }
-        const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema, tool.name);
-        debugInvokeInput = normalizedInput;
-        let outputText: string | undefined;
-        let structuredOutput: { blocks: unknown[] } | undefined;
-        try {
-          if (isCustomTool(tool)) {
-            const result = await tool.invoke(normalizedInput);
-            const serialized = serializeToolResult(result as vscode.LanguageModelToolResult);
-            outputText = serializedToolResultToText(serialized);
-            structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
-            debugOutputText = outputText;
-            debugStructuredOutput = structuredOutput;
-            return buildToolResult(structuredOutput, false, outputText);
-          }
-
-          const result = await lm.invokeTool(tool.name, {
-            input: normalizedInput,
-            toolInvocationToken: undefined,
-          });
-          const serialized = serializeToolResult(result);
-          outputText = tool.name === 'copilot_findTextInFiles'
-            ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
-            : serializedToolResultToText(serialized);
-          structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
-          debugOutputText = outputText;
-          debugStructuredOutput = structuredOutput;
-          return buildToolResult(structuredOutput, false, outputText);
-        } catch (error) {
-          debugError = error;
-          throw error;
-        }
-      } catch (error) {
-        const message = String(error);
-        debugError = error;
-        return toolErrorResultPayload({
-          error: message,
-          name: args.name,
-          inputSchema: args.name
-            ? getExposedToolsSnapshot().find((tool) => tool.name === args.name)?.inputSchema ?? null
-            : null,
-        });
-      } finally {
-        const durationMs = Date.now() - requestStartTime;
-        if (debugLevel !== 'off') {
-          if (args.action === 'invokeTool') {
-            logInfo(`vscodeLmToolkit invokeTool name=${args.name ?? ''} input=${formatLogPayload(debugInvokeInput ?? {})} durationMs=${durationMs}`);
-          } else {
-            logInfo(`vscodeLmToolkit ${args.action} input=${formatLogPayload(debugInput)} durationMs=${durationMs}`);
-          }
-        }
-        if (debugLevel === 'detail') {
-          if (debugError) {
-            logInfo(`vscodeLmToolkit ${args.action} error: ${String(debugError)}`);
-          } else {
-            logInfo(`vscodeLmToolkit ${args.action} output: ${debugOutputText ?? ''}`);
-            if (getResponseFormat() !== 'text') {
-              logInfo(`vscodeLmToolkit ${args.action} structured output: ${formatLogPayload(debugStructuredOutput)}`);
-            }
-          }
-        }
-      }
-    },
-  );
+  registerExposedTools(server);
 
   const getWorkspaceDescription = 'getVSCodeWorkspace: Get current VS Code workspace paths. Input schema is an empty object. Before using other tools, call getVSCodeWorkspace to verify the workspace. If it does not match, ask the user to confirm.';
   const getWorkspaceSchema: z.ZodTypeAny = z.object({}).strict().describe('No input.');
@@ -1335,19 +1172,19 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     order: [
       'lm-tools://mcp-tool/getVSCodeWorkspace',
       'lm-tools://schema/{name}',
-      'invokeTool (see lm-tools://tool/{name})',
+      'tools/call {name}',
     ],
     schemaUriFormat: 'lm-tools://schema/{name}',
     schemaUriNote: 'Replace {name} with the exact tool name (e.g., lm-tools://schema/copilot_readFile).',
     workspaceUri: 'lm-tools://mcp-tool/getVSCodeWorkspace',
     toolUriFormat: 'lm-tools://tool/{name}',
-    note: 'Use getVSCodeWorkspace to verify the workspace, then read the target tool schema before invoking any tool.',
+    note: 'Use getVSCodeWorkspace to verify the workspace, then read the target tool schema before calling tools/call.',
   };
 
   server.registerResource(
     'lmToolsPolicy',
     'lm-tools://policy',
-    { description: 'Call order policy: use getVSCodeWorkspace (lm-tools://mcp-tool/getVSCodeWorkspace) to verify workspace, then read tool schema (lm-tools://schema/{name}), then invokeTool (see lm-tools://tool/{name}).' },
+    { description: 'Call order policy: use getVSCodeWorkspace (lm-tools://mcp-tool/getVSCodeWorkspace) to verify workspace, then read tool schema (lm-tools://schema/{name}), then call tools/call by name.' },
     async () => {
       logDebugDetail('Resource read: lm-tools://policy');
       return resourceJson('lm-tools://policy', policyPayload);
@@ -1471,6 +1308,26 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   return server;
 }
 
+function registerExposedTools(server: McpServer): void {
+  const toolInputSchema: z.ZodTypeAny = z.object({}).passthrough()
+    .describe('Tool input object. Use lm-tools://schema/{name} for the expected shape.');
+  const tools = getExposedToolsSnapshot();
+  for (const tool of tools) {
+    if (tool.name === 'getVSCodeWorkspace') {
+      continue;
+    }
+    // @ts-expect-error TS2589: Deep instantiation from SDK tool generics.
+    server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
+      tool.name,
+      {
+        description: tool.description ?? '',
+        inputSchema: toolInputSchema,
+      },
+      async (args: Record<string, unknown>) => invokeExposedTool(tool.name, args),
+    );
+  }
+}
+
 async function handleHealth(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -1559,6 +1416,87 @@ function buildToolResult(payload: unknown, isError: boolean, textOverride?: stri
     ],
     ...(isError ? { isError: true } : {}),
   };
+}
+
+async function invokeExposedTool(toolName: string, args: unknown) {
+  const debugLevel = getDebugLevel();
+  const requestStartTime = Date.now();
+  let debugInvokeInput: Record<string, unknown> | undefined;
+  let debugOutputText: string | undefined;
+  let debugStructuredOutput: unknown;
+  let debugError: unknown;
+  try {
+    const tools = getExposedToolsSnapshot();
+    const tool = tools.find((candidate) => candidate.name === toolName);
+    if (!tool) {
+      return toolErrorResultPayload({
+        error: `Tool not found or disabled: ${toolName}`,
+        name: toolName,
+        inputSchema: null,
+      });
+    }
+    const input = args ?? {};
+    if (!isPlainObject(input)) {
+      return toolErrorResultPayload({
+        error: 'Tool input must be an object. Use lm-tools://schema/{name} for the expected shape.',
+        name: tool.name,
+        inputSchema: tool.inputSchema ?? null,
+      });
+    }
+    const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema, tool.name);
+    debugInvokeInput = normalizedInput;
+    let outputText: string | undefined;
+    let structuredOutput: { blocks: unknown[] } | undefined;
+    if (isCustomTool(tool)) {
+      const result = await tool.invoke(normalizedInput);
+      const serialized = serializeToolResult(result as vscode.LanguageModelToolResult);
+      outputText = serializedToolResultToText(serialized);
+      structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+      debugOutputText = outputText;
+      debugStructuredOutput = structuredOutput;
+      return buildToolResult(structuredOutput, false, outputText);
+    }
+
+    const lm = getLanguageModelNamespace();
+    if (!lm) {
+      return toolErrorResult('vscode.lm is not available in this VS Code version.');
+    }
+    const result = await lm.invokeTool(tool.name, {
+      input: normalizedInput,
+      toolInvocationToken: undefined,
+    });
+    const serialized = serializeToolResult(result);
+    outputText = tool.name === 'copilot_findTextInFiles'
+      ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
+      : serializedToolResultToText(serialized);
+    structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+    debugOutputText = outputText;
+    debugStructuredOutput = structuredOutput;
+    return buildToolResult(structuredOutput, false, outputText);
+  } catch (error) {
+    const message = String(error);
+    debugError = error;
+    return toolErrorResultPayload({
+      error: message,
+      name: toolName,
+      inputSchema: getExposedToolsSnapshot().find((tool) => tool.name === toolName)?.inputSchema ?? null,
+    });
+  } finally {
+    const durationMs = Date.now() - requestStartTime;
+    if (debugLevel !== 'off') {
+      logInfo(`mcpTool call name=${toolName} input=${formatLogPayload(debugInvokeInput ?? {})} durationMs=${durationMs}`);
+    }
+    if (debugLevel === 'detail') {
+      if (debugError) {
+        logInfo(`mcpTool call name=${toolName} error: ${String(debugError)}`);
+      } else {
+        logInfo(`mcpTool call name=${toolName} output: ${debugOutputText ?? ''}`);
+        if (getResponseFormat() !== 'text') {
+          logInfo(`mcpTool call name=${toolName} structured output: ${formatLogPayload(debugStructuredOutput)}`);
+        }
+      }
+    }
+  }
 }
 
 function payloadToText(payload: unknown): string {
@@ -2471,14 +2409,14 @@ function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
 
   if (tool.tags.some((tag) => tag.includes('codesearch'))) {
     return {
-      mode: 'toolkit',
-      reason: 'Heuristic: codesearch tag; use vscodeLmToolkit.',
+      mode: 'direct',
+      reason: 'Heuristic: codesearch tag; call the tool directly.',
     };
   }
 
   return {
-    mode: 'toolkit',
-    reason: 'Heuristic: default to vscodeLmToolkit.',
+    mode: 'direct',
+    reason: 'Heuristic: default to calling the tool directly.',
     requiresObjectInput: schemaRequiresObjectInput(tool.inputSchema) || undefined,
   };
 }

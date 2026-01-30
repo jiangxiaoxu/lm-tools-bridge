@@ -8,10 +8,6 @@ Root package:
 npm version patch --no-git-tag-version
 ```
 
-## Publish
-
-- The root package requires 2FA (OTP) for publish/unpublish.
-
 ## Tool output formatting
 
 - When implementing custom tools that return text, use `new vscode.LanguageModelTextPart(text)` to avoid double JSON serialization.

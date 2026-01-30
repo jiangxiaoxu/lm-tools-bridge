@@ -59,6 +59,7 @@ const STARTUP_TIME = Date.now();
 const HEALTH_PATH = '/mcp/health';
 const HEALTH_TIMEOUT_MS = 1200;
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
 const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge://handshake';
 const ERROR_MANAGER_UNREACHABLE = -32003;
 const ERROR_NO_MATCH = -32004;
@@ -870,6 +871,18 @@ async function handleSessionMessage(
         required: ['cwd'],
       },
     };
+    const directToolCall = {
+      name: DIRECT_TOOL_CALL_NAME,
+      description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Tool name to call.' },
+          arguments: { type: 'object', description: 'Tool arguments.' },
+        },
+        required: ['name'],
+      },
+    };
     if (!session.workspaceMatched) {
       respondJsonRpcResult(res, message.id ?? null, {
         tools: [requestWorkspaceTool],
@@ -902,6 +915,7 @@ async function handleSessionMessage(
       : [];
     const merged = [
       requestWorkspaceTool,
+      directToolCall,
       ...remoteTools.filter((entry) => (entry as { name?: unknown })?.name !== REQUEST_WORKSPACE_METHOD),
     ];
     respondJsonRpcResult(res, message.id ?? null, { tools: merged });
@@ -924,6 +938,85 @@ async function handleSessionMessage(
         : ':';
       appendLog(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
       respondToolCall(res, message.id ?? null, result.payload);
+      return;
+    }
+    if (name === DIRECT_TOOL_CALL_NAME) {
+      if (!session.workspaceMatched) {
+        appendLog('[tools.call.direct] blocked: workspace_not_matched');
+        respondToolError(
+          res,
+          message.id ?? null,
+          session.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
+          session.workspaceSetExplicitly
+            ? 'Workspace not matched. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd and wait for success.'
+            : 'Workspace not set. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+        );
+        return;
+      }
+      const directArgs = message.params?.arguments as { name?: unknown; arguments?: unknown } | undefined;
+      const targetToolName = typeof directArgs?.name === 'string' ? directArgs.name.trim() : '';
+      if (!targetToolName) {
+        respondToolError(res, message.id ?? null, -32602, 'Invalid params: expected arguments.name (string).');
+        return;
+      }
+      if (directArgs?.arguments !== undefined) {
+        const argValue = directArgs.arguments;
+        if (typeof argValue !== 'object' || argValue === null || Array.isArray(argValue)) {
+          respondToolError(res, message.id ?? null, -32602, 'Invalid params: expected arguments.arguments (object).');
+          return;
+        }
+      }
+      if (targetToolName === DIRECT_TOOL_CALL_NAME || targetToolName === REQUEST_WORKSPACE_METHOD) {
+        respondToolError(res, message.id ?? null, -32602, 'Invalid params: tool name is not allowed.');
+        return;
+      }
+      let target = session.currentTarget;
+      if (!target) {
+        const now = Date.now();
+        const graceDeadline = STARTUP_TIME + STARTUP_GRACE_MS;
+        const refreshResult = await refreshSessionTarget(session, now < graceDeadline ? graceDeadline : undefined);
+        target = refreshResult?.target;
+        if (!target) {
+          respondToolError(
+            res,
+            message.id ?? null,
+            refreshResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
+            refreshResult?.errorKind === 'no_match'
+              ? 'No matching VS Code instance for current workspace.'
+              : 'Manager unreachable.',
+          );
+          return;
+        }
+      }
+      const remote = await requestTargetJson(target, {
+        jsonrpc: '2.0',
+        id: message.id ?? null,
+        method: 'tools/call',
+        params: {
+          name: targetToolName,
+          arguments: directArgs?.arguments ?? {},
+        },
+      });
+      if (!remote.ok) {
+        const retryHealth = await checkTargetHealth(target);
+        if (!isHealthOk(retryHealth)) {
+          session.workspaceMatched = false;
+          session.currentTarget = undefined;
+          if (!session.offlineSince) {
+            session.offlineSince = Date.now();
+          }
+          respondToolError(res, message.id ?? null, ERROR_MCP_OFFLINE, 'Resolved MCP server is offline.');
+          return;
+        }
+        respondToolError(res, message.id ?? null, ERROR_MANAGER_UNREACHABLE, 'Manager unreachable.');
+        return;
+      }
+      const remoteResult = (remote.data as { result?: Record<string, unknown> } | undefined)?.result;
+      if (!remoteResult || typeof remoteResult !== 'object') {
+        respondToolError(res, message.id ?? null, -32603, 'Invalid response from MCP server.');
+        return;
+      }
+      respondJsonRpcResult(res, message.id ?? null, remoteResult);
       return;
     }
     if (!session.workspaceMatched) {

@@ -112,6 +112,26 @@ These tools are always hidden and cannot be configured or enabled via settings:
 
 Use `lm-tools://schema/{name}` to fetch the tool input schema before calling. The `arguments` field must be an object that matches the schema.
 
+### Manager direct bridge tool
+
+The manager exposes a helper tool for environments that lack a generic `tools/call` function. You must complete the workspace handshake first (`lmToolsBridge.requestWorkspaceMCPServer`).
+
+Tool name: `lmToolsBridge.callTool`
+
+Input:
+
+```json
+{
+  "name": "lm_findFiles",
+  "arguments": {
+    "query": "src/**/*.ts",
+    "maxResults": 20
+  }
+}
+```
+
+This bridge forwards the call to the resolved workspace MCP server and returns the target tool result.
+
 ### Recommended tool call order
 
 1. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `lm-tools://tool/{name}` for full metadata).

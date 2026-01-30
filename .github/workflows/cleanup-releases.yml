@@ -47,13 +47,14 @@ jobs:
             fi
             for tag in "${tags[@]:$keep}"; do
               echo "Deleting release $tag"
-              if gh release delete "$tag" -y; then
-                echo "Release deleted: $tag"
-              else
-                echo "Release missing or already deleted: $tag"
+              if gh release delete "$tag" -y --cleanup-tag; then
+                echo "Release and tag deleted: $tag"
+                continue
               fi
-              echo "Cleaning tag $tag"
-              if gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$tag" >/dev/null 2>&1; then
+              echo "Release missing or cleanup failed: $tag"
+              encoded_tag=$(printf '%s' "$tag" | jq -sRr @uri)
+              echo "Cleaning tag $tag (encoded: $encoded_tag)"
+              if gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$encoded_tag"; then
                 echo "Tag cleaned: $tag"
               else
                 echo "Tag missing or already deleted: $tag"

@@ -36,6 +36,7 @@ const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
 const MANAGER_REQUEST_TIMEOUT_MS = 1500;
 const MANAGER_START_TIMEOUT_MS = 3000;
 const MANAGER_LOCK_STALE_MS = 5000;
+const MANAGER_SHUTDOWN_TIMEOUT_MS = 3000;
 const PORT_RETRY_LIMIT = 50;
 const PORT_MIN_VALUE = 1;
 const PORT_MAX_VALUE = 65535;
@@ -960,6 +961,16 @@ async function ensureManagerRunning(): Promise<boolean> {
 
 async function ensureManagerRunningInternal(): Promise<boolean> {
   if (await isManagerAlive()) {
+    const extensionVersion = getExtensionVersion();
+    if (extensionVersion) {
+      const managerVersion = await getManagerVersionFromPipe();
+      if (managerVersion && managerVersion !== extensionVersion) {
+        const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
+        if (restarted) {
+          return true;
+        }
+      }
+    }
     return true;
   }
   if (!extensionContext) {
@@ -1009,6 +1020,84 @@ async function waitForManagerReady(): Promise<boolean> {
 async function isManagerAlive(): Promise<boolean> {
   const response = await managerRequest('GET', '/health');
   return response.ok;
+}
+
+function getExtensionVersion(): string | undefined {
+  const version = extensionContext?.extension?.packageJSON?.version;
+  return typeof version === 'string' ? version : undefined;
+}
+
+async function getManagerVersionFromPipe(): Promise<string | undefined> {
+  const response = await managerRequest<{ version?: unknown }>('GET', '/status');
+  if (!response.ok || !response.data) {
+    return undefined;
+  }
+  const version = response.data.version;
+  return typeof version === 'string' ? version : undefined;
+}
+
+async function restartManagerForVersionMismatch(
+  extensionVersion: string,
+  managerVersion: string,
+): Promise<boolean> {
+  logStatusInfo(`Manager version mismatch (manager=${managerVersion} extension=${extensionVersion}). Restarting manager.`);
+  const shutdownResponse = await managerRequest('POST', '/shutdown', {
+    reason: 'version_mismatch',
+    managerVersion,
+    extensionVersion,
+    expectedVersion: managerVersion,
+  });
+  if (!shutdownResponse.ok) {
+    logStatusWarn('Manager shutdown request failed; continuing with existing manager.');
+    return true;
+  }
+  const stopped = await waitForManagerExit();
+  if (!stopped) {
+    logStatusWarn('Manager did not stop in time; continuing with existing manager.');
+    return true;
+  }
+  return restartManagerProcess();
+}
+
+async function waitForManagerExit(): Promise<boolean> {
+  const deadline = Date.now() + MANAGER_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (!(await isManagerAlive())) {
+      return true;
+    }
+    await delay(200);
+  }
+  return false;
+}
+
+async function restartManagerProcess(): Promise<boolean> {
+  if (!extensionContext) {
+    return false;
+  }
+  const lockPath = await getManagerLockPath();
+  const acquired = await tryAcquireManagerLock(lockPath);
+  if (acquired) {
+    await startManagerProcess();
+    const ready = await waitForManagerReady();
+    await releaseManagerLock(lockPath);
+    return ready;
+  }
+  const ready = await waitForManagerReady();
+  if (ready) {
+    return true;
+  }
+  if (await isLockStale(lockPath)) {
+    await releaseManagerLock(lockPath);
+    const retryAcquired = await tryAcquireManagerLock(lockPath);
+    if (!retryAcquired) {
+      return false;
+    }
+    await startManagerProcess();
+    const retryReady = await waitForManagerReady();
+    await releaseManagerLock(lockPath);
+    return retryReady;
+  }
+  return false;
 }
 
 async function startManagerProcess(): Promise<void> {

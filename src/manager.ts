@@ -61,6 +61,7 @@ const HEALTH_TIMEOUT_MS = 1200;
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
 const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge://handshake';
+const CALL_TOOL_RESOURCE_URI = 'lm-tools-bridge://callTool';
 const ERROR_MANAGER_UNREACHABLE = -32003;
 const ERROR_NO_MATCH = -32004;
 const ERROR_WORKSPACE_NOT_SET = -32005;
@@ -483,6 +484,15 @@ function getHandshakeResource(): Record<string, unknown> {
   };
 }
 
+function getCallToolResource(): Record<string, unknown> {
+  return {
+    uri: CALL_TOOL_RESOURCE_URI,
+    name: 'MCP manager direct tool call',
+    description: 'Call lmToolsBridge.callTool after handshake to invoke a tool by name.',
+    mimeType: 'text/plain',
+  };
+}
+
 async function requestTargetJson(target: ManagerMatch, payload: unknown): Promise<{ ok: boolean; data?: unknown }> {
   return new Promise((resolve) => {
     const body = JSON.stringify(payload);
@@ -787,6 +797,44 @@ async function handleSessionMessage(
     });
     return;
   }
+  if (method === 'resources/read' && message.params?.uri === CALL_TOOL_RESOURCE_URI) {
+    if (!session.workspaceMatched) {
+      respondJsonRpcError(
+        res,
+        200,
+        message.id ?? null,
+        session.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
+        session.workspaceSetExplicitly
+          ? 'Workspace not matched. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd and wait for success.'
+          : 'Workspace not set. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+      );
+      return;
+    }
+    const content = [
+      'Direct tool call bridge (handshake required).',
+      `Tool name: ${DIRECT_TOOL_CALL_NAME}`,
+      'Input: { name: string, arguments?: object }',
+      'Example:',
+      JSON.stringify(
+        {
+          name: 'lm_findFiles',
+          arguments: { query: 'src/**/*.ts', maxResults: 20 },
+        },
+        null,
+        2,
+      ),
+    ].join('\n');
+    respondJsonRpcResult(res, message.id ?? null, {
+      contents: [
+        {
+          uri: CALL_TOOL_RESOURCE_URI,
+          mimeType: 'text/plain',
+          text: content,
+        },
+      ],
+    });
+    return;
+  }
   if (method === 'resources/list') {
     if (!session.workspaceMatched) {
       appendLog('[resources.list] blocked: workspace_not_matched');
@@ -822,6 +870,7 @@ async function handleSessionMessage(
     appendLog(`[resources.list] ok=${String(remote.ok)} items=${String(remoteResources.length)}`);
     const merged = [
       getHandshakeResource(),
+      getCallToolResource(),
       ...remoteResources.filter((entry) => (entry as { uri?: unknown })?.uri !== HANDSHAKE_RESOURCE_URI),
     ];
     respondJsonRpcResult(res, message.id ?? null, { resources: merged });
@@ -885,13 +934,13 @@ async function handleSessionMessage(
     };
     if (!session.workspaceMatched) {
       respondJsonRpcResult(res, message.id ?? null, {
-        tools: [requestWorkspaceTool],
+        tools: [requestWorkspaceTool, directToolCall],
       });
       return;
     }
     const target = session.currentTarget;
     if (!target) {
-      respondJsonRpcResult(res, message.id ?? null, { tools: [requestWorkspaceTool] });
+      respondJsonRpcResult(res, message.id ?? null, { tools: [requestWorkspaceTool, directToolCall] });
       return;
     }
     const remote = await requestTargetJson(target, {
@@ -1340,6 +1389,41 @@ const pipeServer = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url === '/health') {
     respondJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && url === '/status') {
+    respondJson(res, 200, {
+      ok: true,
+      version: getManagerVersion(),
+      pid: process.pid,
+      now: Date.now(),
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url === '/shutdown') {
+    let reason: string | undefined;
+    let expectedVersion: string | undefined;
+    try {
+      const payload = await readJsonBody(req);
+      const shutdownPayload = payload as { reason?: string; expectedVersion?: string } | undefined;
+      reason = shutdownPayload?.reason;
+      expectedVersion = shutdownPayload?.expectedVersion;
+    } catch {
+      // Ignore invalid JSON for shutdown requests.
+    }
+    const currentVersion = getManagerVersion();
+    if (expectedVersion && expectedVersion !== currentVersion) {
+      appendLog(`[shutdown] rejected expected=${String(expectedVersion)} current=${currentVersion} reason=${String(reason ?? '')}`);
+      respondJson(res, 409, { ok: false, reason: 'version_mismatch', version: currentVersion });
+      return;
+    }
+    appendLog(`[shutdown] reason=${String(reason ?? '')} expected=${String(expectedVersion ?? '')}`);
+    respondJson(res, 200, { ok: true });
+    setTimeout(() => {
+      shutdown();
+    }, 0);
     return;
   }
 

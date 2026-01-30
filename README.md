@@ -20,9 +20,10 @@ The extension starts a local MCP Streamable HTTP server and exposes tools plus r
 - Tool names:
   - All enabled tools from `lmToolsBridge.tools.enabled` (filtered by blacklist settings)
 - Resources:
-  - `lm-tools://names` (tool names only)
-  - `lm-tools://tool/{name}` (full tool detail)
-  - `lm-tools://schema/{name}` (input schema only; not listed by `list_mcp_resources`)
+- `lm-tools://names` (tool names only)
+- `lm-tools://tool/{name}` (full tool detail)
+- `lm-tools://schema/{name}` (input schema only; not listed by `list_mcp_resources`)
+- `lm-tools-bridge://callTool` (manager bridge help, listed only after handshake)
 
 Use `lm-tools://schema/{name}` to fetch input structure when needed.
 Resource list entries include `uri`, `name`, and `description` (no `title`) to minimize payload.
@@ -115,6 +116,7 @@ Use `lm-tools://schema/{name}` to fetch the tool input schema before calling. Th
 ### Manager direct bridge tool
 
 The manager exposes a helper tool for environments that lack a generic `tools/call` function. You must complete the workspace handshake first (`lmToolsBridge.requestWorkspaceMCPServer`).
+The tool is always listed by the manager, but calls will return a JSON-RPC error until the handshake succeeds.
 
 Tool name: `lmToolsBridge.callTool`
 
@@ -198,3 +200,4 @@ Language Model API usage may still trigger VS Code consent prompts or tool confi
 ## Notes
 
 - Requires a VS Code version that exposes the `vscode.lm` API (see `package.json` engines).
+- The manager process is restarted on extension reload when its version does not match the extension version. Shutdown requests validate the manager version to reduce restart races across VS Code instances.

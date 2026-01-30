@@ -147,8 +147,7 @@
     "vscode:prepublish": "npm run compile && npm run bundle",
     "bundle": "node ./scripts/bundle.mjs",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "check:prompt-tsx": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check-prompt-tsx.ps1"
+    "watch": "tsc -watch -p ./"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",
@@ -158,6 +157,7 @@
   "devDependencies": {
     "@types/node": "^20.11.19",
     "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.27.2",
     "typescript": "^5.4.5"
   }

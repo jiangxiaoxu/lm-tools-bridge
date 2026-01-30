@@ -18,14 +18,11 @@ The extension starts a local MCP Streamable HTTP server and exposes tools plus r
 - Endpoint: `http://127.0.0.1:48123/mcp` (host is fixed to `127.0.0.1`)
 - Manager status endpoint: `http://127.0.0.1:47100/mcp/status`
 - Tool names:
-  - `getVSCodeWorkspace` (call this first to confirm the workspace before using other tools)
   - All enabled tools from `lmToolsBridge.tools.enabled` (filtered by blacklist settings)
 - Resources:
   - `lm-tools://names` (tool names only)
   - `lm-tools://tool/{name}` (full tool detail)
   - `lm-tools://schema/{name}` (input schema only; not listed by `list_mcp_resources`)
-  - `lm-tools://policy` (recommended call order policy; use lm-tools://mcp-tool/getVSCodeWorkspace, then lm-tools://schema/{name}, then tools/call)
-  - `lm-tools://mcp-tool/getVSCodeWorkspace` (MCP-native tool description)
 
 Use `lm-tools://schema/{name}` to fetch input structure when needed.
 Resource list entries include `uri`, `name`, and `description` (no `title`) to minimize payload.
@@ -115,44 +112,12 @@ These tools are always hidden and cannot be configured or enabled via settings:
 
 Use `lm-tools://schema/{name}` to fetch the tool input schema before calling. The `arguments` field must be an object that matches the schema.
 
-### MCP native tool: getVSCodeWorkspace
-
-`getVSCodeWorkspace` returns the workspace information that matches the status bar tooltip. Before using any other tool for the first time, call `getVSCodeWorkspace` to verify the workspace. If it does not match, ask the user to confirm. This tool is always available and is not controlled by `tools.enabled`/`tools.blacklist`.
-
-Example call (tools/call):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "getVSCodeWorkspace",
-    "arguments": {}
-  }
-}
-```
-
-Example result (multiple workspaces):
-
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"ownerWorkspacePath\":\"G:\\\\UE_Folder\\\\vscode-lm-tools-bridge; G:\\\\UE_Folder\\\\another-workspace\",\"workspaceFolders\":[{\"name\":\"vscode-lm-tools-bridge\",\"path\":\"G:\\\\UE_Folder\\\\vscode-lm-tools-bridge\"},{\"name\":\"another-workspace\",\"path\":\"G:\\\\UE_Folder\\\\another-workspace\"}]}"
-    }
-  ]
-}
-```
-
 ### Recommended tool call order
 
-1. Call `getVSCodeWorkspace` to verify the workspace matches the status bar tooltip.
-2. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `lm-tools://tool/{name}` for full metadata).
-3. Invoke the tool with `tools/call` once the schema is known.
+1. Fetch the target tool’s schema via `lm-tools://schema/{name}` (or `lm-tools://tool/{name}` for full metadata).
+2. Invoke the tool with `tools/call` once the schema is known.
 
-Following these steps prevents validation errors such as missing `action` or schema mismatches.
+Following these steps prevents validation errors such as schema mismatches.
 
 ### Settings
 

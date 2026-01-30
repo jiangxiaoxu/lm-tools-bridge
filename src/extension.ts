@@ -1143,21 +1143,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
   registerExposedTools(server);
 
-  const getWorkspaceDescription = 'getVSCodeWorkspace: Get current VS Code workspace paths. Input schema is an empty object. Before using other tools, call getVSCodeWorkspace to verify the workspace. If it does not match, ask the user to confirm.';
-  const getWorkspaceSchema: z.ZodTypeAny = z.object({}).strict().describe('No input.');
-
-  server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
-    'getVSCodeWorkspace',
-    {
-      description: getWorkspaceDescription,
-      inputSchema: getWorkspaceSchema,
-    },
-    async () => toolTextResult(formatWorkspaceInfoText({
-      ownerWorkspacePath: getOwnerWorkspacePath(),
-      workspaceFolders: getWorkspaceFoldersInfo(),
-    })),
-  );
-
   server.registerResource(
     'lmToolsNames',
     'lm-tools://names',
@@ -1165,71 +1150,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     async () => {
       logDebugDetail('Resource read: lm-tools://names');
       return resourceJson('lm-tools://names', listToolsPayload(getExposedToolsSnapshot(), 'names'));
-    },
-  );
-
-  const policyPayload = {
-    order: [
-      'lm-tools://mcp-tool/getVSCodeWorkspace',
-      'lm-tools://schema/{name}',
-      'tools/call {name}',
-    ],
-    schemaUriFormat: 'lm-tools://schema/{name}',
-    schemaUriNote: 'Replace {name} with the exact tool name (e.g., lm-tools://schema/copilot_readFile).',
-    workspaceUri: 'lm-tools://mcp-tool/getVSCodeWorkspace',
-    toolUriFormat: 'lm-tools://tool/{name}',
-    note: 'Use getVSCodeWorkspace to verify the workspace, then read the target tool schema before calling tools/call.',
-  };
-
-  server.registerResource(
-    'lmToolsPolicy',
-    'lm-tools://policy',
-    { description: 'Call order policy: use getVSCodeWorkspace (lm-tools://mcp-tool/getVSCodeWorkspace) to verify workspace, then read tool schema (lm-tools://schema/{name}), then call tools/call by name.' },
-    async () => {
-      logDebugDetail('Resource read: lm-tools://policy');
-      return resourceJson('lm-tools://policy', policyPayload);
-    },
-  );
-
-  const mcpToolTemplate = new ResourceTemplate('lm-tools://mcp-tool/{name}', {
-    list: () => {
-      logDebugDetail('Resource list: lm-tools://mcp-tool/{name}');
-      return {
-        resources: [
-          {
-            uri: 'lm-tools://mcp-tool/getVSCodeWorkspace',
-            name: 'getVSCodeWorkspace',
-            description: getWorkspaceDescription,
-          },
-        ],
-      };
-    },
-    complete: {
-      name: (value) => {
-        logDebugDetail(`Resource complete: lm-tools://mcp-tool/{name} value=${value}`);
-        return ['getVSCodeWorkspace'].filter((name) => name.startsWith(value));
-      },
-    },
-  });
-
-  server.registerResource(
-    'mcpTools',
-    mcpToolTemplate,
-    { description: 'Read MCP-native tool definition by name. Supported: getVSCodeWorkspace. Call it first to verify the workspace; if it does not match, ask the user to confirm.' },
-    async (uri, variables) => {
-      const name = readTemplateVariable(variables, 'name');
-      logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
-      if (!name) {
-        return resourceJson(uri.toString(), { error: 'Tool name is required.' });
-      }
-      if (name !== 'getVSCodeWorkspace') {
-        return resourceJson(uri.toString(), { error: `Tool not found: ${name}` });
-      }
-      return resourceJson(uri.toString(), {
-        name: 'getVSCodeWorkspace',
-        description: getWorkspaceDescription,
-        inputSchema: {},
-      });
     },
   );
 

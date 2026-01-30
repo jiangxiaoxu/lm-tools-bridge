@@ -319,6 +319,13 @@ function isCwdWithinWorkspaceFolders(cwd: string, workspaceFolders: string[]): b
   });
 }
 
+function isCwdMatchingWorkspaceFile(cwd: string, workspaceFile?: string | null): boolean {
+  if (!workspaceFile) {
+    return false;
+  }
+  return normalizePath(cwd) === normalizePath(workspaceFile);
+}
+
 function buildRoots(match: ManagerMatch): Array<{ uri: string; name: string }> {
   const folders = Array.isArray(match.workspaceFolders) ? match.workspaceFolders : [];
   return folders.map((folder) => {
@@ -645,7 +652,8 @@ async function handleRequestWorkspace(
       },
     };
   }
-  if (!isCwdWithinWorkspaceFolders(session.resolveCwd, matchedTarget.workspaceFolders)) {
+  if (!isCwdWithinWorkspaceFolders(session.resolveCwd, matchedTarget.workspaceFolders)
+    && !isCwdMatchingWorkspaceFile(session.resolveCwd, matchedTarget.workspaceFile)) {
     if (!session.offlineSince) {
       session.offlineSince = Date.now();
     }
@@ -850,22 +858,53 @@ async function handleSessionMessage(
     respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: remoteTemplates });
     return;
   }
-  if (method === 'tools/list' && !session.workspaceMatched) {
-    respondJsonRpcResult(res, message.id ?? null, {
-      tools: [
-        {
-          name: REQUEST_WORKSPACE_METHOD,
-          description: 'Resolve and bind a workspace MCP server. Input: { cwd: string }.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              cwd: { type: 'string', description: 'Workspace path to resolve.' },
-            },
-            required: ['cwd'],
-          },
+  if (method === 'tools/list') {
+    const requestWorkspaceTool = {
+      name: REQUEST_WORKSPACE_METHOD,
+      description: 'Resolve and bind a workspace MCP server. Input: { cwd: string }.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Workspace path to resolve.' },
         },
-      ],
+        required: ['cwd'],
+      },
+    };
+    if (!session.workspaceMatched) {
+      respondJsonRpcResult(res, message.id ?? null, {
+        tools: [requestWorkspaceTool],
+      });
+      return;
+    }
+    const target = session.currentTarget;
+    if (!target) {
+      respondJsonRpcResult(res, message.id ?? null, { tools: [requestWorkspaceTool] });
+      return;
+    }
+    const remote = await requestTargetJson(target, {
+      jsonrpc: '2.0',
+      id: message.id ?? null,
+      method: 'tools/list',
+      params: message.params ?? {},
     });
+    if (!remote.ok) {
+      const retryHealth = await checkTargetHealth(target);
+      if (!isHealthOk(retryHealth)) {
+        session.workspaceMatched = false;
+        session.currentTarget = undefined;
+        if (!session.offlineSince) {
+          session.offlineSince = Date.now();
+        }
+      }
+    }
+    const remoteTools = (remote.ok && (remote.data as { result?: { tools?: unknown[] } })?.result?.tools)
+      ? (remote.data as { result: { tools: unknown[] } }).result.tools
+      : [];
+    const merged = [
+      requestWorkspaceTool,
+      ...remoteTools.filter((entry) => (entry as { name?: unknown })?.name !== REQUEST_WORKSPACE_METHOD),
+    ];
+    respondJsonRpcResult(res, message.id ?? null, { tools: merged });
     return;
   }
   if (method === 'tools/call') {
@@ -1138,6 +1177,9 @@ async function handleMcpHttpRequest(
           resources: {
             list: true,
             read: true,
+          },
+          roots: {
+            list: true,
           },
         },
       },

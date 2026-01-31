@@ -64,7 +64,7 @@ const PRUNE_INTERVAL_MS = 500;
 const IDLE_GRACE_MS = 3000;
 const PORT_RESERVATION_TTL_MS = 15000;
 const MCP_HTTP_PORT_DEFAULT = 47100;
-const MCP_SESSION_TTL_MS = 10 * 60 * 1000;
+const MCP_SESSION_TTL_MS = 5 * 60 * 60 * 1000;
 const PORT_MIN_VALUE = 1;
 const PORT_MAX_VALUE = 65535;
 const RESOLVE_RETRY_DELAY_MS = 500;
@@ -929,7 +929,10 @@ async function handleSessionMessage(
     const statusResult = await buildStatusPayload(session);
     const content = [
       'This MCP manager requires an explicit workspace handshake.',
-      'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd, wait for ok:true.',
+      'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd. If the call fails, do not invoke MCP tools or resources.',
+      'After a successful handshake, call resources/list again to discover the available resources.',
+      'Before calling any tool for the first time, read lm-tools://tool/{name} to get the tool description and input schema.',
+      'Invoke tools via lmToolsBridge.callTool only after the tool description and schema have been read.',
       '',
       'Status snapshot:',
       JSON.stringify(statusResult.payload, null, 2),
@@ -1535,7 +1538,13 @@ async function handleMcpHttpRequest(
   }
   const session = getSession(sessionId);
   if (!session) {
-    respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Unknown Mcp-Session-Id.');
+    respondJsonRpcError(
+      res,
+      400,
+      rpcMessage.id ?? null,
+      -32600,
+      'Unknown Mcp-Session-Id. Call lmToolsBridge.requestWorkspaceMCPServer to re-bind.',
+    );
     return;
   }
   touchSession(session);

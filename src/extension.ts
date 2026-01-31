@@ -451,13 +451,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const schemaTemplate = new ResourceTemplate('lm-tools://schema/{name}', {
     list: () => {
       logDebugDetail('Resource list: lm-tools://schema/{name}');
-      return {
-        resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
-          uri: `lm-tools://schema/${tool.name}`,
-          name: tool.name,
-          description: 'Tool input schema.',
-        })),
-      };
+      return { resources: [] };
     },
     complete: {
       name: (value) => {

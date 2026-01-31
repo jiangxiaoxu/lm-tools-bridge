@@ -582,7 +582,7 @@ function getHandshakeResource(): Record<string, unknown> {
   return {
     uri: HANDSHAKE_RESOURCE_URI,
     name: 'MCP manager handshake',
-    description: 'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; on success, call resources/list and read lm-tools://schema/{name} once before the first call of that tool via lmToolsBridge.callTool.',
     mimeType: 'text/plain',
   };
 }
@@ -600,7 +600,7 @@ function getHandshakeTemplate(): Record<string, unknown> {
   return {
     name: 'MCP manager handshake',
     uriTemplate: HANDSHAKE_RESOURCE_URI,
-    description: 'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; on success, call resources/list and read lm-tools://schema/{name} once before the first call of that tool via lmToolsBridge.callTool.',
     mimeType: 'text/plain',
   };
 }
@@ -931,8 +931,8 @@ async function handleSessionMessage(
       'This MCP manager requires an explicit workspace handshake.',
       'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd. If the call fails, do not invoke MCP tools or resources.',
       'After a successful handshake, call resources/list again to discover the available resources.',
-      'Before calling any tool for the first time, read lm-tools://tool/{name} to get the tool description and input schema.',
-      'Invoke tools via lmToolsBridge.callTool only after the tool description and schema have been read.',
+      'Before calling any tool for the first time, read lm-tools://schema/{name} to get the input schema.',
+      'Invoke tools via lmToolsBridge.callTool only after the tool schema has been read.',
       '',
       'Status snapshot:',
       JSON.stringify(statusResult.payload, null, 2),

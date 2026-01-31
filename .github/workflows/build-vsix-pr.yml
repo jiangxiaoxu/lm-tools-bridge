@@ -6,6 +6,9 @@ on:
 jobs:
   build-vsix:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

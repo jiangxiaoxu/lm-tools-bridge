@@ -24,3 +24,8 @@ npm version patch --no-git-tag-version
 ## Language requirements
 
 - Text used in code (comments and user-facing output) must be in English.
+
+## TypeScript directives
+
+- `// @ts-expect-error` must include a reason and sit directly above the triggering line.
+- In this repo, only `// @ts-expect-error TS2589: Deep instantiation from SDK tool generics.` is allowed by default after reasonable type simplifications; any other use requires explicit user approval.

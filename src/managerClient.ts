@@ -11,7 +11,7 @@ const DEFAULT_MANAGER_HTTP_PORT = 47100;
 const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
 const MANAGER_REQUEST_TIMEOUT_MS = 1500;
 const MANAGER_START_TIMEOUT_MS = 3000;
-const MANAGER_LOCK_STALE_MS = 5000;
+const MANAGER_LOCK_STALE_MS = 15000;
 const MANAGER_SHUTDOWN_TIMEOUT_MS = 3000;
 const MANAGER_RESTART_LOCK_TIMEOUT_MS = 2000;
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
@@ -204,12 +204,13 @@ async function ensureManagerRunningInternal(): Promise<boolean> {
       const managerVersion = await getManagerVersionFromPipe();
       if (managerVersion && managerVersion !== extensionVersion) {
         if (isUnknownVersion(managerVersion)) {
-          requireDeps().logStatusWarn('Manager version is unknown; allowing restart.');
-          const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
-          if (restarted) {
+          requireDeps().logStatusWarn('Manager version is unknown; restart requires confirmation.');
+          const confirmed = await promptRestartForUnknownVersion();
+          if (!confirmed) {
             return true;
           }
-          return true;
+          const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
+          return restarted;
         }
         const comparison = compareVersionStrings(extensionVersion, managerVersion);
         if (comparison <= 0) {
@@ -222,6 +223,8 @@ async function ensureManagerRunningInternal(): Promise<boolean> {
         if (restarted) {
           return true;
         }
+        void vscode.window.showErrorMessage('Manager auto-restart failed.');
+        return false;
       }
     }
     return true;
@@ -312,6 +315,16 @@ function compareVersionStrings(left: string, right: string): number {
 
 function isUnknownVersion(value: string | undefined): boolean {
   return value === 'unknown';
+}
+
+async function promptRestartForUnknownVersion(): Promise<boolean> {
+  const selection = await vscode.window.showWarningMessage(
+    'Manager version is unknown. Restart the manager now?',
+    { modal: false },
+    'Restart',
+    'Cancel',
+  );
+  return selection === 'Restart';
 }
 
 async function getManagerVersionFromPipe(): Promise<string | undefined> {

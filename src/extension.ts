@@ -37,6 +37,7 @@ const MANAGER_REQUEST_TIMEOUT_MS = 1500;
 const MANAGER_START_TIMEOUT_MS = 3000;
 const MANAGER_LOCK_STALE_MS = 5000;
 const MANAGER_SHUTDOWN_TIMEOUT_MS = 3000;
+const MANAGER_RESTART_LOCK_TIMEOUT_MS = 2000;
 const PORT_RETRY_LIMIT = 50;
 const PORT_MIN_VALUE = 1;
 const PORT_MAX_VALUE = 65535;
@@ -228,6 +229,7 @@ let managerHeartbeatTimer: NodeJS.Timeout | undefined;
 let managerHeartbeatInFlight = false;
 let managerStartPromise: Promise<boolean> | undefined;
 let managerReady = false;
+let managerRestartPromise: Promise<boolean> | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -949,6 +951,9 @@ async function requestManagerPortAllocation(preferredPort: number, minPort?: num
 }
 
 async function ensureManagerRunning(): Promise<boolean> {
+  if (managerRestartPromise) {
+    return managerRestartPromise;
+  }
   if (managerStartPromise) {
     return managerStartPromise;
   }
@@ -965,6 +970,11 @@ async function ensureManagerRunningInternal(): Promise<boolean> {
     if (extensionVersion) {
       const managerVersion = await getManagerVersionFromPipe();
       if (managerVersion && managerVersion !== extensionVersion) {
+        const comparison = compareVersionStrings(extensionVersion, managerVersion);
+        if (comparison <= 0) {
+          logStatusWarn(`Manager version (${managerVersion}) is newer or equal to extension (${extensionVersion}); skip restart.`);
+          return true;
+        }
         const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
         if (restarted) {
           return true;
@@ -1027,6 +1037,36 @@ function getExtensionVersion(): string | undefined {
   return typeof version === 'string' ? version : undefined;
 }
 
+function compareVersionStrings(left: string, right: string): number {
+  const leftParts = left.split('.');
+  const rightParts = right.split('.');
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let i = 0; i < maxLength; i += 1) {
+    const leftPart = leftParts[i] ?? '0';
+    const rightPart = rightParts[i] ?? '0';
+    const leftNumber = Number.parseInt(leftPart, 10);
+    const rightNumber = Number.parseInt(rightPart, 10);
+    const leftIsNumber = Number.isFinite(leftNumber);
+    const rightIsNumber = Number.isFinite(rightNumber);
+    if (leftIsNumber && rightIsNumber) {
+      if (leftNumber > rightNumber) {
+        return 1;
+      }
+      if (leftNumber < rightNumber) {
+        return -1;
+      }
+      continue;
+    }
+    if (leftPart > rightPart) {
+      return 1;
+    }
+    if (leftPart < rightPart) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
 async function getManagerVersionFromPipe(): Promise<string | undefined> {
   const response = await managerRequest<{ version?: unknown }>('GET', '/status');
   if (!response.ok || !response.data) {
@@ -1041,22 +1081,11 @@ async function restartManagerForVersionMismatch(
   managerVersion: string,
 ): Promise<boolean> {
   logStatusInfo(`Manager version mismatch (manager=${managerVersion} extension=${extensionVersion}). Restarting manager.`);
-  const shutdownResponse = await managerRequest('POST', '/shutdown', {
+  return restartManagerWithProgress({
     reason: 'version_mismatch',
-    managerVersion,
-    extensionVersion,
-    expectedVersion: managerVersion,
+    force: false,
+    title: 'LM Tools Bridge: Manager update detected',
   });
-  if (!shutdownResponse.ok) {
-    logStatusWarn('Manager shutdown request failed; continuing with existing manager.');
-    return true;
-  }
-  const stopped = await waitForManagerExit();
-  if (!stopped) {
-    logStatusWarn('Manager did not stop in time; continuing with existing manager.');
-    return true;
-  }
-  return restartManagerProcess();
 }
 
 async function waitForManagerExit(): Promise<boolean> {
@@ -1065,6 +1094,132 @@ async function waitForManagerExit(): Promise<boolean> {
     if (!(await isManagerAlive())) {
       return true;
     }
+    await delay(200);
+  }
+  return false;
+}
+
+async function restartManagerWithProgress(options: {
+  reason: string;
+  force: boolean;
+  title: string;
+}): Promise<boolean> {
+  if (managerRestartPromise) {
+    return managerRestartPromise;
+  }
+  const progressPromise = Promise.resolve(vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: options.title,
+      cancellable: false,
+    },
+    async (progress) => {
+      const result = await runManagerRestartWorkflow(options, progress);
+      return result;
+    },
+  ));
+  managerRestartPromise = progressPromise
+    .then((result) => {
+      if (result) {
+        void vscode.window.showInformationMessage('Manager restart completed.');
+      }
+      return result;
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`Manager restart failed: ${message}`);
+      return false;
+    })
+    .finally(() => {
+      managerRestartPromise = undefined;
+    });
+  return managerRestartPromise;
+}
+
+async function runManagerRestartWorkflow(
+  options: { reason: string; force: boolean },
+  progress: vscode.Progress<{ message?: string }>,
+): Promise<boolean> {
+  progress.report({ message: 'Checking versions...' });
+  const extensionVersion = getExtensionVersion();
+  const managerVersion = await getManagerVersionFromPipe();
+  if (!options.force && extensionVersion && managerVersion) {
+    const comparison = compareVersionStrings(extensionVersion, managerVersion);
+    if (comparison <= 0) {
+      progress.report({ message: 'Extension version is not newer than the manager; restart canceled.' });
+      return false;
+    }
+  }
+  if (!options.force && extensionVersion && managerVersion && managerVersion === extensionVersion) {
+    progress.report({ message: 'Already up to date; no restart needed.' });
+    return true;
+  }
+
+  progress.report({ message: 'Waiting to acquire restart lock...' });
+  const lockPath = await getManagerLockPath();
+  const acquired = await waitForManagerRestartLock(lockPath, progress);
+  if (!acquired) {
+    throw new Error('Timed out while acquiring restart lock.');
+  }
+  try {
+    const alive = await isManagerAlive();
+    const currentVersion = await getManagerVersionFromPipe();
+    if (!options.force && extensionVersion && currentVersion && currentVersion === extensionVersion) {
+      progress.report({ message: 'A newer manager is already running; no restart needed.' });
+      return true;
+    }
+
+    if (alive) {
+      const expectedVersion = currentVersion ?? managerVersion;
+      if (!expectedVersion) {
+        throw new Error('Unable to read manager version.');
+      }
+      progress.report({ message: 'Requesting old manager shutdown...' });
+      const shutdownResponse = await managerRequest('POST', '/shutdown', {
+        reason: options.reason,
+        expectedVersion,
+      });
+      if (!shutdownResponse.ok) {
+        throw new Error('Failed to shut down old manager.');
+      }
+      progress.report({ message: 'Waiting for old manager to exit...' });
+      const stopped = await waitForManagerExit();
+      if (!stopped) {
+        throw new Error('Old manager did not exit.');
+      }
+    }
+
+    progress.report({ message: 'Starting new manager...' });
+    await startManagerProcess();
+    const ready = await waitForManagerReady();
+    if (!ready) {
+      throw new Error('Failed to start new manager.');
+    }
+    if (!options.force && extensionVersion) {
+      progress.report({ message: 'Verifying version...' });
+      const newVersion = await getManagerVersionFromPipe();
+      if (newVersion && newVersion !== extensionVersion) {
+        throw new Error(`Version still mismatched: ${newVersion}`);
+      }
+    }
+    progress.report({ message: 'Done.' });
+    return true;
+  } finally {
+    await releaseManagerLock(lockPath);
+  }
+}
+
+async function waitForManagerRestartLock(
+  lockPath: string,
+  progress: vscode.Progress<{ message?: string }>,
+): Promise<boolean> {
+  const deadline = Date.now() + MANAGER_RESTART_LOCK_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const acquired = await tryAcquireManagerLock(lockPath);
+    if (acquired) {
+      return true;
+    }
+    progress.report({ message: 'Waiting to acquire restart lock...' });
     await delay(200);
   }
   return false;
@@ -2761,28 +2916,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 }
 
 async function restartManagerFromMenu(): Promise<void> {
-  const managerVersion = await getManagerVersionFromPipe();
-  if (!managerVersion) {
-    logStatusWarn('Manager is not responding; unable to restart.');
-    return;
-  }
-  const response = await managerRequest('POST', '/shutdown', {
+  await restartManagerWithProgress({
     reason: 'manual_restart',
-    expectedVersion: managerVersion,
+    force: true,
+    title: 'LM Tools Bridge: Restarting manager',
   });
-  if (!response.ok) {
-    logStatusWarn('Manager shutdown request failed.');
-    return;
-  }
-  const stopped = await waitForManagerExit();
-  if (!stopped) {
-    logStatusWarn('Manager did not stop in time.');
-    return;
-  }
-  const restarted = await restartManagerProcess();
-  if (!restarted) {
-    logStatusWarn('Manager restart failed.');
-  }
 }
 
 function logInfo(message: string): void {

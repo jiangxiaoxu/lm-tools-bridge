@@ -16,3 +16,11 @@ npm version patch --no-git-tag-version
 - MCP always wraps responses; only `structuredContent` carries raw objects, while `content.text` is always a string.
 - Example (good): `return { content: [new vscode.LanguageModelTextPart(JSON.stringify(payload, null, 2))] };`
 - Example (bad): `return buildToolResult(payload, false, JSON.stringify(payload));` (can be double-serialized by the wrapper)
+
+## Build verification
+
+- After code changes, run `npm run compile` to verify compilation.
+
+## Language requirements
+
+- Text used in code (comments and user-facing output) must be in English.

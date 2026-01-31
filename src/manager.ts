@@ -1,9 +1,24 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { getManagerPipeName } from './managerShared';
+
+const PIPE_PREFIX = 'lm-tools-bridge-manager';
+
+function getUserSeed(): string {
+  return process.env.USERNAME ?? process.env.USERPROFILE ?? os.userInfo().username ?? 'default-user';
+}
+
+function hashUserSeed(seed: string): string {
+  return crypto.createHash('sha1').update(seed).digest('hex').slice(0, 12);
+}
+
+function getManagerPipeName(): string {
+  const hash = hashUserSeed(getUserSeed());
+  return `\\\\.\\pipe\\${PIPE_PREFIX}-${hash}`;
+}
 
 interface InstanceRecord {
   sessionId: string;

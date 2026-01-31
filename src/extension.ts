@@ -8,7 +8,14 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { rgPath } from '@vscode/ripgrep';
 import * as z from 'zod';
-import { getManagerPipeName } from './managerShared';
+import {
+  ensureManagerRunning,
+  initManagerClient,
+  requestManagerPortAllocation,
+  restartManagerFromMenu,
+  startManagerHeartbeat,
+  stopManagerHeartbeat,
+} from './managerClient';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
@@ -24,20 +31,12 @@ const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
-const CONFIG_MANAGER_HTTP_PORT = 'manager.httpPort';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
-const DEFAULT_MANAGER_HTTP_PORT = 47100;
 const HEALTH_PATH = '/mcp/health';
 const STATUS_REFRESH_INTERVAL_MS = 3000;
-const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
-const MANAGER_REQUEST_TIMEOUT_MS = 1500;
-const MANAGER_START_TIMEOUT_MS = 3000;
-const MANAGER_LOCK_STALE_MS = 5000;
-const MANAGER_SHUTDOWN_TIMEOUT_MS = 3000;
-const MANAGER_RESTART_LOCK_TIMEOUT_MS = 2000;
 const PORT_RETRY_LIMIT = 50;
 const PORT_MIN_VALUE = 1;
 const PORT_MAX_VALUE = 65535;
@@ -225,16 +224,20 @@ let lastOwnerWorkspacePath: string | undefined;
 let lastStatusLogMessage: string | undefined;
 let workspaceSettingWarningEmitted = false;
 let extensionContext: vscode.ExtensionContext | undefined;
-let managerHeartbeatTimer: NodeJS.Timeout | undefined;
-let managerHeartbeatInFlight = false;
-let managerStartPromise: Promise<boolean> | undefined;
-let managerReady = false;
-let managerRestartPromise: Promise<boolean> | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
   logChannel = outputChannel as vscode.LogOutputChannel;
+  initManagerClient({
+    getExtensionContext: () => extensionContext,
+    getServerState: () => (serverState ? { host: serverState.host, port: serverState.port } : undefined),
+    getConfigValue,
+    isValidPort,
+    logStatusInfo,
+    logStatusWarn,
+    logStatusError,
+  });
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
   helpUrl = resolveHelpUrl(context);
   const startCommand = vscode.commands.registerCommand(START_COMMAND_ID, () => {
@@ -834,544 +837,6 @@ async function handleMcpHttpRequest(
       });
     }
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function startManagerHeartbeat(): Promise<void> {
-  if (managerHeartbeatTimer) {
-    return;
-  }
-  managerReady = await ensureManagerRunning();
-  if (managerReady) {
-    await sendManagerHeartbeat();
-  } else {
-    logStatusWarn('Manager is not available yet; will retry via heartbeat.');
-  }
-  managerHeartbeatTimer = setInterval(() => {
-    void sendManagerHeartbeat();
-  }, MANAGER_HEARTBEAT_INTERVAL_MS);
-}
-
-async function stopManagerHeartbeat(): Promise<void> {
-  if (managerHeartbeatTimer) {
-    clearInterval(managerHeartbeatTimer);
-    managerHeartbeatTimer = undefined;
-  }
-  managerReady = false;
-  await sendManagerBye();
-}
-
-async function sendManagerHeartbeat(): Promise<void> {
-  if (managerHeartbeatInFlight) {
-    return;
-  }
-  const payload = buildManagerHeartbeatPayload();
-  if (!payload) {
-    return;
-  }
-  managerHeartbeatInFlight = true;
-  try {
-    if (!managerReady) {
-      managerReady = await ensureManagerRunning();
-      if (!managerReady) {
-        return;
-      }
-    }
-    const response = await managerRequest('POST', '/heartbeat', payload);
-    if (!response.ok) {
-      managerReady = false;
-    }
-  } finally {
-    managerHeartbeatInFlight = false;
-  }
-}
-
-async function sendManagerBye(): Promise<void> {
-  const sessionId = vscode.env.sessionId;
-  if (!sessionId) {
-    return;
-  }
-  await managerRequest('POST', '/bye', { sessionId });
-}
-
-function buildManagerHeartbeatPayload(): {
-  sessionId: string;
-  pid: number;
-  workspaceFolders: string[];
-  workspaceFile?: string;
-  host: string;
-  port: number;
-  lastSeen: number;
-} | undefined {
-  if (!serverState) {
-    return undefined;
-  }
-  const sessionId = vscode.env.sessionId;
-  if (!sessionId) {
-    return undefined;
-  }
-  const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-  return {
-    sessionId,
-    pid: process.pid,
-    workspaceFolders,
-    workspaceFile: vscode.workspace.workspaceFile?.fsPath,
-    host: serverState.host,
-    port: serverState.port,
-    lastSeen: Date.now(),
-  };
-}
-
-async function requestManagerPortAllocation(preferredPort: number, minPort?: number): Promise<number | undefined> {
-  const sessionId = vscode.env.sessionId;
-  if (!sessionId) {
-    return undefined;
-  }
-  if (!isValidPort(preferredPort)) {
-    return undefined;
-  }
-  if (minPort !== undefined && !isValidPort(minPort)) {
-    return undefined;
-  }
-  const response = await managerRequest<{ ok?: boolean; port?: number }>('POST', '/allocate', {
-    sessionId,
-    preferredPort,
-    minPort,
-  });
-  if (!response.ok || !response.data) {
-    return undefined;
-  }
-  const port = (response.data as { port?: unknown }).port;
-  return isValidPort(port) ? port : undefined;
-}
-
-async function ensureManagerRunning(): Promise<boolean> {
-  if (managerRestartPromise) {
-    return managerRestartPromise;
-  }
-  if (managerStartPromise) {
-    return managerStartPromise;
-  }
-  managerStartPromise = ensureManagerRunningInternal()
-    .finally(() => {
-      managerStartPromise = undefined;
-    });
-  return managerStartPromise;
-}
-
-async function ensureManagerRunningInternal(): Promise<boolean> {
-  if (await isManagerAlive()) {
-    const extensionVersion = getExtensionVersion();
-    if (extensionVersion) {
-      const managerVersion = await getManagerVersionFromPipe();
-      if (managerVersion && managerVersion !== extensionVersion) {
-        const comparison = compareVersionStrings(extensionVersion, managerVersion);
-        if (comparison <= 0) {
-          logStatusWarn(`Manager version (${managerVersion}) is newer or equal to extension (${extensionVersion}); skip restart.`);
-          return true;
-        }
-        const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
-        if (restarted) {
-          return true;
-        }
-      }
-    }
-    return true;
-  }
-  if (!extensionContext) {
-    return false;
-  }
-
-  const lockPath = await getManagerLockPath();
-  const acquired = await tryAcquireManagerLock(lockPath);
-  if (acquired) {
-    await startManagerProcess();
-    const ready = await waitForManagerReady();
-    await releaseManagerLock(lockPath);
-    return ready;
-  }
-
-  const ready = await waitForManagerReady();
-  if (ready) {
-    return true;
-  }
-
-  if (await isLockStale(lockPath)) {
-    await releaseManagerLock(lockPath);
-    const retryAcquired = await tryAcquireManagerLock(lockPath);
-    if (!retryAcquired) {
-      return false;
-    }
-    await startManagerProcess();
-    const retryReady = await waitForManagerReady();
-    await releaseManagerLock(lockPath);
-    return retryReady;
-  }
-
-  return false;
-}
-
-async function waitForManagerReady(): Promise<boolean> {
-  const deadline = Date.now() + MANAGER_START_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (await isManagerAlive()) {
-      return true;
-    }
-    await delay(200);
-  }
-  return false;
-}
-
-async function isManagerAlive(): Promise<boolean> {
-  const response = await managerRequest('GET', '/health');
-  return response.ok;
-}
-
-function getExtensionVersion(): string | undefined {
-  const version = extensionContext?.extension?.packageJSON?.version;
-  return typeof version === 'string' ? version : undefined;
-}
-
-function compareVersionStrings(left: string, right: string): number {
-  const leftParts = left.split('.');
-  const rightParts = right.split('.');
-  const maxLength = Math.max(leftParts.length, rightParts.length);
-  for (let i = 0; i < maxLength; i += 1) {
-    const leftPart = leftParts[i] ?? '0';
-    const rightPart = rightParts[i] ?? '0';
-    const leftNumber = Number.parseInt(leftPart, 10);
-    const rightNumber = Number.parseInt(rightPart, 10);
-    const leftIsNumber = Number.isFinite(leftNumber);
-    const rightIsNumber = Number.isFinite(rightNumber);
-    if (leftIsNumber && rightIsNumber) {
-      if (leftNumber > rightNumber) {
-        return 1;
-      }
-      if (leftNumber < rightNumber) {
-        return -1;
-      }
-      continue;
-    }
-    if (leftPart > rightPart) {
-      return 1;
-    }
-    if (leftPart < rightPart) {
-      return -1;
-    }
-  }
-  return 0;
-}
-
-async function getManagerVersionFromPipe(): Promise<string | undefined> {
-  const response = await managerRequest<{ version?: unknown }>('GET', '/status');
-  if (!response.ok || !response.data) {
-    return undefined;
-  }
-  const version = response.data.version;
-  return typeof version === 'string' ? version : undefined;
-}
-
-async function restartManagerForVersionMismatch(
-  extensionVersion: string,
-  managerVersion: string,
-): Promise<boolean> {
-  logStatusInfo(`Manager version mismatch (manager=${managerVersion} extension=${extensionVersion}). Restarting manager.`);
-  return restartManagerWithProgress({
-    reason: 'version_mismatch',
-    force: false,
-    title: 'LM Tools Bridge: Manager update detected',
-  });
-}
-
-async function waitForManagerExit(): Promise<boolean> {
-  const deadline = Date.now() + MANAGER_SHUTDOWN_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (!(await isManagerAlive())) {
-      return true;
-    }
-    await delay(200);
-  }
-  return false;
-}
-
-async function restartManagerWithProgress(options: {
-  reason: string;
-  force: boolean;
-  title: string;
-}): Promise<boolean> {
-  if (managerRestartPromise) {
-    return managerRestartPromise;
-  }
-  const progressPromise = Promise.resolve(vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: options.title,
-      cancellable: false,
-    },
-    async (progress) => {
-      const result = await runManagerRestartWorkflow(options, progress);
-      return result;
-    },
-  ));
-  managerRestartPromise = progressPromise
-    .then((result) => {
-      if (result) {
-        void vscode.window.showInformationMessage('Manager restart completed.');
-      }
-      return result;
-    })
-    .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      void vscode.window.showErrorMessage(`Manager restart failed: ${message}`);
-      return false;
-    })
-    .finally(() => {
-      managerRestartPromise = undefined;
-    });
-  return managerRestartPromise;
-}
-
-async function runManagerRestartWorkflow(
-  options: { reason: string; force: boolean },
-  progress: vscode.Progress<{ message?: string }>,
-): Promise<boolean> {
-  progress.report({ message: 'Checking versions...' });
-  const extensionVersion = getExtensionVersion();
-  const managerVersion = await getManagerVersionFromPipe();
-  if (!options.force && extensionVersion && managerVersion) {
-    const comparison = compareVersionStrings(extensionVersion, managerVersion);
-    if (comparison <= 0) {
-      progress.report({ message: 'Extension version is not newer than the manager; restart canceled.' });
-      return false;
-    }
-  }
-  if (!options.force && extensionVersion && managerVersion && managerVersion === extensionVersion) {
-    progress.report({ message: 'Already up to date; no restart needed.' });
-    return true;
-  }
-
-  progress.report({ message: 'Waiting to acquire restart lock...' });
-  const lockPath = await getManagerLockPath();
-  const acquired = await waitForManagerRestartLock(lockPath, progress);
-  if (!acquired) {
-    throw new Error('Timed out while acquiring restart lock.');
-  }
-  try {
-    const alive = await isManagerAlive();
-    const currentVersion = await getManagerVersionFromPipe();
-    if (!options.force && extensionVersion && currentVersion && currentVersion === extensionVersion) {
-      progress.report({ message: 'A newer manager is already running; no restart needed.' });
-      return true;
-    }
-
-    if (alive) {
-      const expectedVersion = currentVersion ?? managerVersion;
-      if (!expectedVersion) {
-        throw new Error('Unable to read manager version.');
-      }
-      progress.report({ message: 'Requesting old manager shutdown...' });
-      const shutdownResponse = await managerRequest('POST', '/shutdown', {
-        reason: options.reason,
-        expectedVersion,
-      });
-      if (!shutdownResponse.ok) {
-        throw new Error('Failed to shut down old manager.');
-      }
-      progress.report({ message: 'Waiting for old manager to exit...' });
-      const stopped = await waitForManagerExit();
-      if (!stopped) {
-        throw new Error('Old manager did not exit.');
-      }
-    }
-
-    progress.report({ message: 'Starting new manager...' });
-    await startManagerProcess();
-    const ready = await waitForManagerReady();
-    if (!ready) {
-      throw new Error('Failed to start new manager.');
-    }
-    if (!options.force && extensionVersion) {
-      progress.report({ message: 'Verifying version...' });
-      const newVersion = await getManagerVersionFromPipe();
-      if (newVersion && newVersion !== extensionVersion) {
-        throw new Error(`Version still mismatched: ${newVersion}`);
-      }
-    }
-    progress.report({ message: 'Done.' });
-    return true;
-  } finally {
-    await releaseManagerLock(lockPath);
-  }
-}
-
-async function waitForManagerRestartLock(
-  lockPath: string,
-  progress: vscode.Progress<{ message?: string }>,
-): Promise<boolean> {
-  const deadline = Date.now() + MANAGER_RESTART_LOCK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const acquired = await tryAcquireManagerLock(lockPath);
-    if (acquired) {
-      return true;
-    }
-    progress.report({ message: 'Waiting to acquire restart lock...' });
-    await delay(200);
-  }
-  return false;
-}
-
-async function restartManagerProcess(): Promise<boolean> {
-  if (!extensionContext) {
-    return false;
-  }
-  const lockPath = await getManagerLockPath();
-  const acquired = await tryAcquireManagerLock(lockPath);
-  if (acquired) {
-    await startManagerProcess();
-    const ready = await waitForManagerReady();
-    await releaseManagerLock(lockPath);
-    return ready;
-  }
-  const ready = await waitForManagerReady();
-  if (ready) {
-    return true;
-  }
-  if (await isLockStale(lockPath)) {
-    await releaseManagerLock(lockPath);
-    const retryAcquired = await tryAcquireManagerLock(lockPath);
-    if (!retryAcquired) {
-      return false;
-    }
-    await startManagerProcess();
-    const retryReady = await waitForManagerReady();
-    await releaseManagerLock(lockPath);
-    return retryReady;
-  }
-  return false;
-}
-
-async function startManagerProcess(): Promise<void> {
-  if (!extensionContext) {
-    return;
-  }
-  const managerPath = extensionContext.asAbsolutePath(path.join('out', 'manager.js'));
-  if (!fs.existsSync(managerPath)) {
-    logStatusError(`Manager entry not found at ${managerPath}`);
-    return;
-  }
-  const pipeName = getManagerPipeName();
-  const managerHttpPort = getConfigValue<number>(CONFIG_MANAGER_HTTP_PORT, DEFAULT_MANAGER_HTTP_PORT);
-  const child = spawn(process.execPath, [managerPath, '--pipe', pipeName, '--http-port', String(managerHttpPort)], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
-}
-
-async function getManagerLockPath(): Promise<string> {
-  if (!extensionContext) {
-    return path.join(process.cwd(), 'lm-tools-bridge-manager.lock');
-  }
-  const baseDir = path.join(extensionContext.globalStorageUri.fsPath, 'manager');
-  await fs.promises.mkdir(baseDir, { recursive: true });
-  return path.join(baseDir, 'manager.lock');
-}
-
-async function tryAcquireManagerLock(lockPath: string): Promise<boolean> {
-  try {
-    const handle = await fs.promises.open(lockPath, 'wx');
-    await handle.writeFile(JSON.stringify({ pid: process.pid, timestamp: Date.now() }));
-    await handle.close();
-    return true;
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'EEXIST') {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function releaseManagerLock(lockPath: string): Promise<void> {
-  try {
-    await fs.promises.unlink(lockPath);
-  } catch {
-    // Ignore cleanup errors.
-  }
-}
-
-async function isLockStale(lockPath: string): Promise<boolean> {
-  try {
-    const stats = await fs.promises.stat(lockPath);
-    return Date.now() - stats.mtimeMs > MANAGER_LOCK_STALE_MS;
-  } catch {
-    return false;
-  }
-}
-
-async function managerRequest<T = unknown>(
-  method: string,
-  requestPath: string,
-  body?: unknown,
-): Promise<{ ok: boolean; status?: number; data?: T }> {
-  return new Promise((resolve) => {
-    const payload = body ? JSON.stringify(body) : undefined;
-    const request = http.request(
-      {
-        socketPath: getManagerPipeName(),
-        path: requestPath,
-        method,
-        headers: payload
-          ? {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(payload),
-          }
-          : undefined,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk) => {
-          chunks.push(Buffer.from(chunk));
-        });
-        response.on('end', () => {
-          const status = response.statusCode ?? 500;
-          if (chunks.length === 0) {
-            resolve({ ok: status >= 200 && status < 300, status });
-            return;
-          }
-          try {
-            const text = Buffer.concat(chunks).toString('utf8');
-            const parsed = JSON.parse(text) as T;
-            resolve({ ok: status >= 200 && status < 300, status, data: parsed });
-          } catch {
-            resolve({ ok: false, status });
-          }
-        });
-      },
-    );
-
-    const timeout = setTimeout(() => {
-      request.destroy(new Error('Timeout'));
-    }, MANAGER_REQUEST_TIMEOUT_MS);
-
-    request.on('error', () => {
-      clearTimeout(timeout);
-      resolve({ ok: false });
-    });
-    request.on('close', () => {
-      clearTimeout(timeout);
-    });
-    if (payload) {
-      request.write(payload);
-    }
-    request.end();
-  });
 }
 
 function createMcpServer(channel: vscode.OutputChannel): McpServer {
@@ -2913,14 +2378,6 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
   if (selection.action === 'restartManager') {
     await restartManagerFromMenu();
   }
-}
-
-async function restartManagerFromMenu(): Promise<void> {
-  await restartManagerWithProgress({
-    reason: 'manual_restart',
-    force: true,
-    title: 'LM Tools Bridge: Restarting manager',
-  });
 }
 
 function logInfo(message: string): void {

@@ -1,0 +1,10 @@
+# Source Layout
+
+This folder is organized by responsibility to keep the extension entrypoint small and the tooling logic isolated.
+
+- extension.ts: VS Code activation, commands, status bar, HTTP server routing, and MCP resource wiring.
+- configuration.ts: Configuration access helpers and workspace/global resolution.
+- managerClient.ts: Manager process control, restart workflow, and IPC/HTTP coordination with the manager.
+- manager.ts: Manager process server implementation and lifecycle.
+- tooling.ts: Tool exposure, schema defaults, MCP tool registration, and tool invocation formatting.
+- searchTools.ts: Workspace search helpers used by custom find tools.

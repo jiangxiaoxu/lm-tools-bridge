@@ -431,6 +431,21 @@ function toOfflineDurationSec(startedAt?: number): number | null {
   return Math.floor((Date.now() - startedAt) / 1000);
 }
 
+function pad2(value: number): string {
+  return value < 10 ? `0${value}` : String(value);
+}
+
+function formatLocalDateTime(value: number): string {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = pad2(date.getMonth() + 1);
+  const day = pad2(date.getDate());
+  const hours = pad2(date.getHours());
+  const minutes = pad2(date.getMinutes());
+  const seconds = pad2(date.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
 function respondJsonRpcResult(
   res: http.ServerResponse,
   id: unknown,
@@ -1260,13 +1275,52 @@ async function handleMcpHttpRequest(
   if ((requestUrl.pathname === '/mcp/status' || requestUrl.pathname === '/mcp/status/')
     && req.method === 'GET') {
     const alive = getAliveRecords();
+    const now = Date.now();
     respondJson(res, 200, {
       ok: true,
       version: getManagerVersion(),
-      now: Date.now(),
+      now,
+      nowIso: new Date(now).toISOString(),
+      nowLocal: formatLocalDateTime(now),
       instances: alive.length,
+      instanceDetails: alive.map((record) => ({
+        sessionId: record.sessionId,
+        pid: record.pid,
+        workspaceFolders: record.workspaceFolders,
+        workspaceFile: record.workspaceFile ?? null,
+        host: record.host,
+        port: record.port,
+        lastSeen: record.lastSeen,
+        lastSeenLocal: formatLocalDateTime(record.lastSeen),
+        lastSeenAgeSec: Math.floor((now - record.lastSeen) / 1000),
+        startedAt: record.startedAt,
+        startedAtLocal: formatLocalDateTime(record.startedAt),
+        uptimeSec: Math.floor((now - record.startedAt) / 1000),
+      })),
       sessions: sessions.size,
+      sessionDetails: Array.from(sessions.values()).map((session) => ({
+        sessionId: session.sessionId,
+        resolveCwd: session.resolveCwd,
+        workspaceSetExplicitly: session.workspaceSetExplicitly,
+        workspaceMatched: session.workspaceMatched,
+        target: session.currentTarget
+          ? {
+            sessionId: session.currentTarget.sessionId,
+            host: session.currentTarget.host,
+            port: session.currentTarget.port,
+          }
+          : null,
+        lastSeen: session.lastSeen,
+        lastSeenLocal: formatLocalDateTime(session.lastSeen),
+        lastSeenAgeSec: Math.floor((now - session.lastSeen) / 1000),
+        offlineSince: session.offlineSince ?? null,
+        offlineSinceLocal: session.offlineSince ? formatLocalDateTime(session.offlineSince) : null,
+      })),
       lastNonEmptyAt,
+      lastNonEmptyAtIso: new Date(lastNonEmptyAt).toISOString(),
+      lastNonEmptyAtLocal: formatLocalDateTime(lastNonEmptyAt),
+      lastNonEmptyAgeSec: Math.floor((now - lastNonEmptyAt) / 1000),
+      uptimeSec: Math.floor((now - STARTUP_TIME) / 1000),
     });
     return;
   }

@@ -2698,7 +2698,7 @@ function updateStatusBar(info: ServerStatusInfo): void {
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & { action?: 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'reload' }> = [
+  const items: Array<vscode.QuickPickItem & { action?: 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'restartManager' }> = [
     {
       label: '$(settings-gear) Configure Exposed Tools',
       description: 'Enable/disable tools exposed via MCP',
@@ -2715,9 +2715,9 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       action: 'dump',
     },
     {
-      label: '$(refresh) Reload Window',
-      description: 'Reload VS Code window',
-      action: 'reload',
+      label: '$(sync) Restart Manager',
+      description: 'Restart the manager process',
+      action: 'restartManager',
     },
     { label: 'Help', kind: vscode.QuickPickItemKind.Separator },
     {
@@ -2755,8 +2755,33 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
     return;
   }
 
-  if (selection.action === 'reload') {
-    await vscode.commands.executeCommand('workbench.action.reloadWindow');
+  if (selection.action === 'restartManager') {
+    await restartManagerFromMenu();
+  }
+}
+
+async function restartManagerFromMenu(): Promise<void> {
+  const managerVersion = await getManagerVersionFromPipe();
+  if (!managerVersion) {
+    logStatusWarn('Manager is not responding; unable to restart.');
+    return;
+  }
+  const response = await managerRequest('POST', '/shutdown', {
+    reason: 'manual_restart',
+    expectedVersion: managerVersion,
+  });
+  if (!response.ok) {
+    logStatusWarn('Manager shutdown request failed.');
+    return;
+  }
+  const stopped = await waitForManagerExit();
+  if (!stopped) {
+    logStatusWarn('Manager did not stop in time.');
+    return;
+  }
+  const restarted = await restartManagerProcess();
+  if (!restarted) {
+    logStatusWarn('Manager restart failed.');
   }
 }
 

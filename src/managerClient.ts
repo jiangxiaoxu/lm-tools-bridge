@@ -203,6 +203,14 @@ async function ensureManagerRunningInternal(): Promise<boolean> {
     if (extensionVersion) {
       const managerVersion = await getManagerVersionFromPipe();
       if (managerVersion && managerVersion !== extensionVersion) {
+        if (isUnknownVersion(managerVersion)) {
+          requireDeps().logStatusWarn('Manager version is unknown; allowing restart.');
+          const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
+          if (restarted) {
+            return true;
+          }
+          return true;
+        }
         const comparison = compareVersionStrings(extensionVersion, managerVersion);
         if (comparison <= 0) {
           requireDeps().logStatusWarn(
@@ -302,6 +310,10 @@ function compareVersionStrings(left: string, right: string): number {
   return 0;
 }
 
+function isUnknownVersion(value: string | undefined): boolean {
+  return value === 'unknown';
+}
+
 async function getManagerVersionFromPipe(): Promise<string | undefined> {
   const response = await managerRequest<{ version?: unknown }>('GET', '/status');
   if (!response.ok || !response.data) {
@@ -380,14 +392,15 @@ async function runManagerRestartWorkflow(
   progress.report({ message: 'Checking versions...' });
   const extensionVersion = getExtensionVersion();
   const managerVersion = await getManagerVersionFromPipe();
-  if (!options.force && extensionVersion && managerVersion) {
-    const comparison = compareVersionStrings(extensionVersion, managerVersion);
+  const comparableManagerVersion = isUnknownVersion(managerVersion) ? undefined : managerVersion;
+  if (!options.force && extensionVersion && comparableManagerVersion) {
+    const comparison = compareVersionStrings(extensionVersion, comparableManagerVersion);
     if (comparison <= 0) {
       progress.report({ message: 'Extension version is not newer than the manager; restart canceled.' });
       return false;
     }
   }
-  if (!options.force && extensionVersion && managerVersion && managerVersion === extensionVersion) {
+  if (!options.force && extensionVersion && comparableManagerVersion && managerVersion === extensionVersion) {
     progress.report({ message: 'Already up to date; no restart needed.' });
     return true;
   }
@@ -408,13 +421,10 @@ async function runManagerRestartWorkflow(
 
     if (alive) {
       const expectedVersion = currentVersion ?? managerVersion;
-      if (!expectedVersion) {
-        throw new Error('Unable to read manager version.');
-      }
       progress.report({ message: 'Requesting old manager shutdown...' });
       const shutdownResponse = await managerRequest('POST', '/shutdown', {
         reason: options.reason,
-        expectedVersion,
+        ...(isUnknownVersion(expectedVersion) || !expectedVersion ? {} : { expectedVersion }),
       });
       if (!shutdownResponse.ok) {
         throw new Error('Failed to shut down old manager.');
@@ -455,6 +465,9 @@ async function waitForManagerRestartLock(
     const acquired = await tryAcquireManagerLock(lockPath);
     if (acquired) {
       return true;
+    }
+    if (await isLockStale(lockPath)) {
+      await releaseManagerLock(lockPath);
     }
     progress.report({ message: 'Waiting to acquire restart lock...' });
     await delay(200);

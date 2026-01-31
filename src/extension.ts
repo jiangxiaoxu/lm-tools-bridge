@@ -538,6 +538,18 @@ function normalizeWorkspacePath(value: string | undefined): string {
   return trimmed.length > 0 ? trimmed : 'No workspace open';
 }
 
+function getWorkspaceTooltipLines(ownerWorkspacePath: string | undefined): string[] {
+  const folders = vscode.workspace.workspaceFolders;
+  if (folders && folders.length > 0) {
+    return [
+      'Workspace folders:',
+      ...folders.map((folder) => `- ${folder.name}: ${folder.uri.fsPath}`),
+    ];
+  }
+  const normalized = normalizeWorkspacePath(ownerWorkspacePath);
+  return [`Workspace: ${normalized}`];
+}
+
 function getRequestUrl(req: http.IncomingMessage): URL | undefined {
   const host = req.headers.host ?? 'localhost';
   const urlValue = req.url ?? '/';
@@ -593,6 +605,8 @@ function updateStatusBar(info: ServerStatusInfo): void {
   const host = info.host ?? config.host;
   const port = info.port ?? config.port;
   const ownerWorkspacePath = normalizeWorkspacePath(info.ownerWorkspacePath);
+  const workspaceLines = getWorkspaceTooltipLines(info.ownerWorkspacePath);
+  const workspaceText = workspaceLines.length > 0 ? `\n${workspaceLines.join('\n')}` : '';
   const workspaceSuffix = ` (${ownerWorkspacePath})`;
   const stateLabel = info.state;
   let summary = `State: ${stateLabel} (${host}:${port})`;
@@ -608,15 +622,15 @@ function updateStatusBar(info: ServerStatusInfo): void {
   statusBarItem.command = STATUS_MENU_COMMAND_ID;
   if (info.state === 'running') {
     statusBarItem.text = '$(play-circle) LM Tools Bridge: Running';
-    statusBarItem.tooltip = `LM Tools Bridge server is running (${host}:${port})${workspaceSuffix}`;
+    statusBarItem.tooltip = `LM Tools Bridge server is running (${host}:${port})${workspaceText}`;
     statusBarItem.color = undefined;
   } else if (info.state === 'port-in-use') {
     statusBarItem.text = '$(warning) LM Tools Bridge: Port In Use';
-    statusBarItem.tooltip = `Port ${port} is already in use (${host}).${workspaceSuffix}`;
+    statusBarItem.tooltip = `Port ${port} is already in use (${host}).${workspaceText}`;
     statusBarItem.color = undefined;
   } else {
     statusBarItem.text = '$(circle-slash) LM Tools Bridge: Off';
-    statusBarItem.tooltip = `LM Tools Bridge server is not running (${host}:${port}).${workspaceSuffix}`;
+    statusBarItem.tooltip = `LM Tools Bridge server is not running (${host}:${port}).${workspaceText}`;
     statusBarItem.color = undefined;
   }
   statusBarItem.show();

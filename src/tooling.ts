@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { TextDecoder } from 'node:util';
 import * as z from 'zod';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
@@ -1707,11 +1708,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     const tools = getExposedToolsSnapshot();
     const tool = tools.find((candidate) => candidate.name === toolName);
     if (!tool) {
-      return toolErrorResultPayload({
-        error: `Tool not found or disabled: ${toolName}`,
-        name: toolName,
-        inputSchema: null,
-      });
+      throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${toolName}`);
     }
     const input = args ?? {};
     if (!isPlainObject(input)) {
@@ -1752,6 +1749,9 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     debugStructuredOutput = structuredOutput;
     return buildToolResult(structuredOutput, false, outputText);
   } catch (error) {
+    if (error instanceof McpError) {
+      throw error;
+    }
     const message = String(error);
     debugError = error;
     return toolErrorResultPayload({

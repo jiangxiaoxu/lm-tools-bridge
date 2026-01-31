@@ -501,6 +501,79 @@ function respondToolCall(res: http.ServerResponse, id: unknown, payload: unknown
   });
 }
 
+function respondToolCallWithNotifications(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: unknown,
+  payload: unknown,
+): void {
+  if (!isSseRequest(req)) {
+    respondToolCall(res, id, payload);
+    return;
+  }
+  const resultMessage = {
+    jsonrpc: '2.0',
+    id: id ?? null,
+    result: {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(payload),
+        },
+      ],
+      structuredContent: payload,
+    },
+  };
+  respondSse(res, [resultMessage, ...buildListChangedNotifications()]);
+}
+
+function respondJsonRpcResultWithNotifications(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: unknown,
+  payload: unknown,
+): void {
+  if (!isSseRequest(req)) {
+    respondJsonRpcResult(res, id, payload as Record<string, unknown>);
+    return;
+  }
+  const resultMessage = {
+    jsonrpc: '2.0',
+    id: id ?? null,
+    result: payload,
+  };
+  respondSse(res, [resultMessage, ...buildListChangedNotifications()]);
+}
+
+function buildListChangedNotifications(): Array<Record<string, unknown>> {
+  return [
+    { jsonrpc: '2.0', method: 'notifications/resources/list_changed', params: {} },
+    { jsonrpc: '2.0', method: 'notifications/tools/list_changed', params: {} },
+  ];
+}
+
+function isSseRequest(req: http.IncomingMessage): boolean {
+  const rawAccept = Array.isArray(req.headers.accept)
+    ? req.headers.accept.join(',')
+    : req.headers.accept ?? '';
+  return rawAccept.includes('text/event-stream');
+}
+
+function respondSse(res: http.ServerResponse, messages: readonly unknown[]): void {
+  if (res.headersSent) {
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  for (const message of messages) {
+    res.write(`data: ${JSON.stringify(message)}\n\n`);
+  }
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
 function respondToolError(res: http.ServerResponse, id: unknown, code: number, message: string): void {
   respondJsonRpcError(res, 200, id, code, message);
 }
@@ -521,6 +594,51 @@ function getCallToolResource(): Record<string, unknown> {
     description: 'Call lmToolsBridge.callTool after handshake to invoke a tool by name.',
     mimeType: 'text/plain',
   };
+}
+
+function getHandshakeTemplate(): Record<string, unknown> {
+  return {
+    name: 'MCP manager handshake',
+    uriTemplate: HANDSHAKE_RESOURCE_URI,
+    description: 'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+    mimeType: 'text/plain',
+  };
+}
+
+function getCallToolTemplate(): Record<string, unknown> {
+  return {
+    name: 'MCP manager direct tool call',
+    uriTemplate: CALL_TOOL_RESOURCE_URI,
+    description: 'Call lmToolsBridge.callTool after handshake to invoke a tool by name.',
+    mimeType: 'text/plain',
+  };
+}
+
+function mergeResourceTemplates(
+  base: Array<Record<string, unknown>>,
+  incoming: unknown[],
+): Array<Record<string, unknown>> {
+  const merged = [...base];
+  const seen = new Set<string>();
+  for (const entry of base) {
+    const uriTemplate = typeof entry.uriTemplate === 'string' ? entry.uriTemplate : '';
+    if (uriTemplate) {
+      seen.add(uriTemplate);
+    }
+  }
+  for (const entry of incoming) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const uriTemplate = typeof record.uriTemplate === 'string' ? record.uriTemplate : '';
+    if (!uriTemplate || seen.has(uriTemplate)) {
+      continue;
+    }
+    seen.add(uriTemplate);
+    merged.push(record);
+  }
+  return merged;
 }
 
 async function requestTargetJson(target: ManagerMatch, payload: unknown): Promise<{ ok: boolean; data?: unknown }> {
@@ -907,13 +1025,14 @@ async function handleSessionMessage(
     return;
   }
   if (method === 'resources/templates/list') {
+    const handshakeTemplates = [getHandshakeTemplate(), getCallToolTemplate()];
     if (!session.workspaceMatched) {
-      respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: [] });
+      respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: handshakeTemplates });
       return;
     }
     const target = session.currentTarget;
     if (!target) {
-      respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: [] });
+      respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: handshakeTemplates });
       return;
     }
     const remote = await requestTargetJson(target, {
@@ -935,7 +1054,7 @@ async function handleSessionMessage(
     const remoteTemplates = (remote.ok && (remote.data as { result?: { resourceTemplates?: unknown[] } })?.result?.resourceTemplates)
       ? (remote.data as { result: { resourceTemplates: unknown[] } }).result.resourceTemplates
       : [];
-    respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: remoteTemplates });
+    respondJsonRpcResult(res, message.id ?? null, { resourceTemplates: mergeResourceTemplates(handshakeTemplates, remoteTemplates) });
     return;
   }
   if (method === 'tools/list') {
@@ -1016,7 +1135,7 @@ async function handleSessionMessage(
           + ':' + String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.port ?? '')
         : ':';
       appendLog(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
-      respondToolCall(res, message.id ?? null, result.payload);
+      respondToolCallWithNotifications(req, res, message.id ?? null, result.payload);
       return;
     }
     if (name === DIRECT_TOOL_CALL_NAME) {
@@ -1116,7 +1235,7 @@ async function handleSessionMessage(
         + ':' + String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.port ?? '')
       : ':';
     appendLog(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
-    respondJsonRpcResult(res, message.id ?? null, result.payload ?? {});
+    respondJsonRpcResultWithNotifications(req, res, message.id ?? null, result.payload ?? {});
     return;
   }
   if (!session.workspaceMatched) {
@@ -1384,10 +1503,12 @@ async function handleMcpHttpRequest(
           tools: {
             list: true,
             call: true,
+            listChanged: true,
           },
           resources: {
             list: true,
             read: true,
+            listChanged: true,
           },
           roots: {
             list: true,

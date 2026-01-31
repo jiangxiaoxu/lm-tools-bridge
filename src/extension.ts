@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import {
   ensureManagerRunning,
   initManagerClient,
@@ -437,11 +438,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       const name = readTemplateVariable(variables, 'name');
       logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
       if (!name) {
-        return resourceJson(uri.toString(), { error: 'Tool name is required.' });
+        throw new McpError(ErrorCode.InvalidParams, 'Tool name is required.');
       }
       const tool = getExposedToolsSnapshot().find((candidate) => candidate.name === name);
       if (!tool) {
-        return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
+        throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${name}`);
       }
       return resourceJson(uri.toString(), toolInfoPayload(tool, 'full'));
     },
@@ -450,7 +451,13 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   const schemaTemplate = new ResourceTemplate('lm-tools://schema/{name}', {
     list: () => {
       logDebugDetail('Resource list: lm-tools://schema/{name}');
-      return { resources: [] };
+      return {
+        resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
+          uri: `lm-tools://schema/${tool.name}`,
+          name: tool.name,
+          description: 'Tool input schema.',
+        })),
+      };
     },
     complete: {
       name: (value) => {
@@ -470,11 +477,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       const name = readTemplateVariable(variables, 'name');
       logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
       if (!name) {
-        return resourceJson(uri.toString(), { error: 'Tool name is required.' });
+        throw new McpError(ErrorCode.InvalidParams, 'Tool name is required.');
       }
       const tool = getExposedToolsSnapshot().find((candidate) => candidate.name === name);
       if (!tool) {
-        return resourceJson(uri.toString(), { error: `Tool not found or disabled: ${name}` });
+        throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${name}`);
       }
       return resourceJson(uri.toString(), { name: tool.name, inputSchema: buildToolInputSchema(tool) });
     },

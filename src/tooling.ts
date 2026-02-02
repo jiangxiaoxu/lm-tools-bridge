@@ -26,7 +26,8 @@ export function setToolingLogger(logger: ToolingLogger): void {
   toolingLogger = logger;
 }
 
-const CONFIG_ENABLED_TOOLS = 'tools.enabled';
+const CONFIG_ENABLED_TOOLS = 'tools.enabledDelta';
+const CONFIG_DISABLED_TOOLS = 'tools.disabledDelta';
 const CONFIG_BLACKLIST = 'tools.blacklist';
 const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
@@ -37,8 +38,8 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
-  'copilot_findFiles',
-  'copilot_findTextInFiles',
+  'lm_findFiles',
+  'lm_findTextInFiles',
   'copilot_getErrors',
   'copilot_readProjectStructure',
   'copilot_getChangedFiles',
@@ -94,6 +95,8 @@ type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;
 const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
   'copilot_findTextInFiles.maxResults=500',
   'lm_findTextInFiles.maxResults=500',
+  'lm_findFiles.maxResults=200',
+  'copilot_findFiles.maxResults=200',
 ];
 
 const COPILOT_FIND_FILES_DESCRIPTION = [
@@ -183,13 +186,25 @@ interface CustomToolDefinition extends CustomToolInformation {
 
 export type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
 function getEnabledToolsSetting(): string[] {
-  const enabled = getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, DEFAULT_ENABLED_TOOL_NAMES);
-  return Array.isArray(enabled) ? enabled.filter((name) => typeof name === 'string') : [];
+  const enabledDelta = getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, []);
+  const disabledDelta = getConfigValue<string[]>(CONFIG_DISABLED_TOOLS, []);
+  const enabled = new Set(filterToolNames(enabledDelta));
+  const disabled = new Set(filterToolNames(disabledDelta));
+  for (const name of DEFAULT_ENABLED_TOOL_NAMES) {
+    if (!disabled.has(name)) {
+      enabled.add(name);
+    }
+  }
+  return [...enabled].filter((name) => !disabled.has(name));
 }
 
 function getBlacklistedToolsSetting(): string[] {
   const blacklisted = getConfigValue<string[]>(CONFIG_BLACKLIST, []);
   return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
+}
+
+function filterToolNames(values: unknown): string[] {
+  return Array.isArray(values) ? values.filter((name) => typeof name === 'string') : [];
 }
 
 function getBlacklistedToolPatterns(): string[] {
@@ -243,7 +258,12 @@ async function setEnabledTools(enabled: string[]): Promise<void> {
   const resource = getConfigurationResource();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
   const target = await resolveToolsConfigTarget(resource);
-  await config.update(CONFIG_ENABLED_TOOLS, enabled, target);
+  const enabledSet = new Set(enabled);
+  const defaultSet = new Set(DEFAULT_ENABLED_TOOL_NAMES);
+  const enabledDelta = [...enabledSet].filter((name) => !defaultSet.has(name));
+  const disabledDelta = DEFAULT_ENABLED_TOOL_NAMES.filter((name) => !enabledSet.has(name));
+  await config.update(CONFIG_ENABLED_TOOLS, enabledDelta, target);
+  await config.update(CONFIG_DISABLED_TOOLS, disabledDelta, target);
 }
 
 async function setBlacklistedTools(blacklisted: string[]): Promise<boolean> {
@@ -262,7 +282,11 @@ async function setBlacklistedTools(blacklisted: string[]): Promise<boolean> {
 }
 
 async function resetEnabledTools(): Promise<void> {
-  await setEnabledTools([...DEFAULT_ENABLED_TOOL_NAMES]);
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
+  await config.update(CONFIG_ENABLED_TOOLS, [], target);
+  await config.update(CONFIG_DISABLED_TOOLS, [], target);
 }
 
 async function resetBlacklistedTools(): Promise<boolean> {

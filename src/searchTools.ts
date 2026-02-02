@@ -15,6 +15,12 @@ type RipgrepSearchResult = {
   capped: boolean;
 };
 
+type RipgrepFileSearchResult = {
+  files: string[];
+  totalMatches: number;
+  capped: boolean;
+};
+
 export async function executeFindTextInFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const queryValue = input.query;
   if (typeof queryValue !== 'string') {
@@ -77,17 +83,31 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
   const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
     ? input.maxResults
     : undefined;
-  const includePattern = normalizeFindTextInFilesIncludeEntry(queryValue);
-  const uris = await vscode.workspace.findFiles(includePattern, null, maxResults);
   const matched: string[] = [];
   const seen = new Set<string>();
-  for (const uri of uris) {
-    const rel = formatSearchMatchPath(uri);
-    if (seen.has(rel)) {
-      continue;
+  let remaining = maxResults ?? Number.POSITIVE_INFINITY;
+
+  const targets = resolveFindFilesTargets(queryValue);
+  for (const target of targets) {
+    if (remaining <= 0) {
+      break;
     }
-    seen.add(rel);
-    matched.push(rel);
+    const result = await runRipgrepFileSearch(target, {
+      maxResults: maxResults !== undefined ? remaining : undefined,
+    });
+    for (const filePath of result.files) {
+      if (seen.has(filePath)) {
+        continue;
+      }
+      seen.add(filePath);
+      matched.push(filePath);
+      if (maxResults !== undefined && matched.length >= maxResults) {
+        break;
+      }
+    }
+    if (maxResults !== undefined) {
+      remaining = Math.max(0, maxResults - matched.length);
+    }
   }
 
   return {
@@ -119,6 +139,56 @@ function resolveRipgrepTargets(
     return [{ folder: parsed.workspaceFolder, glob: parsed.pattern }];
   }
   return folders.map((folder) => ({ folder, glob: trimmed }));
+}
+
+function resolveFindFilesTargets(
+  includePattern: string,
+): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) {
+    return [];
+  }
+  const trimmed = includePattern.trim();
+  if (!trimmed) {
+    return folders.map((folder) => ({ folder }));
+  }
+  if (path.isAbsolute(trimmed) || startsWithWindowsAbsolutePath(trimmed)) {
+    const workspaceFolder = findWorkspaceFolderForAbsolutePath(trimmed, folders);
+    if (!workspaceFolder) {
+      return [];
+    }
+    const relativePath = path.relative(workspaceFolder.uri.fsPath, path.resolve(trimmed));
+    const normalizedRelPath = normalizeGlob(relativePath);
+    return [{
+      folder: workspaceFolder,
+      glob: normalizedRelPath.length > 0 ? normalizedRelPath : '**/*',
+    }];
+  }
+  const parsed = parseWorkspacePrefixedIncludePattern(trimmed);
+  if (parsed) {
+    return [{ folder: parsed.workspaceFolder, glob: parsed.pattern }];
+  }
+  return folders.map((folder) => ({ folder, glob: trimmed }));
+}
+
+function findWorkspaceFolderForAbsolutePath(
+  targetPath: string,
+  folders: readonly vscode.WorkspaceFolder[],
+): vscode.WorkspaceFolder | undefined {
+  const normalizedTarget = normalizePathForComparison(targetPath);
+  for (const folder of folders) {
+    const normalizedFolder = normalizePathForComparison(folder.uri.fsPath);
+    const relative = path.relative(normalizedFolder, normalizedTarget);
+    if (!relative || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+      return folder;
+    }
+  }
+  return undefined;
+}
+
+function normalizePathForComparison(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 async function runRipgrepSearch(
@@ -201,11 +271,102 @@ async function runRipgrepSearch(
   };
 }
 
+async function runRipgrepFileSearch(
+  target: { folder: vscode.WorkspaceFolder; glob?: string },
+  options: { maxResults?: number },
+): Promise<RipgrepFileSearchResult> {
+  const files: string[] = [];
+  let totalMatches = 0;
+  let capped = false;
+  let stdoutBuffer = '';
+  const stderrChunks: string[] = [];
+  const args = buildRipgrepFileArgs(target);
+  const maxResults = options.maxResults;
+  const pushFile = (filePath: string) => {
+    if (maxResults !== undefined && totalMatches >= maxResults) {
+      return;
+    }
+    totalMatches += 1;
+    files.push(filePath);
+    if (maxResults !== undefined && totalMatches >= maxResults && !capped) {
+      capped = true;
+      try {
+        child.kill();
+      } catch {
+        // Ignore kill failures.
+      }
+    }
+  };
+
+  const child = spawn(rgPath, args, {
+    cwd: target.folder.uri.fsPath,
+    windowsHide: true,
+  });
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString('utf8');
+    stdoutBuffer = consumeRipgrepFileLines(stdoutBuffer, (line) => {
+      const filePath = parseRipgrepFilePath(line, target.folder);
+      if (!filePath) {
+        return;
+      }
+      pushFile(filePath);
+    });
+  });
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString('utf8'));
+  });
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', (error) => reject(error));
+    child.on('close', (code) => resolve(code));
+  });
+
+  if (stdoutBuffer.length > 0) {
+    consumeRipgrepFileLines(stdoutBuffer, (line) => {
+      const filePath = parseRipgrepFilePath(line, target.folder);
+      if (!filePath) {
+        return;
+      }
+      pushFile(filePath);
+    });
+  }
+
+  if (exitCode !== 0 && exitCode !== 1 && exitCode !== 2 && !capped) {
+    const stderrText = stderrChunks.join('').trim();
+    throw new Error(stderrText || `ripgrep exited with code ${exitCode ?? 'null'}`);
+  }
+
+  return {
+    files,
+    totalMatches,
+    capped,
+  };
+}
+
 function consumeRipgrepLines(buffer: string, onLine: (line: string) => void): string {
   let start = 0;
   let index = buffer.indexOf('\n', start);
   while (index !== -1) {
     const line = buffer.slice(start, index).trim();
+    if (line.length > 0) {
+      onLine(line);
+    }
+    start = index + 1;
+    index = buffer.indexOf('\n', start);
+  }
+  return buffer.slice(start);
+}
+
+function consumeRipgrepFileLines(buffer: string, onLine: (line: string) => void): string {
+  let start = 0;
+  let index = buffer.indexOf('\n', start);
+  while (index !== -1) {
+    let line = buffer.slice(start, index);
+    if (line.endsWith('\r')) {
+      line = line.slice(0, -1);
+    }
     if (line.length > 0) {
       onLine(line);
     }
@@ -251,6 +412,18 @@ function parseRipgrepMatch(line: string, folder: vscode.WorkspaceFolder): Ripgre
     line: lineNumber,
     preview,
   };
+}
+
+function parseRipgrepFilePath(line: string, folder: vscode.WorkspaceFolder): string | undefined {
+  if (!line) {
+    return undefined;
+  }
+  let normalizedRelPath = line.replace(/\\/g, '/');
+  normalizedRelPath = normalizedRelPath.replace(/^\.\//u, '').replace(/\/\.\//g, '/');
+  const absolutePath = path.isAbsolute(line)
+    ? line
+    : path.resolve(folder.uri.fsPath, normalizedRelPath);
+  return absolutePath;
 }
 
 function buildRipgrepArgs(
@@ -316,10 +489,81 @@ function buildRipgrepArgs(
   return args;
 }
 
+function buildRipgrepFileArgs(
+  target: { folder: vscode.WorkspaceFolder; glob?: string },
+): string[] {
+  const args: string[] = ['--files', '--no-messages'];
+  const searchConfig = vscode.workspace.getConfiguration('search', target.folder.uri);
+  const filesConfig = vscode.workspace.getConfiguration('files', target.folder.uri);
+  const useIgnoreFiles = searchConfig.get<boolean>('useIgnoreFiles', true);
+  const useGlobalIgnoreFiles = searchConfig.get<boolean>('useGlobalIgnoreFiles', true);
+  const followSymlinks = searchConfig.get<boolean>('followSymlinks', true);
+
+  if (!useIgnoreFiles) {
+    args.push('--no-ignore', '--no-ignore-parent');
+  }
+  if (!useGlobalIgnoreFiles) {
+    args.push('--no-ignore-global');
+  }
+  if (followSymlinks) {
+    args.push('--follow');
+  }
+
+  const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
+  const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+  const excludePatterns = new Set<string>();
+  for (const pattern of [...searchExclude, ...filesExclude]) {
+    const normalized = normalizeGlob(pattern);
+    if (!normalized) {
+      continue;
+    }
+    excludePatterns.add(normalized.startsWith('!') ? normalized : `!${normalized}`);
+    if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
+      const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
+      excludePatterns.add(withChildren.startsWith('!') ? withChildren : `!${withChildren}`);
+    }
+  }
+  for (const pattern of excludePatterns) {
+    args.push('--glob', pattern);
+  }
+
+  if (target.glob) {
+    args.push('--glob', normalizeGlob(target.glob));
+  }
+
+  return args;
+}
+
 function collectExcludeGlobs(values: Record<string, unknown>): string[] {
   return Object.entries(values)
     .filter(([, value]) => value === true || (typeof value === 'object' && value !== null))
     .map(([pattern]) => pattern);
+}
+
+function buildFindFilesExcludePattern(folder?: vscode.WorkspaceFolder): string | undefined {
+  const searchConfig = vscode.workspace.getConfiguration('search', folder?.uri);
+  const filesConfig = vscode.workspace.getConfiguration('files', folder?.uri);
+  const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
+  const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+  const excludePatterns = new Set<string>();
+  for (const pattern of [...searchExclude, ...filesExclude]) {
+    const normalized = normalizeGlob(pattern).replace(/^!/, '');
+    if (!normalized) {
+      continue;
+    }
+    excludePatterns.add(normalized);
+    if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
+      const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
+      excludePatterns.add(withChildren);
+    }
+  }
+  if (excludePatterns.size === 0) {
+    return undefined;
+  }
+  if (excludePatterns.size === 1) {
+    return [...excludePatterns][0];
+  }
+  return `{${[...excludePatterns].join(',')}}`;
 }
 
 function normalizeGlob(pattern: string): string {

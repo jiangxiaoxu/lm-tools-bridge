@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.59] - 2026-02-03
+- Updated `tools.schemaDefaults` setting defaults and examples.
+
 ## [1.0.58] - 2026-02-03
 - Added `tools.enabledDelta` / `tools.disabledDelta` to the settings UI and removed `lmToolsBridge.tools.enabled`.
 - Removed conflicting built-in blacklist entries so default enabled tools can be configured correctly.

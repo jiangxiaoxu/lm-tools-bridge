@@ -9,6 +9,7 @@ npm version patch --no-git-tag-version
 ```
 
 - When bumping the version, also update README.md if there are user-facing feature changes and update CHANGELOG.md to keep a clear, user-readable history.
+- Keep CHANGELOG.md entries sorted by version in descending order (latest first).
 
 ## Tool output formatting
 

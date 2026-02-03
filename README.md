@@ -59,13 +59,6 @@ Default enabled tools are defined by `DEFAULT_ENABLED_TOOL_NAMES`:
 - `lm_findTextInFiles`
 - `copilot_getErrors`
 - `copilot_readProjectStructure`
-- `copilot_getChangedFiles`
-- `copilot_testFailure`
-- `copilot_findTestFiles`
-- `copilot_getSearchResults`
-- `get_terminal_output`
-- `terminal_selection`
-- `terminal_last_command`
 
 ## Built-in blacklist
 
@@ -111,6 +104,7 @@ These tools are always disabled and cannot be enabled via settings:
 - `lmToolsBridge.useWorkspaceSettings` (default: false; only honored in workspace settings)
 - `lmToolsBridge.tools.enabledDelta` (default: `[]`; additional enables relative to defaults)
 - `lmToolsBridge.tools.disabledDelta` (default: `[]`; additional disables relative to defaults)
+- `lmToolsBridge.tools.enabled` has been removed. Use `tools.enabledDelta` / `tools.disabledDelta` instead.
 - `lmToolsBridge.tools.blacklist` (default: `[]`)
 - `lmToolsBridge.tools.blacklistPatterns` (default: `""`; `*` wildcard, `|`-delimited)
 - `lmToolsBridge.tools.schemaDefaults` (defaults defined in extension configuration)

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.57",
+  "version": "1.0.58",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -73,29 +73,21 @@
           "default": false,
           "description": "Only honored when set in workspace settings. User/global settings are ignored. When enabled, lmToolsBridge settings are read/written at the workspace scope and override user settings."
         },
-        "lmToolsBridge.tools.enabled": {
+        "lmToolsBridge.tools.enabledDelta": {
           "type": "array",
-          "default": [
-            "copilot_searchCodebase",
-            "copilot_searchWorkspaceSymbols",
-            "copilot_listCodeUsages",
-            "copilot_findFiles",
-            "copilot_findTextInFiles",
-            "copilot_readFile",
-            "copilot_getErrors",
-            "copilot_readProjectStructure",
-            "copilot_getChangedFiles",
-            "copilot_testFailure",
-            "copilot_findTestFiles",
-            "copilot_getSearchResults",
-            "get_terminal_output",
-            "terminal_selection",
-            "terminal_last_command"
-          ],
+          "default": [],
           "items": {
             "type": "string"
           },
-          "description": "List of LM tool names enabled for MCP exposure."
+          "description": "Additional LM tool names to enable relative to the default enabled list."
+        },
+        "lmToolsBridge.tools.disabledDelta": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional LM tool names to disable relative to the default enabled list. This takes precedence over tools.enabledDelta."
         },
         "lmToolsBridge.tools.blacklist": {
           "type": "array",

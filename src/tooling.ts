@@ -42,13 +42,6 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_findTextInFiles',
   'copilot_getErrors',
   'copilot_readProjectStructure',
-  'copilot_getChangedFiles',
-  'copilot_testFailure',
-  'copilot_findTestFiles',
-  'copilot_getSearchResults',
-  'get_terminal_output',
-  'terminal_selection',
-  'terminal_last_command',
 ];
 const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'copilot_applyPatch',
@@ -80,14 +73,7 @@ const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'vscode_get_confirmation',
   'vscode_get_terminal_confirmation',
   'inline_chat_exit',
-  'get_terminal_output',
-  'terminal_selection',
-  'terminal_last_command',
-  'copilot_findTestFiles',
-  'copilot_getSearchResults',
   'copilot_githubRepo',
-  'copilot_testFailure',
-  'copilot_getChangedFiles',
 ];
 
 type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;

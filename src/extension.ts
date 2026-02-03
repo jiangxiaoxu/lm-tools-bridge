@@ -42,6 +42,7 @@ const STATUS_REFRESH_INTERVAL_MS = 3000;
 const PORT_RETRY_LIMIT = 50;
 const PORT_MIN_VALUE = 1;
 const PORT_MAX_VALUE = 65535;
+const LEGACY_ENABLED_TOOLS_KEY = 'tools.enabled';
 
 interface ServerConfig {
   autoStart: boolean;
@@ -85,6 +86,7 @@ export function activate(context: vscode.ExtensionContext): void {
     warn: logWarn,
     error: logError,
   });
+  void cleanupLegacyEnabledSetting();
   initManagerClient({
     getExtensionContext: () => extensionContext,
     getServerState: () => (serverState ? { host: serverState.host, port: serverState.port } : undefined),
@@ -187,6 +189,32 @@ function isValidPort(value: unknown): value is number {
     && Number.isInteger(value)
     && value >= PORT_MIN_VALUE
     && value <= PORT_MAX_VALUE;
+}
+
+async function cleanupLegacyEnabledSetting(): Promise<void> {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const inspection = config.inspect<unknown>(LEGACY_ENABLED_TOOLS_KEY);
+  if (!inspection) {
+    return;
+  }
+  const updates: Array<Thenable<void>> = [];
+  if (inspection.globalValue !== undefined) {
+    updates.push(config.update(LEGACY_ENABLED_TOOLS_KEY, undefined, vscode.ConfigurationTarget.Global));
+  }
+  if (inspection.workspaceValue !== undefined) {
+    updates.push(config.update(LEGACY_ENABLED_TOOLS_KEY, undefined, vscode.ConfigurationTarget.Workspace));
+  }
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  for (const folder of folders) {
+    const folderConfig = vscode.workspace.getConfiguration(CONFIG_SECTION, folder.uri);
+    const folderInspection = folderConfig.inspect<unknown>(LEGACY_ENABLED_TOOLS_KEY);
+    if (folderInspection?.workspaceFolderValue !== undefined) {
+      updates.push(folderConfig.update(LEGACY_ENABLED_TOOLS_KEY, undefined, vscode.ConfigurationTarget.WorkspaceFolder));
+    }
+  }
+  if (updates.length > 0) {
+    await Promise.all(updates);
+  }
 }
 
 async function reconcileServerState(channel: vscode.OutputChannel): Promise<void> {

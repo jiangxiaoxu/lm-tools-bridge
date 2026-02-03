@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.58] - 2026-02-03
+- Added `tools.enabledDelta` / `tools.disabledDelta` to the settings UI and removed `lmToolsBridge.tools.enabled`.
+- Removed conflicting built-in blacklist entries so default enabled tools can be configured correctly.
+- Automatically clears legacy `lmToolsBridge.tools.enabled` values on activation.
+- Reduced the default enabled tool list (removed tests, changed files, and terminal tools).
+
+## [1.0.57] - 2026-02-03
+- Removed the legacy `lmToolsBridge.tools.enabled` setting from configuration UI. Use `tools.enabledDelta` / `tools.disabledDelta` instead.
+
 ## [1.0.56] - 2026-02-03
 - Added `includeIgnoredFiles` to `lm_findFiles` (schema + rg flags).
 - Applied include globs before exclude globs in `lm_findTextInFiles` and `lm_findFiles` so excludes still take effect.

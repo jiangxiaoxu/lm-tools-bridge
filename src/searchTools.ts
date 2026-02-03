@@ -445,11 +445,9 @@ function buildRipgrepArgs(
     args.push('--smart-case');
   }
 
-  const searchConfig = vscode.workspace.getConfiguration('search', target.folder.uri);
-  const filesConfig = vscode.workspace.getConfiguration('files', target.folder.uri);
-  const useIgnoreFiles = searchConfig.get<boolean>('useIgnoreFiles', true);
-  const useGlobalIgnoreFiles = searchConfig.get<boolean>('useGlobalIgnoreFiles', true);
-  const followSymlinks = searchConfig.get<boolean>('followSymlinks', true);
+  const useIgnoreFiles = getSearchConfigValue('useIgnoreFiles', target.folder, true);
+  const useGlobalIgnoreFiles = getSearchConfigValue('useGlobalIgnoreFiles', target.folder, true);
+  const followSymlinks = getSearchConfigValue('followSymlinks', target.folder, true);
 
   if (options.includeIgnoredFiles || !useIgnoreFiles) {
     args.push('--no-ignore', '--no-ignore-parent');
@@ -462,8 +460,8 @@ function buildRipgrepArgs(
   }
 
   if (!options.includeIgnoredFiles) {
-    const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
-    const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+    const searchExclude = collectExcludeGlobs(getExcludeConfig('search', target.folder));
+    const filesExclude = collectExcludeGlobs(getExcludeConfig('files', target.folder));
     const excludePatterns = new Set<string>();
     for (const pattern of [...searchExclude, ...filesExclude]) {
       const normalized = normalizeGlob(pattern);
@@ -493,11 +491,9 @@ function buildRipgrepFileArgs(
   target: { folder: vscode.WorkspaceFolder; glob?: string },
 ): string[] {
   const args: string[] = ['--files', '--no-messages'];
-  const searchConfig = vscode.workspace.getConfiguration('search', target.folder.uri);
-  const filesConfig = vscode.workspace.getConfiguration('files', target.folder.uri);
-  const useIgnoreFiles = searchConfig.get<boolean>('useIgnoreFiles', true);
-  const useGlobalIgnoreFiles = searchConfig.get<boolean>('useGlobalIgnoreFiles', true);
-  const followSymlinks = searchConfig.get<boolean>('followSymlinks', true);
+  const useIgnoreFiles = getSearchConfigValue('useIgnoreFiles', target.folder, true);
+  const useGlobalIgnoreFiles = getSearchConfigValue('useGlobalIgnoreFiles', target.folder, true);
+  const followSymlinks = getSearchConfigValue('followSymlinks', target.folder, true);
 
   if (!useIgnoreFiles) {
     args.push('--no-ignore', '--no-ignore-parent');
@@ -509,8 +505,8 @@ function buildRipgrepFileArgs(
     args.push('--follow');
   }
 
-  const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
-  const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+    const searchExclude = collectExcludeGlobs(getExcludeConfig('search', target.folder));
+    const filesExclude = collectExcludeGlobs(getExcludeConfig('files', target.folder));
   const excludePatterns = new Set<string>();
   for (const pattern of [...searchExclude, ...filesExclude]) {
     const normalized = normalizeGlob(pattern);
@@ -540,11 +536,30 @@ function collectExcludeGlobs(values: Record<string, unknown>): string[] {
     .map(([pattern]) => pattern);
 }
 
+function getExcludeConfig(
+  section: 'search' | 'files',
+  folder?: vscode.WorkspaceFolder,
+): Record<string, unknown> {
+  const workspaceConfig = vscode.workspace.getConfiguration(section);
+  const workspaceExclude = workspaceConfig.get<Record<string, unknown>>('exclude', {});
+  if (!folder) {
+    return workspaceExclude;
+  }
+  const folderConfig = vscode.workspace.getConfiguration(section, folder.uri);
+  const folderExclude = folderConfig.get<Record<string, unknown>>('exclude', {});
+  return { ...workspaceExclude, ...folderExclude };
+}
+
+function getSearchConfigValue<T>(key: string, folder: vscode.WorkspaceFolder, fallback: T): T {
+  const workspaceConfig = vscode.workspace.getConfiguration('search');
+  const workspaceValue = workspaceConfig.get<T>(key, fallback);
+  const folderConfig = vscode.workspace.getConfiguration('search', folder.uri);
+  return folderConfig.get<T>(key, workspaceValue);
+}
+
 function buildFindFilesExcludePattern(folder?: vscode.WorkspaceFolder): string | undefined {
-  const searchConfig = vscode.workspace.getConfiguration('search', folder?.uri);
-  const filesConfig = vscode.workspace.getConfiguration('files', folder?.uri);
-  const searchExclude = collectExcludeGlobs(searchConfig.get<Record<string, unknown>>('exclude', {}));
-  const filesExclude = collectExcludeGlobs(filesConfig.get<Record<string, unknown>>('exclude', {}));
+  const searchExclude = collectExcludeGlobs(getExcludeConfig('search', folder));
+  const filesExclude = collectExcludeGlobs(getExcludeConfig('files', folder));
   const excludePatterns = new Set<string>();
   for (const pattern of [...searchExclude, ...filesExclude]) {
     const normalized = normalizeGlob(pattern).replace(/^!/, '');

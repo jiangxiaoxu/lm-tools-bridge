@@ -8,6 +8,8 @@ Root package:
 npm version patch --no-git-tag-version
 ```
 
+- When bumping the version, also update README.md if there are user-facing feature changes and update CHANGELOG.md to keep a clear, user-readable history.
+
 ## Tool output formatting
 
 - When implementing custom tools that return text, use `new vscode.LanguageModelTextPart(text)` to avoid double JSON serialization.

@@ -80,6 +80,7 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
   if (typeof queryValue !== 'string') {
     throw new Error('query must be a string');
   }
+  const includeIgnoredFiles = input.includeIgnoredFiles === true;
   const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
     ? input.maxResults
     : undefined;
@@ -93,6 +94,7 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
       break;
     }
     const result = await runRipgrepFileSearch(target, {
+      includeIgnoredFiles,
       maxResults: maxResults !== undefined ? remaining : undefined,
     });
     for (const filePath of result.files) {
@@ -273,14 +275,16 @@ async function runRipgrepSearch(
 
 async function runRipgrepFileSearch(
   target: { folder: vscode.WorkspaceFolder; glob?: string },
-  options: { maxResults?: number },
+  options: { includeIgnoredFiles: boolean; maxResults?: number },
 ): Promise<RipgrepFileSearchResult> {
   const files: string[] = [];
   let totalMatches = 0;
   let capped = false;
   let stdoutBuffer = '';
   const stderrChunks: string[] = [];
-  const args = buildRipgrepFileArgs(target);
+  const args = buildRipgrepFileArgs(target, {
+    includeIgnoredFiles: options.includeIgnoredFiles,
+  });
   const maxResults = options.maxResults;
   const pushFile = (filePath: string) => {
     if (maxResults !== undefined && totalMatches >= maxResults) {
@@ -459,6 +463,10 @@ function buildRipgrepArgs(
     args.push('--follow');
   }
 
+  if (target.glob) {
+    args.push('--glob', normalizeGlob(target.glob));
+  }
+
   if (!options.includeIgnoredFiles) {
     const searchExclude = collectExcludeGlobs(getExcludeConfig('search', target.folder));
     const filesExclude = collectExcludeGlobs(getExcludeConfig('files', target.folder));
@@ -479,52 +487,51 @@ function buildRipgrepArgs(
     }
   }
 
-  if (target.glob) {
-    args.push('--glob', normalizeGlob(target.glob));
-  }
-
   args.push('-e', options.query, '.');
   return args;
 }
 
 function buildRipgrepFileArgs(
   target: { folder: vscode.WorkspaceFolder; glob?: string },
+  options: { includeIgnoredFiles: boolean },
 ): string[] {
   const args: string[] = ['--files', '--no-messages'];
   const useIgnoreFiles = getSearchConfigValue('useIgnoreFiles', target.folder, true);
   const useGlobalIgnoreFiles = getSearchConfigValue('useGlobalIgnoreFiles', target.folder, true);
   const followSymlinks = getSearchConfigValue('followSymlinks', target.folder, true);
 
-  if (!useIgnoreFiles) {
+  if (options.includeIgnoredFiles || !useIgnoreFiles) {
     args.push('--no-ignore', '--no-ignore-parent');
   }
-  if (!useGlobalIgnoreFiles) {
+  if (options.includeIgnoredFiles || !useGlobalIgnoreFiles) {
     args.push('--no-ignore-global');
   }
   if (followSymlinks) {
     args.push('--follow');
   }
 
-    const searchExclude = collectExcludeGlobs(getExcludeConfig('search', target.folder));
-    const filesExclude = collectExcludeGlobs(getExcludeConfig('files', target.folder));
-  const excludePatterns = new Set<string>();
-  for (const pattern of [...searchExclude, ...filesExclude]) {
-    const normalized = normalizeGlob(pattern);
-    if (!normalized) {
-      continue;
-    }
-    excludePatterns.add(normalized.startsWith('!') ? normalized : `!${normalized}`);
-    if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
-      const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
-      excludePatterns.add(withChildren.startsWith('!') ? withChildren : `!${withChildren}`);
-    }
-  }
-  for (const pattern of excludePatterns) {
-    args.push('--glob', pattern);
-  }
-
   if (target.glob) {
     args.push('--glob', normalizeGlob(target.glob));
+  }
+
+  if (!options.includeIgnoredFiles) {
+    const searchExclude = collectExcludeGlobs(getExcludeConfig('search', target.folder));
+    const filesExclude = collectExcludeGlobs(getExcludeConfig('files', target.folder));
+    const excludePatterns = new Set<string>();
+    for (const pattern of [...searchExclude, ...filesExclude]) {
+      const normalized = normalizeGlob(pattern);
+      if (!normalized) {
+        continue;
+      }
+      excludePatterns.add(normalized.startsWith('!') ? normalized : `!${normalized}`);
+      if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
+        const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
+        excludePatterns.add(withChildren.startsWith('!') ? withChildren : `!${withChildren}`);
+      }
+    }
+    for (const pattern of excludePatterns) {
+      args.push('--glob', pattern);
+    }
   }
 
   return args;

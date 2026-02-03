@@ -102,6 +102,8 @@ const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
 const COPILOT_FIND_FILES_DESCRIPTION = [
   'Search for files in the workspace by glob pattern. This only returns the paths of matching files.',
   'Use this tool when you know the exact filename pattern of the files you\'re searching for.',
+  'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
+  'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
   'Glob patterns match from the root of the workspace folder. Examples:',
   '- **/*.{js,ts} to match all js/ts files in the workspace.',
   '- src/** to match all files under the top-level src folder.',
@@ -118,6 +120,10 @@ const COPILOT_FIND_FILES_SCHEMA: Record<string, unknown> = {
     maxResults: {
       type: 'number',
       description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
+    },
+    includeIgnoredFiles: {
+      type: 'boolean',
+      description: 'Whether to include files that would normally be ignored according to .gitignore, other ignore files and `files.exclude` and `search.exclude` settings. Warning: using this may cause the search to be slower. Only set it when you want to search in ignored folders like node_modules or build outputs.',
     },
   },
   required: ['query'],

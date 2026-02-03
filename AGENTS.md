@@ -8,8 +8,7 @@ Root package:
 npm version patch --no-git-tag-version
 ```
 
-- When bumping the version, also update README.md if there are user-facing feature changes and update CHANGELOG.md to keep a clear, user-readable history.
-- Keep CHANGELOG.md entries sorted by version in descending order (latest first).
+- When bumping the version, also update README.md if there are user-facing feature changes, update CHANGELOG.md to keep a clear, user-readable history, and keep CHANGELOG.md entries sorted by version in descending order (latest first).
 
 ## Tool output formatting
 
@@ -23,6 +22,10 @@ npm version patch --no-git-tag-version
 ## Build verification
 
 - After code changes, run `npm run compile` to verify compilation.
+
+## Documentation maintenance
+
+- After modifying code, update relevant documentation files (for example `README.md`, `CHANGELOG.md`, `face-ai-report.md`) to keep behavior, settings, flows, and AI report constraints in sync (task-driven, concise, no inline tool lists, update flows/index/matrix/invariants/failures/seeds when behavior changes).
 
 ## Language requirements
 

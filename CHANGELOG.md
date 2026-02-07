@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [1.0.60] - 2026-02-07
 - Added an isolated `src/clangd/` module for clangd MCP integration with low coupling to `tooling.ts`.
 - Added configurable clangd MCP settings: `clangd.enabled`, `clangd.autoStartOnInvoke`, `clangd.enablePassthrough`, `clangd.requestTimeoutMs`, and `clangd.allowedMethods`.
 - Added `lm_clangd_*` tools for status, switch header/source, AST, type hierarchy, memory usage, inlay hints, and restricted passthrough requests.
@@ -12,6 +14,19 @@ All notable changes to this project will be documented in this file.
 - Trimmed read-only passthrough defaults by removing `textDocument/completion`, `textDocument/semanticTokens/full`, `$/memoryUsage`, and `clangd/inlayHints`.
 - Switched clangd tool position semantics to 1-based line/character for human-facing input and output, with automatic conversion at the LSP boundary.
 - Added `clangd-mcp-implementation-guide.md` as the implementation and progress tracking guide.
+- Replaced QuickPick tool configuration pages with a grouped tree webview panel for both exposure tools and enabled tools, with collapse, group batch selection, search, and reset/confirm/cancel actions.
+- Added resilient fallback to legacy QuickPick configuration when the webview path fails.
+- Fixed blank tool-configuration webview caused by invalid JSON state serialization in the embedded `application/json` script block.
+- Reworked tool selection into a two-layer `exposure + enabled` model with new settings: `tools.exposedDelta` and `tools.unexposedDelta`.
+- Replaced command IDs `lm-tools-bridge.configureTools` and `lm-tools-bridge.configureBlacklist` with `lm-tools-bridge.configureExposure` and `lm-tools-bridge.configureEnabled`.
+- Removed `tools.blacklist` and `tools.blacklistPatterns`, and now auto-clears legacy values on activation.
+- Enforced strong consistency: when a tool becomes unexposed, its `enabledDelta` and `disabledDelta` entries are automatically pruned.
+- Enforced required exposure for built-in default-enabled tools and rendered them as read-only (disabled checkbox) in the exposure panel.
+- Restored built-in disabled hard rules: disabled tools are moved to a bottom `Built-in Disabled` parent group with source child groups in exposure, are read-only, never appear in enabled, and are auto-pruned from all four delta settings.
+- Added `copilot_askQuestions`, `copilot_readNotebookCellOutput`, `copilot_switchAgent`, `copilot_toolReplay`, and `search_subagent` to the built-in disabled list.
+- Added a dedicated `AngelScript` group for tools with the `angelscript_` prefix in the configuration UI.
+- Replaced hardcoded `angelscript_` grouping with configurable regex rules via `tools.groupingRules` (built-in disabled > custom rules > built-in groups).
+- Added a default `Clangd` custom grouping rule (`^lm_clangd_`) so clangd tools appear in their own top-level group by default.
 
 ## [1.0.59] - 2026-02-03
 - Updated `tools.schemaDefaults` setting defaults and examples.

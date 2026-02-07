@@ -3,7 +3,7 @@
 ## Title + Metadata
 - Project: clangd MCP integration for `lm-tools-bridge`
 - Created: 2026-02-06
-- Last updated: 2026-02-06
+- Last updated: 2026-02-07
 - Status: In Progress
 - Current milestone: M6 - Validation, hardening, and handoff
 - Owner: Codex + repository maintainer
@@ -155,6 +155,11 @@
 - [x] 低价值项剪裁完成(工具暴露与默认 passthrough 清单).
 - [x] line/character 输入输出已统一为 1-based(含自动边界转换).
 - [x] `npm run compile` 已通过.
+- [x] 工具配置页升级为来源分组树形 UI, 便于筛选与管理 `lm_clangd_*` 工具暴露.
+- [x] 工具选择模型升级为 exposure/enabled 双层 delta, 并在 unexposed 时自动清理 enabled delta.
+- [x] Exposure 底部新增 `Built-in Disabled` 父分组和来源子分组并启用硬禁用约束, 禁用工具不可暴露不可启用.
+- [x] settings 归一化扩展为同时清理内置禁用工具在四个 delta 中的无效项.
+- [x] 树形配置页状态传输改为 base64 初始化, 修复空白页风险并保留 QuickPick 回退.
 
 ### In progress
 - [ ] 运行时链路验证(handshake + clangd 自动启动).
@@ -177,6 +182,11 @@
 - 2026-02-06: `allowedMethods` 强制只读白名单交集. Reason: 明确禁止非只读调用并降低风险面.
 - 2026-02-06: 剪裁低价值能力(`lm_clangd_memoryUsage`, `lm_clangd_inlayHints`, completion, semanticTokens). Reason: 聚焦高价值只读导航与签名分析场景.
 - 2026-02-06: line/character 输入输出统一为 1-based. Reason: 提升人类核查与手工定位效率, 在 LSP 边界自动完成 1-based<->0-based 转换.
+- 2026-02-07: 工具配置入口改为来源分组树形面板(含组级勾选与搜索). Reason: 提升大工具集下的可筛选性和操作效率.
+- 2026-02-07: 工具配置改为 exposure/enabled 双层 delta, 且 unexposed 时自动清理 enabled delta. Reason: 消除无效配置并确保暴露约束与启用状态强一致.
+- 2026-02-07: DEFAULT_ENABLED_TOOL_NAMES 内工具强制暴露并在 Exposure UI 中设为只读. Reason: 防止误操作破坏核心默认工具可见性.
+- 2026-02-07: 内置禁用名单恢复为最高优先级, 并在 Exposure 底部分组单独显示. Reason: 保留安全边界且提升配置可解释性.
+- 2026-02-07: 工具配置 webview 初始状态改为 base64 载荷解码. Reason: 避免 script 内嵌 JSON 解析异常导致空白页.
 
 ## Validation Checklist
 - [x] `npm run compile` passes.

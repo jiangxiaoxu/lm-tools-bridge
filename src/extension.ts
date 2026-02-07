@@ -16,11 +16,12 @@ import {
 import { CONFIG_SECTION, getConfigValue, setConfigurationWarningLogger } from './configuration';
 import {
   buildToolInputSchema,
-  configureBlacklistedTools,
-  configureExposedTools,
+  configureEnabledTools,
+  configureExposureTools,
   getDebugLevel,
-  getExposedToolsSnapshot,
+  getEnabledExposedToolsSnapshot,
   listToolsPayload,
+  normalizeToolSelectionState,
   prioritizeTool,
   registerExposedTools,
   setToolingLogger,
@@ -31,8 +32,8 @@ import {
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
 const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
-const CONFIGURE_COMMAND_ID = 'lm-tools-bridge.configureTools';
-const CONFIGURE_BLACKLIST_COMMAND_ID = 'lm-tools-bridge.configureBlacklist';
+const CONFIGURE_EXPOSURE_COMMAND_ID = 'lm-tools-bridge.configureExposure';
+const CONFIGURE_ENABLED_COMMAND_ID = 'lm-tools-bridge.configureEnabled';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
 const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
 const DEFAULT_HOST = '127.0.0.1';
@@ -43,6 +44,8 @@ const PORT_RETRY_LIMIT = 50;
 const PORT_MIN_VALUE = 1;
 const PORT_MAX_VALUE = 65535;
 const LEGACY_ENABLED_TOOLS_KEY = 'tools.enabled';
+const LEGACY_BLACKLIST_KEY = 'tools.blacklist';
+const LEGACY_BLACKLIST_PATTERNS_KEY = 'tools.blacklistPatterns';
 
 interface ServerConfig {
   autoStart: boolean;
@@ -86,7 +89,8 @@ export function activate(context: vscode.ExtensionContext): void {
     warn: logWarn,
     error: logError,
   });
-  void cleanupLegacyEnabledSetting();
+  void cleanupLegacyToolSelectionSettings();
+  void normalizeToolSelectionState();
   initManagerClient({
     getExtensionContext: () => extensionContext,
     getServerState: () => (serverState ? { host: serverState.host, port: serverState.port } : undefined),
@@ -104,11 +108,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const stopCommand = vscode.commands.registerCommand(STOP_COMMAND_ID, () => {
     void stopMcpServer(outputChannel);
   });
-  const configureCommand = vscode.commands.registerCommand(CONFIGURE_COMMAND_ID, () => {
-    void configureExposedTools();
+  const configureExposureCommand = vscode.commands.registerCommand(CONFIGURE_EXPOSURE_COMMAND_ID, () => {
+    void configureExposureTools();
   });
-  const configureBlacklistCommand = vscode.commands.registerCommand(CONFIGURE_BLACKLIST_COMMAND_ID, () => {
-    void configureBlacklistedTools();
+  const configureEnabledCommand = vscode.commands.registerCommand(CONFIGURE_ENABLED_COMMAND_ID, () => {
+    void configureEnabledTools();
   });
   const helpCommand = vscode.commands.registerCommand(HELP_COMMAND_ID, () => {
     void openHelpDoc();
@@ -120,7 +124,14 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!event.affectsConfiguration(CONFIG_SECTION)) {
       return;
     }
-
+    if (
+      event.affectsConfiguration(`${CONFIG_SECTION}.tools.exposedDelta`)
+      || event.affectsConfiguration(`${CONFIG_SECTION}.tools.unexposedDelta`)
+      || event.affectsConfiguration(`${CONFIG_SECTION}.tools.enabledDelta`)
+      || event.affectsConfiguration(`${CONFIG_SECTION}.tools.disabledDelta`)
+    ) {
+      void normalizeToolSelectionState();
+    }
     void reconcileServerState(outputChannel);
   });
   const workspaceWatcher = vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -135,8 +146,8 @@ export function activate(context: vscode.ExtensionContext): void {
     statusBarItem,
     startCommand,
     stopCommand,
-    configureCommand,
-    configureBlacklistCommand,
+    configureExposureCommand,
+    configureEnabledCommand,
     helpCommand,
     statusMenuCommand,
     configWatcher,
@@ -191,25 +202,34 @@ function isValidPort(value: unknown): value is number {
     && value <= PORT_MAX_VALUE;
 }
 
-async function cleanupLegacyEnabledSetting(): Promise<void> {
+async function cleanupLegacyToolSelectionSettings(): Promise<void> {
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const inspection = config.inspect<unknown>(LEGACY_ENABLED_TOOLS_KEY);
-  if (!inspection) {
-    return;
-  }
+  const keys = [
+    LEGACY_ENABLED_TOOLS_KEY,
+    LEGACY_BLACKLIST_KEY,
+    LEGACY_BLACKLIST_PATTERNS_KEY,
+  ] as const;
   const updates: Array<Thenable<void>> = [];
-  if (inspection.globalValue !== undefined) {
-    updates.push(config.update(LEGACY_ENABLED_TOOLS_KEY, undefined, vscode.ConfigurationTarget.Global));
-  }
-  if (inspection.workspaceValue !== undefined) {
-    updates.push(config.update(LEGACY_ENABLED_TOOLS_KEY, undefined, vscode.ConfigurationTarget.Workspace));
+  for (const key of keys) {
+    const inspection = config.inspect<unknown>(key);
+    if (!inspection) {
+      continue;
+    }
+    if (inspection.globalValue !== undefined) {
+      updates.push(config.update(key, undefined, vscode.ConfigurationTarget.Global));
+    }
+    if (inspection.workspaceValue !== undefined) {
+      updates.push(config.update(key, undefined, vscode.ConfigurationTarget.Workspace));
+    }
   }
   const folders = vscode.workspace.workspaceFolders ?? [];
   for (const folder of folders) {
     const folderConfig = vscode.workspace.getConfiguration(CONFIG_SECTION, folder.uri);
-    const folderInspection = folderConfig.inspect<unknown>(LEGACY_ENABLED_TOOLS_KEY);
-    if (folderInspection?.workspaceFolderValue !== undefined) {
-      updates.push(folderConfig.update(LEGACY_ENABLED_TOOLS_KEY, undefined, vscode.ConfigurationTarget.WorkspaceFolder));
+    for (const key of keys) {
+      const folderInspection = folderConfig.inspect<unknown>(key);
+      if (folderInspection?.workspaceFolderValue !== undefined) {
+        updates.push(folderConfig.update(key, undefined, vscode.ConfigurationTarget.WorkspaceFolder));
+      }
     }
   }
   if (updates.length > 0) {
@@ -433,7 +453,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     { description: 'List exposed tool names.' },
     async () => {
       logDebugDetail('Resource read: lm-tools://names');
-      return resourceJson('lm-tools://names', listToolsPayload(getExposedToolsSnapshot(), 'names'));
+      return resourceJson('lm-tools://names', listToolsPayload(getEnabledExposedToolsSnapshot(), 'names'));
     },
   );
 
@@ -441,7 +461,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     list: () => {
       logDebugDetail('Resource list: lm-tools://tool/{name}');
       return {
-        resources: prioritizeTool(getExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
+        resources: prioritizeTool(getEnabledExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
           uri: `lm-tools://tool/${tool.name}`,
           name: tool.name,
           description: tool.description,
@@ -451,7 +471,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     complete: {
       name: (value) => {
         logDebugDetail(`Resource complete: lm-tools://tool/{name} value=${value}`);
-        return getExposedToolsSnapshot()
+        return getEnabledExposedToolsSnapshot()
           .map((tool) => tool.name)
           .filter((name) => name.startsWith(value));
       },
@@ -468,7 +488,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!name) {
         throw new McpError(ErrorCode.InvalidParams, 'Tool name is required.');
       }
-      const tool = getExposedToolsSnapshot().find((candidate) => candidate.name === name);
+      const tool = getEnabledExposedToolsSnapshot().find((candidate) => candidate.name === name);
       if (!tool) {
         throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${name}`);
       }
@@ -484,7 +504,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     complete: {
       name: (value) => {
         logDebugDetail(`Resource complete: lm-tools://schema/{name} value=${value}`);
-        return getExposedToolsSnapshot()
+        return getEnabledExposedToolsSnapshot()
           .map((tool) => tool.name)
           .filter((name) => name.startsWith(value));
       },
@@ -501,7 +521,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
       if (!name) {
         throw new McpError(ErrorCode.InvalidParams, 'Tool name is required.');
       }
-      const tool = getExposedToolsSnapshot().find((candidate) => candidate.name === name);
+      const tool = getEnabledExposedToolsSnapshot().find((candidate) => candidate.name === name);
       if (!tool) {
         throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${name}`);
       }
@@ -524,7 +544,7 @@ async function handleHealth(
 
   try {
     const status = await getServerStatus();
-    const toolsSnapshot = getExposedToolsSnapshot();
+    const toolsSnapshot = getEnabledExposedToolsSnapshot();
     const toolsCount = toolsSnapshot.length;
     const toolNames = toolsSnapshot.map((tool) => tool.name);
     const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => ({
@@ -666,16 +686,16 @@ function updateStatusBar(info: ServerStatusInfo): void {
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & { action?: 'configure' | 'configureBlacklist' | 'dump' | 'help' | 'restartManager' }> = [
+  const items: Array<vscode.QuickPickItem & { action?: 'configureExposure' | 'configureEnabled' | 'dump' | 'help' | 'restartManager' }> = [
     {
-      label: '$(settings-gear) Configure Exposed Tools',
-      description: 'Enable/disable tools exposed via MCP',
-      action: 'configure',
+      label: '$(settings-gear) Configure Exposure Tools',
+      description: 'Choose tools available for MCP enablement',
+      action: 'configureExposure',
     },
     {
-      label: '$(settings-gear) Configure Blacklisted Tools',
-      description: 'Hide/disable tools before exposure',
-      action: 'configureBlacklist',
+      label: '$(settings-gear) Configure Enabled Tools',
+      description: 'Enable only from the currently exposed tools',
+      action: 'configureEnabled',
     },
     {
       label: '$(list-unordered) Dump Enabled Tools',
@@ -703,13 +723,13 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
     return;
   }
 
-  if (selection.action === 'configure') {
-    await configureExposedTools();
+  if (selection.action === 'configureExposure') {
+    await configureExposureTools();
     return;
   }
 
-  if (selection.action === 'configureBlacklist') {
-    await configureBlacklistedTools();
+  if (selection.action === 'configureEnabled') {
+    await configureEnabledTools();
     return;
   }
 

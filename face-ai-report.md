@@ -38,18 +38,18 @@ Output: clangd LSP 响应或明确错误
 
 Flow: Tool 暴露计算
 Entry: tools/list or tools/call
-Path: getEnabledToolsSetting -> getExposedToolsSnapshot -> registerExposedTools
+Path: getExposedToolsSetting -> getEnabledToolsSetting -> getEnabledExposedToolsSnapshot -> registerExposedTools
 Output: 实际暴露工具列表
 
-Flow: UI 配置启用列表
-Entry: command lm-tools-bridge.configureTools
-Path: configureExposedTools -> setEnabledTools -> config.update(enabledDelta, disabledDelta)
-Output: settings 写入 delta, 工具暴露更新
+Flow: UI 配置暴露列表
+Entry: command lm-tools-bridge.configureExposure
+Path: configureExposureTools -> getToolGroupingRulesFromConfig -> buildGroupedToolSections -> showToolConfigPanel -> setExposedTools -> normalizeToolSelectionState
+Output: settings 写入 exposed/unexposed delta, 并自动清理内置禁用项和无效 enabled delta
 
-Flow: 黑名单配置
-Entry: command lm-tools-bridge.configureBlacklist
-Path: configureBlacklistedTools -> setBlacklistedTools -> config.update(blacklist) -> setEnabledTools
-Output: settings 写入 blacklist, 已黑名单工具不可暴露
+Flow: UI 配置启用列表
+Entry: command lm-tools-bridge.configureEnabled
+Path: configureEnabledTools -> getToolGroupingRulesFromConfig -> buildGroupedToolSections -> showToolConfigPanel -> setEnabledTools
+Output: settings 写入 enabled/disabled delta, 仅对已暴露工具生效
 
 Flow: 停止服务
 Entry: command lm-tools-bridge.stop
@@ -59,7 +59,7 @@ Output: MCP server stopped, status bar Off
 ## 任务驱动索引
 Task: 工具未暴露
 Entry: tools/list or tools/call
-Path: getEnabledToolsSetting -> getExposedToolsSnapshot
+Path: getExposedToolsSetting -> getEnabledToolsSetting -> getEnabledExposedToolsSnapshot
 Files: src/tooling.ts
 Log: "Tool not found or disabled"
 
@@ -68,10 +68,16 @@ Entry: DEFAULT_ENABLED_TOOL_NAMES
 Path: getEnabledToolsSetting
 Files: src/tooling.ts
 
-Task: 修改内置黑名单
-Entry: BUILTIN_BLACKLISTED_TOOL_NAMES
-Path: isToolBlacklisted
+Task: 修改默认暴露列表
+Entry: DEFAULT_EXPOSED_TOOL_NAMES
+Path: getExposedToolsSetting
 Files: src/tooling.ts
+
+Task: 配置页分组或折叠异常
+Entry: showToolConfigPanel
+Path: configureExposureTools/configureEnabledTools -> showToolConfigPanel -> (fallback) pickToolsWithQuickPick
+Files: src/toolConfigPanel.ts, src/toolGrouping.ts, src/tooling.ts
+Log: "Tool config panel failed, fallback to QuickPick"
 
 Task: schema defaults 不生效
 Entry: tools.schemaDefaults
@@ -133,13 +139,17 @@ Key: lmToolsBridge.tools.disabledDelta
 Effect: Remove enablement over defaults
 Code: getEnabledToolsSetting
 
-Key: lmToolsBridge.tools.blacklist
-Effect: Force hide tools
-Code: getVisibleToolsSnapshot, getExposedToolsSnapshot
+Key: lmToolsBridge.tools.exposedDelta
+Effect: Add exposure over defaults
+Code: getExposedToolsSetting
 
-Key: lmToolsBridge.tools.blacklistPatterns
-Effect: Wildcard hide tools
-Code: compileBlacklistPatterns
+Key: lmToolsBridge.tools.unexposedDelta
+Effect: Remove exposure over defaults
+Code: getExposedToolsSetting
+
+Key: lmToolsBridge.tools.groupingRules
+Effect: Regex-based custom UI grouping rules for tools
+Code: getToolGroupingRulesFromConfig, buildGroupedToolSections
 
 Key: lmToolsBridge.tools.schemaDefaults
 Effect: Inject schema and input defaults
@@ -175,7 +185,15 @@ Code: getEffectiveAllowedPassthroughMethods
 
 ## 行为不变量
 Invariant: tools.disabledDelta 优先级高于 tools.enabledDelta.
-Invariant: blacklist 与 blacklistPatterns 永远生效.
+Invariant: tools.unexposedDelta 优先级高于 tools.exposedDelta.
+Invariant: BUILTIN_DISABLED_TOOL_NAMES 优先级高于 REQUIRED_EXPOSED_TOOL_NAMES.
+Invariant: tools.groupingRules 优先级高于内置来源分组, 并按配置顺序首命中生效.
+Invariant: effective tools = exposed intersection enabled.
+Invariant: unexposed 工具必须被自动从 enabledDelta/disabledDelta 清理.
+Invariant: 内置禁用工具必须被自动从 exposedDelta/unexposedDelta/enabledDelta/disabledDelta 清理.
+Invariant: DEFAULT_ENABLED_TOOL_NAMES 中的工具必须始终暴露, 不可在 Exposure UI 中取消.
+Invariant: 内置禁用工具在 Exposure 中只能出现在 `Built-in Disabled` 父组下的来源子组, 且只读.
+Invariant: 内置禁用工具不能进入 effectiveExposed/effectiveEnabled, 且不显示在 Enabled UI.
 Invariant: tool input 必须是 object, 否则返回 error payload.
 Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
 Invariant: responseFormat 控制 content 与 structuredContent 的存在.
@@ -241,12 +259,19 @@ Example: Direct tool call
 
 ## 关键索引种子
 Seed: DEFAULT_ENABLED_TOOL_NAMES | Use: 定位默认启用列表
-Seed: BUILTIN_BLACKLISTED_TOOL_NAMES | Use: 定位内置黑名单
+Seed: DEFAULT_EXPOSED_TOOL_NAMES | Use: 定位默认暴露列表
+Seed: BUILTIN_DISABLED_TOOL_NAMES | Use: 定位内置禁用列表
 Seed: BUILTIN_SCHEMA_DEFAULT_OVERRIDES | Use: 定位内置 schema defaults
 Seed: getEnabledToolsSetting | Use: 启用列表计算入口
-Seed: getExposedToolsSnapshot | Use: 实际暴露列表入口
-Seed: configureExposedTools | Use: UI 配置启用入口
-Seed: configureBlacklistedTools | Use: UI 配置黑名单入口
+Seed: getExposedToolsSetting | Use: 暴露列表计算入口
+Seed: normalizeToolSelectionState | Use: settings 归一化与自动清理入口
+Seed: getExposedToolsSnapshot | Use: 当前暴露工具快照
+Seed: getEnabledExposedToolsSnapshot | Use: 最终可调用工具快照
+Seed: configureExposureTools | Use: UI 配置暴露入口
+Seed: configureEnabledTools | Use: UI 配置启用入口
+Seed: getToolGroupingRulesFromConfig | Use: 自定义 regex 分组规则解析入口
+Seed: showToolConfigPanel | Use: 分组树形配置页入口
+Seed: buildGroupedToolSections | Use: 来源分组与组状态计算
 Seed: invokeExposedTool | Use: MCP tool 调用入口
 Seed: buildToolResult | Use: 输出格式组装
 Seed: applySchemaDefaults | Use: schema defaults 注入
@@ -263,12 +288,13 @@ Seed: lm_clangd_lspRequest | Use: clangd 受限透传调用
 
 ## 默认与内置列表的映射
 Default enabled source: DEFAULT_ENABLED_TOOL_NAMES in src/tooling.ts
-Default blacklist source: BUILTIN_BLACKLISTED_TOOL_NAMES in src/tooling.ts
+Default exposed source: DEFAULT_EXPOSED_TOOL_NAMES in src/tooling.ts
 Schema defaults source: BUILTIN_SCHEMA_DEFAULT_OVERRIDES in src/tooling.ts
 
 ## 模块依赖与数据流
 Graph:
 - extension.ts -> tooling.ts -> searchTools.ts
+- tooling.ts -> toolGrouping.ts -> toolConfigPanel.ts
 - tooling.ts -> clangd/index.ts -> clangd/tools/*
 - extension.ts -> managerClient.ts -> manager.ts
 - tooling.ts -> configuration.ts
@@ -276,7 +302,7 @@ Graph:
 DataFlow:
 - VS Code activation -> MCP server -> tools/resources
 - Manager handshake -> target resolve -> MCP forward
-- Settings -> enablement/blacklist/schema defaults -> exposed tools
+- Settings -> exposure delta + enabled delta + schema defaults -> effective tools
 - clangd tool call -> bootstrap -> clangd language client -> LSP response
 
 ## 更新策略
@@ -284,4 +310,4 @@ DataFlow:
 - 增减核心流程或入口函数
 - 变更配置项语义或优先级
 - 调整 Manager 或 MCP 调用路径
-- 修改默认启用或黑名单策略
+- 修改默认启用或默认暴露策略

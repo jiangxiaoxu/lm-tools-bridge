@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.59",
+  "version": "1.0.60",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -30,12 +30,12 @@
         "title": "LM Tools Bridge: Stop Server"
       },
       {
-        "command": "lm-tools-bridge.configureTools",
-        "title": "LM Tools Bridge: Configure Tools"
+        "command": "lm-tools-bridge.configureExposure",
+        "title": "LM Tools Bridge: Configure Exposure Tools"
       },
       {
-        "command": "lm-tools-bridge.configureBlacklist",
-        "title": "LM Tools Bridge: Configure Blacklisted Tools"
+        "command": "lm-tools-bridge.configureEnabled",
+        "title": "LM Tools Bridge: Configure Enabled Tools"
       },
       {
         "command": "lm-tools-bridge.statusMenu",
@@ -108,7 +108,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional LM tool names to enable relative to the default enabled list."
+          "description": "Additional exposed LM tool names to enable relative to the default enabled list."
         },
         "lmToolsBridge.tools.disabledDelta": {
           "type": "array",
@@ -116,20 +116,66 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional LM tool names to disable relative to the default enabled list. This takes precedence over tools.enabledDelta."
+          "description": "Additional exposed LM tool names to disable relative to the default enabled list. This takes precedence over tools.enabledDelta."
         },
-        "lmToolsBridge.tools.blacklist": {
+        "lmToolsBridge.tools.exposedDelta": {
           "type": "array",
           "default": [],
           "items": {
             "type": "string"
           },
-          "description": "List of LM tool names to hide/disable. Blacklist takes precedence over enabled list and is combined with the built-in blacklist."
+          "description": "Additional LM tool names to expose relative to the default exposed list."
         },
-        "lmToolsBridge.tools.blacklistPatterns": {
-          "type": "string",
-          "default": "",
-          "description": "Pipe-delimited wildcard patterns to hide/disable tools (e.g. \"*gitk|mcp_*|*a*\"). Uses \"*\" as a wildcard and is combined with tools.blacklist."
+        "lmToolsBridge.tools.unexposedDelta": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional LM tool names to unexpose relative to the default exposed list. This takes precedence over tools.exposedDelta. Tools in the built-in default-enabled list remain exposed."
+        },
+        "lmToolsBridge.tools.groupingRules": {
+          "type": "array",
+          "default": [
+            {
+              "id": "angelscript",
+              "label": "AngelScript",
+              "pattern": "^angelscript_"
+            },
+            {
+              "id": "clangd",
+              "label": "Clangd",
+              "pattern": "^lm_clangd_"
+            }
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "pattern"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable rule id used to build internal group ids."
+              },
+              "label": {
+                "type": "string",
+                "description": "Display label of the custom group."
+              },
+              "pattern": {
+                "type": "string",
+                "description": "JavaScript regex pattern for matching tool names, without surrounding slashes."
+              },
+              "flags": {
+                "type": "string",
+                "description": "Optional regex flags. Stateful flags like g/y are ignored."
+              }
+            }
+          },
+          "description": "Regex-based tool grouping rules. Matching priority is built-in disabled > custom rules > built-in groups. Rules are applied in list order and first match wins."
         },
         "lmToolsBridge.tools.schemaDefaults": {
           "type": "array",

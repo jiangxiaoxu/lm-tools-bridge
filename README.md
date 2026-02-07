@@ -66,9 +66,15 @@ Default enabled tools are defined by `DEFAULT_ENABLED_TOOL_NAMES`:
 - `copilot_getErrors`
 - `copilot_readProjectStructure`
 
-## Built-in blacklist
+## Default exposed tools
 
-These tools are always disabled and cannot be enabled via settings:
+Default exposed tools use the same baseline as `DEFAULT_ENABLED_TOOL_NAMES`.
+
+Any tool outside that default list is unexposed by default, but can be manually exposed in `Configure Exposure Tools`.
+
+## Built-in disabled tools
+
+These tools are always blocked. They cannot be exposed or enabled.
 
 - `copilot_applyPatch`
 - `copilot_insertEdit`
@@ -79,7 +85,9 @@ These tools are always disabled and cannot be enabled via settings:
 - `copilot_createNewJupyterNotebook`
 - `copilot_editNotebook`
 - `copilot_runNotebookCell`
+- `copilot_readFile`
 - `copilot_createNewWorkspace`
+- `copilot_getVSCodeAPI`
 - `copilot_installExtension`
 - `copilot_runVscodeCommand`
 - `create_and_run_task`
@@ -92,15 +100,17 @@ These tools are always disabled and cannot be enabled via settings:
 - `copilot_editFiles`
 - `copilot_getProjectSetupInfo`
 - `copilot_getDocInfo`
+- `copilot_askQuestions`
+- `copilot_readNotebookCellOutput`
+- `copilot_switchAgent`
+- `copilot_toolReplay`
 - `copilot_listDirectory`
+- `search_subagent`
 - `runSubagent`
 - `vscode_get_confirmation`
 - `vscode_get_terminal_confirmation`
 - `inline_chat_exit`
-- `copilot_getVSCodeAPI`
-- `copilot_findFiles`
-- `copilot_findTextInFiles`
-- `copilot_readFile`
+- `copilot_githubRepo`
 
 ## Settings
 
@@ -113,14 +123,50 @@ These tools are always disabled and cannot be enabled via settings:
 - `lmToolsBridge.clangd.enablePassthrough` (default: true; controls `lm_clangd_lspRequest`)
 - `lmToolsBridge.clangd.requestTimeoutMs` (default: 10000)
 - `lmToolsBridge.clangd.allowedMethods` (default: `[]`; empty falls back to built-in read-only allowlist)
+- `lmToolsBridge.tools.exposedDelta` (default: `[]`; additional exposes relative to defaults)
+- `lmToolsBridge.tools.unexposedDelta` (default: `[]`; additional unexposes relative to defaults; takes precedence over `tools.exposedDelta`)
 - `lmToolsBridge.tools.enabledDelta` (default: `[]`; additional enables relative to defaults)
 - `lmToolsBridge.tools.disabledDelta` (default: `[]`; additional disables relative to defaults)
+- `lmToolsBridge.tools.groupingRules` (default: AngelScript + Clangd rules; regex-based custom grouping rules by tool name; each rule uses `{ id, label, pattern, flags? }`)
 - `lmToolsBridge.tools.enabled` has been removed. Use `tools.enabledDelta` / `tools.disabledDelta` instead.
-- `lmToolsBridge.tools.blacklist` (default: `[]`)
-- `lmToolsBridge.tools.blacklistPatterns` (default: `""`; `*` wildcard, `|`-delimited)
 - `lmToolsBridge.tools.schemaDefaults` (defaults defined in extension configuration)
 - `lmToolsBridge.tools.responseFormat` (default: `text`; `text` | `structured` | `both`)
 - `lmToolsBridge.debug` (default: `off`; `off` | `simple` | `detail`)
+
+## Tool configuration UI
+
+The configuration commands now open a tree-based webview panel grouped by tool source:
+
+- `custom rules`: top-level groups generated from `lmToolsBridge.tools.groupingRules` in configured order
+- `custom`: tools implemented by this extension (`isCustom===true`)
+- `copilot`: tools with the `copilot_` prefix
+- `vscode`: standard `vscode.lm.tools` entries
+- `other`: fallback group for uncategorized entries
+- `Built-in Disabled` (parent group): hard-blocked tools shown at the bottom with child groups from `groupingRules` first, then `Copilot|VS Code|Custom|Other`
+
+Supported interactions in both pages:
+
+- `Configure Exposure Tools` (`lm-tools-bridge.configureExposure`)
+- `Configure Enabled Tools` (`lm-tools-bridge.configureEnabled`)
+- Group collapse/expand
+- Group-level batch check/uncheck
+- Search by name/description/tags
+- `Reset` / `Confirm` / `Cancel`
+- Real-time selected item count
+
+Selection model:
+
+- `Exposure`: defines which tools are available for enablement.
+- `Enabled`: only applies within the currently exposed set.
+- Effective MCP tool set = `exposed` intersection `enabled`.
+- Grouping priority is `built-in disabled > groupingRules (first match wins) > built-in groups`.
+- When a tool becomes unexposed, its `enabledDelta` / `disabledDelta` entries are automatically pruned.
+- Built-in disabled tools are moved into the bottom parent group (`Built-in Disabled`) with source child groups and are always read-only.
+- Built-in disabled tools are never shown in the enabled panel.
+- Built-in disabled tools are automatically removed from `exposedDelta` / `unexposedDelta` / `enabledDelta` / `disabledDelta` during normalization.
+- Tools in the built-in default-enabled list are always exposed unless the same tool is listed as built-in disabled.
+
+If webview initialization fails, the extension automatically falls back to the legacy QuickPick flow.
 
 ## lm_findFiles
 

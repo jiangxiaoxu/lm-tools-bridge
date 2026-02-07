@@ -4,6 +4,8 @@ import { TextDecoder } from 'node:util';
 import * as z from 'zod';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
 import { getClangdToolsSnapshot } from './clangd';
+import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
+import { showToolConfigPanel, type ToolConfigPanelResult } from './toolConfigPanel';
 import {
   CONFIG_SECTION,
   getConfigValue,
@@ -29,8 +31,9 @@ export function setToolingLogger(logger: ToolingLogger): void {
 
 const CONFIG_ENABLED_TOOLS = 'tools.enabledDelta';
 const CONFIG_DISABLED_TOOLS = 'tools.disabledDelta';
-const CONFIG_BLACKLIST = 'tools.blacklist';
-const CONFIG_BLACKLIST_PATTERNS = 'tools.blacklistPatterns';
+const CONFIG_EXPOSED_TOOLS = 'tools.exposedDelta';
+const CONFIG_UNEXPOSED_TOOLS = 'tools.unexposedDelta';
+const CONFIG_GROUPING_RULES = 'tools.groupingRules';
 const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
@@ -50,7 +53,9 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_getErrors',
   'copilot_readProjectStructure',
 ];
-const BUILTIN_BLACKLISTED_TOOL_NAMES = [
+const DEFAULT_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
+const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
+const BUILTIN_DISABLED_TOOL_NAMES = [
   'copilot_applyPatch',
   'copilot_insertEdit',
   'copilot_replaceString',
@@ -75,15 +80,47 @@ const BUILTIN_BLACKLISTED_TOOL_NAMES = [
   'copilot_editFiles',
   'copilot_getProjectSetupInfo',
   'copilot_getDocInfo',
+  'copilot_askQuestions',
+  'copilot_readNotebookCellOutput',
+  'copilot_switchAgent',
+  'copilot_toolReplay',
   'copilot_listDirectory',
+  'search_subagent',
   'runSubagent',
   'vscode_get_confirmation',
   'vscode_get_terminal_confirmation',
   'inline_chat_exit',
   'copilot_githubRepo',
 ];
+const BUILTIN_DISABLED_TOOL_SET = new Set(BUILTIN_DISABLED_TOOL_NAMES);
+const DEFAULT_TOOL_GROUPING_RULES: ToolGroupingRuleConfig[] = [
+  {
+    id: 'angelscript',
+    label: 'AngelScript',
+    pattern: '^angelscript_',
+  },
+  {
+    id: 'clangd',
+    label: 'Clangd',
+    pattern: '^lm_clangd_',
+  },
+];
+const TOOL_GROUPING_RULE_MAX_COUNT = 100;
+const TOOL_GROUPING_RULE_MAX_PATTERN_LENGTH = 256;
 
 type SchemaDefaultOverrides = Record<string, Record<string, unknown>>;
+
+interface ToolGroupingRuleConfig {
+  id: string;
+  label: string;
+  pattern: string;
+  flags?: string;
+}
+
+interface ResolvedToolGroupingRulesResult {
+  rules: CompiledToolGroupingRule[];
+  warnings: string[];
+}
 
 const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
   'copilot_findTextInFiles.maxResults=500',
@@ -184,6 +221,28 @@ interface CustomToolDefinition extends CustomToolInformation {
 }
 
 export type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
+function getBuiltInDisabledToolSet(): Set<string> {
+  return new Set(BUILTIN_DISABLED_TOOL_SET);
+}
+
+function isBuiltInDisabledTool(name: string): boolean {
+  return BUILTIN_DISABLED_TOOL_SET.has(name);
+}
+
+function getRequiredExposedToolSet(): Set<string> {
+  return new Set(REQUIRED_EXPOSED_TOOL_NAMES.filter((name) => !isBuiltInDisabledTool(name)));
+}
+
+function mergeRequiredExposedTools(exposed: Set<string>): Set<string> {
+  for (const name of REQUIRED_EXPOSED_TOOL_NAMES) {
+    if (isBuiltInDisabledTool(name)) {
+      continue;
+    }
+    exposed.add(name);
+  }
+  return exposed;
+}
+
 function getEnabledToolsSetting(): string[] {
   const enabledDelta = getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, []);
   const disabledDelta = getConfigValue<string[]>(CONFIG_DISABLED_TOOLS, []);
@@ -197,87 +256,253 @@ function getEnabledToolsSetting(): string[] {
   return [...enabled].filter((name) => !disabled.has(name));
 }
 
-function getBlacklistedToolsSetting(): string[] {
-  const blacklisted = getConfigValue<string[]>(CONFIG_BLACKLIST, []);
-  return Array.isArray(blacklisted) ? blacklisted.filter((name) => typeof name === 'string') : [];
+function getExposedToolsSetting(): string[] {
+  const disabledSet = getBuiltInDisabledToolSet();
+  const exposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_EXPOSED_TOOLS, []))
+    .filter((name) => !disabledSet.has(name));
+  const unexposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_UNEXPOSED_TOOLS, []))
+    .filter((name) => !disabledSet.has(name));
+  const exposed = mergeRequiredExposedTools(new Set(exposedDelta));
+  const unexposed = new Set(unexposedDelta);
+  for (const requiredName of REQUIRED_EXPOSED_TOOL_NAMES) {
+    unexposed.delete(requiredName);
+  }
+  for (const name of DEFAULT_EXPOSED_TOOL_NAMES) {
+    if (!disabledSet.has(name) && !unexposed.has(name)) {
+      exposed.add(name);
+    }
+  }
+  return [...exposed].filter((name) => !unexposed.has(name) && !disabledSet.has(name));
 }
 
 function filterToolNames(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((name) => typeof name === 'string') : [];
 }
 
-function getBlacklistedToolPatterns(): string[] {
-  const rawPatterns = getConfigValue<string>(CONFIG_BLACKLIST_PATTERNS, '');
-  if (!rawPatterns) {
-    return [];
-  }
-  return rawPatterns
-    .split('|')
-    .map((pattern) => pattern.trim())
-    .filter((pattern) => pattern.length > 0);
+function toUniqueSortedToolNames(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
-function compileBlacklistPatterns(patterns: readonly string[]): RegExp[] {
-  const compiled: RegExp[] = [];
-  for (const pattern of patterns) {
-    const escaped = escapeRegExp(pattern).replace(/\\\*/g, '.*');
+function areToolNameListsEqual(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseGroupingRuleFlags(rawFlags: string): { flags: string; dropped: string[] } {
+  const allowedFlags = new Set(['i', 'm', 's', 'u']);
+  const dropped: string[] = [];
+  let flags = '';
+  for (const flag of rawFlags) {
+    if (!allowedFlags.has(flag)) {
+      dropped.push(flag);
+      continue;
+    }
+    if (flags.includes(flag)) {
+      continue;
+    }
+    flags += flag;
+  }
+  return { flags, dropped };
+}
+
+function getToolGroupingRulesFromConfig(): ResolvedToolGroupingRulesResult {
+  const warnings: string[] = [];
+  const rules: CompiledToolGroupingRule[] = [];
+  const seenIds = new Set<string>();
+  const rawRules = getConfigValue<unknown[]>(CONFIG_GROUPING_RULES, DEFAULT_TOOL_GROUPING_RULES as unknown[]);
+  if (!Array.isArray(rawRules)) {
+    warnings.push('tools.groupingRules ignored: expected array.');
+    return { rules, warnings };
+  }
+
+  for (let index = 0; index < rawRules.length; index += 1) {
+    if (rules.length >= TOOL_GROUPING_RULE_MAX_COUNT) {
+      warnings.push(`tools.groupingRules ignored: rule count exceeds ${TOOL_GROUPING_RULE_MAX_COUNT}.`);
+      break;
+    }
+    const rawRule = rawRules[index];
+    if (!isPlainObject(rawRule)) {
+      warnings.push(`tools.groupingRules[${index}] ignored: expected object.`);
+      continue;
+    }
+    const id = typeof rawRule.id === 'string' ? rawRule.id.trim() : '';
+    const label = typeof rawRule.label === 'string' ? rawRule.label.trim() : '';
+    const pattern = typeof rawRule.pattern === 'string' ? rawRule.pattern.trim() : '';
+    const rawFlags = typeof rawRule.flags === 'string' ? rawRule.flags.trim() : '';
+
+    if (id.length === 0 || label.length === 0 || pattern.length === 0) {
+      warnings.push(`tools.groupingRules[${index}] ignored: id/label/pattern are required.`);
+      continue;
+    }
+    if (pattern.length > TOOL_GROUPING_RULE_MAX_PATTERN_LENGTH) {
+      warnings.push(`tools.groupingRules[${index}] ignored: pattern length exceeds ${TOOL_GROUPING_RULE_MAX_PATTERN_LENGTH}.`);
+      continue;
+    }
+    if (seenIds.has(id)) {
+      warnings.push(`tools.groupingRules[${index}] ignored: duplicate id "${id}".`);
+      continue;
+    }
+
+    const { flags, dropped } = parseGroupingRuleFlags(rawFlags);
+    if (dropped.length > 0) {
+      warnings.push(`tools.groupingRules[${index}] dropped flags "${dropped.join('')}".`);
+    }
+
+    let matcher: RegExp;
     try {
-      compiled.push(new RegExp(`^${escaped}$`, 'i'));
-    } catch {
-      // Ignore invalid patterns.
+      matcher = new RegExp(pattern, flags);
+    } catch (error) {
+      warnings.push(`tools.groupingRules[${index}] ignored: invalid regex (${String(error)}).`);
+      continue;
+    }
+
+    seenIds.add(id);
+    rules.push({
+      id,
+      label,
+      groupId: `custom_rule:${id}`,
+      disabledGroupId: `builtin_disabled_custom_rule:${id}`,
+      matcher,
+    });
+  }
+  return { rules, warnings };
+}
+
+function logResolvedToolGroupingRules(result: ResolvedToolGroupingRulesResult): void {
+  if (getDebugLevel() !== 'detail') {
+    return;
+  }
+  if (result.warnings.length > 0) {
+    for (const warning of result.warnings) {
+      toolingLogger.warn(warning);
     }
   }
-  return compiled;
+  const summary = result.rules
+    .map((rule) => `${rule.id}:${rule.matcher.source}`)
+    .join(', ');
+  toolingLogger.info(`tools.groupingRules resolved ${result.rules.length} rule(s)${summary.length > 0 ? ` => ${summary}` : ''}.`);
 }
 
-function matchesBlacklistPattern(name: string, patterns: readonly RegExp[]): boolean {
-  for (const pattern of patterns) {
-    if (pattern.test(name)) {
-      return true;
-    }
+async function pruneRequiredExposureDeltas(): Promise<void> {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
+  const requiredSet = getRequiredExposedToolSet();
+  const currentUnexposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_UNEXPOSED_TOOLS, []));
+  const nextUnexposedDelta = currentUnexposedDelta.filter((name) => !requiredSet.has(name));
+  if (!areToolNameListsEqual(currentUnexposedDelta, nextUnexposedDelta)) {
+    await config.update(CONFIG_UNEXPOSED_TOOLS, toUniqueSortedToolNames(nextUnexposedDelta), target);
   }
-  return false;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export async function pruneBuiltInDisabledFromDeltas(): Promise<void> {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
+  const disabledSet = getBuiltInDisabledToolSet();
+  const currentExposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_EXPOSED_TOOLS, []));
+  const currentUnexposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_UNEXPOSED_TOOLS, []));
+  const currentEnabledDelta = filterToolNames(getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, []));
+  const currentDisabledDelta = filterToolNames(getConfigValue<string[]>(CONFIG_DISABLED_TOOLS, []));
+  const nextExposedDelta = currentExposedDelta.filter((name) => !disabledSet.has(name));
+  const nextUnexposedDelta = currentUnexposedDelta.filter((name) => !disabledSet.has(name));
+  const nextEnabledDelta = currentEnabledDelta.filter((name) => !disabledSet.has(name));
+  const nextDisabledDelta = currentDisabledDelta.filter((name) => !disabledSet.has(name));
+  const removed = new Set<string>([
+    ...currentExposedDelta.filter((name) => disabledSet.has(name)),
+    ...currentUnexposedDelta.filter((name) => disabledSet.has(name)),
+    ...currentEnabledDelta.filter((name) => disabledSet.has(name)),
+    ...currentDisabledDelta.filter((name) => disabledSet.has(name)),
+  ]);
+
+  if (!areToolNameListsEqual(currentExposedDelta, nextExposedDelta)) {
+    await config.update(CONFIG_EXPOSED_TOOLS, toUniqueSortedToolNames(nextExposedDelta), target);
+  }
+  if (!areToolNameListsEqual(currentUnexposedDelta, nextUnexposedDelta)) {
+    await config.update(CONFIG_UNEXPOSED_TOOLS, toUniqueSortedToolNames(nextUnexposedDelta), target);
+  }
+  if (!areToolNameListsEqual(currentEnabledDelta, nextEnabledDelta)) {
+    await config.update(CONFIG_ENABLED_TOOLS, toUniqueSortedToolNames(nextEnabledDelta), target);
+  }
+  if (!areToolNameListsEqual(currentDisabledDelta, nextDisabledDelta)) {
+    await config.update(CONFIG_DISABLED_TOOLS, toUniqueSortedToolNames(nextDisabledDelta), target);
+  }
+  if (removed.size > 0 && getDebugLevel() === 'detail') {
+    toolingLogger.info(`pruneBuiltInDisabledFromDeltas removed: ${[...removed].sort((a, b) => a.localeCompare(b)).join(', ')}`);
+  }
 }
 
-function isToolBlacklisted(
-  name: string,
-  blacklistedSet: ReadonlySet<string>,
-  blacklistPatterns: readonly RegExp[],
-): boolean {
-  return BUILTIN_BLACKLISTED_TOOL_NAMES.includes(name)
-    || blacklistedSet.has(name)
-    || matchesBlacklistPattern(name, blacklistPatterns);
+export async function pruneEnabledDeltasByExposed(exposed: ReadonlySet<string>): Promise<void> {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
+
+  const currentEnabledDelta = filterToolNames(getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, []));
+  const currentDisabledDelta = filterToolNames(getConfigValue<string[]>(CONFIG_DISABLED_TOOLS, []));
+  const nextEnabledDelta = currentEnabledDelta.filter((name) => exposed.has(name));
+  const nextDisabledDelta = currentDisabledDelta.filter((name) => exposed.has(name));
+
+  if (!areToolNameListsEqual(currentEnabledDelta, nextEnabledDelta)) {
+    await config.update(CONFIG_ENABLED_TOOLS, nextEnabledDelta, target);
+  }
+  if (!areToolNameListsEqual(currentDisabledDelta, nextDisabledDelta)) {
+    await config.update(CONFIG_DISABLED_TOOLS, nextDisabledDelta, target);
+  }
+}
+
+export async function normalizeToolSelectionState(): Promise<void> {
+  await pruneBuiltInDisabledFromDeltas();
+  await pruneRequiredExposureDeltas();
+  const exposedSet = new Set(getExposedToolsSetting());
+  await pruneEnabledDeltasByExposed(exposedSet);
+}
+
+async function setExposedTools(exposed: string[]): Promise<void> {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
+  const disabledSet = getBuiltInDisabledToolSet();
+  const exposedSet = mergeRequiredExposedTools(new Set(exposed.filter((name) => !disabledSet.has(name))));
+  const defaultSet = new Set(DEFAULT_EXPOSED_TOOL_NAMES.filter((name) => !disabledSet.has(name)));
+  const exposedDelta = [...exposedSet].filter((name) => !defaultSet.has(name));
+  const requiredSet = getRequiredExposedToolSet();
+  const unexposedDelta = DEFAULT_EXPOSED_TOOL_NAMES
+    .filter((name) => !disabledSet.has(name))
+    .filter((name) => !exposedSet.has(name))
+    .filter((name) => !requiredSet.has(name));
+  await config.update(CONFIG_EXPOSED_TOOLS, toUniqueSortedToolNames(exposedDelta), target);
+  await config.update(CONFIG_UNEXPOSED_TOOLS, toUniqueSortedToolNames(unexposedDelta), target);
+  await pruneEnabledDeltasByExposed(exposedSet);
 }
 
 async function setEnabledTools(enabled: string[]): Promise<void> {
   const resource = getConfigurationResource();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
   const target = await resolveToolsConfigTarget(resource);
-  const enabledSet = new Set(enabled);
-  const defaultSet = new Set(DEFAULT_ENABLED_TOOL_NAMES);
+  const disabledSet = getBuiltInDisabledToolSet();
+  const exposedSet = new Set(getExposedToolsSetting().filter((name) => !disabledSet.has(name)));
+  const enabledSet = new Set(enabled.filter((name) => exposedSet.has(name) && !disabledSet.has(name)));
+  const defaultSet = new Set(DEFAULT_ENABLED_TOOL_NAMES.filter((name) => exposedSet.has(name)));
   const enabledDelta = [...enabledSet].filter((name) => !defaultSet.has(name));
-  const disabledDelta = DEFAULT_ENABLED_TOOL_NAMES.filter((name) => !enabledSet.has(name));
-  await config.update(CONFIG_ENABLED_TOOLS, enabledDelta, target);
-  await config.update(CONFIG_DISABLED_TOOLS, disabledDelta, target);
+  const disabledDelta = [...defaultSet].filter((name) => !enabledSet.has(name));
+  await config.update(CONFIG_ENABLED_TOOLS, toUniqueSortedToolNames(enabledDelta), target);
+  await config.update(CONFIG_DISABLED_TOOLS, toUniqueSortedToolNames(disabledDelta), target);
 }
 
-async function setBlacklistedTools(blacklisted: string[]): Promise<boolean> {
+async function resetExposedTools(): Promise<void> {
   const resource = getConfigurationResource();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
   const target = await resolveToolsConfigTarget(resource);
-  await config.update(CONFIG_BLACKLIST, blacklisted, target);
-  const enabled = getEnabledToolsSetting();
-  const blacklistedSet = new Set(blacklisted);
-  const filtered = enabled.filter((name) => !blacklistedSet.has(name));
-  if (filtered.length !== enabled.length) {
-    await setEnabledTools(filtered);
-    return true;
-  }
-  return false;
+  await config.update(CONFIG_EXPOSED_TOOLS, [], target);
+  await config.update(CONFIG_UNEXPOSED_TOOLS, [], target);
+  await normalizeToolSelectionState();
 }
 
 async function resetEnabledTools(): Promise<void> {
@@ -286,10 +511,6 @@ async function resetEnabledTools(): Promise<void> {
   const target = await resolveToolsConfigTarget(resource);
   await config.update(CONFIG_ENABLED_TOOLS, [], target);
   await config.update(CONFIG_DISABLED_TOOLS, [], target);
-}
-
-async function resetBlacklistedTools(): Promise<boolean> {
-  return setBlacklistedTools([]);
 }
 
 function formatTags(tags: readonly string[]): string {
@@ -313,7 +534,7 @@ function indentLines(text: string, spaces: number): string {
 }
 
 function dumpLmTools(channel: vscode.OutputChannel): void {
-  const tools = getExposedToolsSnapshot();
+  const tools = getEnabledExposedToolsSnapshot();
   if (tools.length === 0) {
     channel.appendLine('No tools found in vscode.lm.tools.');
     return;
@@ -343,7 +564,58 @@ export function showEnabledToolsDump(channel: vscode.OutputChannel): void {
   dumpLmTools(channel);
 }
 
-export async function configureExposedTools(): Promise<void> {
+interface ToolPickerEntry {
+  name: string;
+  description: string;
+  tags: readonly string[];
+  picked: boolean;
+  readOnly?: boolean;
+}
+
+async function pickToolsWithQuickPick(options: {
+  title: string;
+  placeHolder: string;
+  resetLabel: string;
+  resetDescription: string;
+  entries: readonly ToolPickerEntry[];
+}): Promise<ToolConfigPanelResult> {
+  const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
+  items.push({
+    label: options.resetLabel,
+    description: options.resetDescription,
+    alwaysShow: true,
+    isReset: true,
+  });
+  items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
+
+  for (const entry of options.entries) {
+    items.push({
+      label: entry.name,
+      description: entry.description,
+      detail: entry.tags.length > 0 ? entry.tags.join(', ') : undefined,
+      picked: entry.picked,
+      toolName: entry.name,
+    });
+  }
+
+  const selections = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: options.title,
+    placeHolder: options.placeHolder,
+  });
+  if (!selections) {
+    return { action: 'cancel' };
+  }
+  if (selections.some((item) => item.isReset)) {
+    return { action: 'reset' };
+  }
+  const selected = selections
+    .map((item) => item.toolName)
+    .filter((name): name is string => typeof name === 'string');
+  return { action: 'apply', selected };
+}
+
+export async function configureExposureTools(): Promise<void> {
   const lm = getLanguageModelNamespace();
   if (!lm) {
     void vscode.window.showWarningMessage('vscode.lm is not available in this VS Code version.');
@@ -355,124 +627,189 @@ export async function configureExposedTools(): Promise<void> {
     void vscode.window.showInformationMessage('No tools found for MCP exposure.');
     return;
   }
-  const tools = getVisibleToolsSnapshot();
-  if (tools.length === 0) {
-    void vscode.window.showWarningMessage('All tools are hidden by the blacklist configuration.');
+  const tools = getAllToolsSnapshot();
+  const groupingRulesResult = getToolGroupingRulesFromConfig();
+  logResolvedToolGroupingRules(groupingRulesResult);
+  const builtInDisabledSet = getBuiltInDisabledToolSet();
+  const exposedSet = new Set(getExposedToolsSetting());
+  const requiredExposedSet = getRequiredExposedToolSet();
+  const entries: ToolPickerEntry[] = tools.map((tool) => ({
+    name: tool.name,
+    description: builtInDisabledSet.has(tool.name)
+      ? `${tool.description ?? ''} (Built-in disabled tool; exposure is blocked)`
+      : requiredExposedSet.has(tool.name)
+      ? `${tool.description ?? ''} (Always exposed by default policy)`
+      : (tool.description ?? ''),
+    tags: tool.tags,
+    picked: builtInDisabledSet.has(tool.name) ? false : exposedSet.has(tool.name),
+    readOnly: builtInDisabledSet.has(tool.name) || requiredExposedSet.has(tool.name),
+  }));
+  const sections = buildGroupedToolSections(
+    tools.map((tool) => ({
+      name: tool.name,
+      description: builtInDisabledSet.has(tool.name)
+        ? `${tool.description ?? ''} (Built-in disabled tool; exposure is blocked)`
+        : requiredExposedSet.has(tool.name)
+          ? `${tool.description ?? ''} (Always exposed by default policy)`
+          : (tool.description ?? ''),
+      tags: tool.tags,
+      picked: builtInDisabledSet.has(tool.name) ? false : exposedSet.has(tool.name),
+      readOnly: builtInDisabledSet.has(tool.name) || requiredExposedSet.has(tool.name),
+      builtInDisabled: builtInDisabledSet.has(tool.name),
+      isCustom: isCustomTool(tool),
+    })),
+    { customRules: groupingRulesResult.rules },
+  );
+  if (sections.length === 0) {
+    toolingLogger.warn('Exposure tool panel sections are empty, fallback to QuickPick.');
+    const fallbackSelection = await pickToolsWithQuickPick({
+      title: 'Configure exposure for LM tools',
+      placeHolder: 'Select tools available for MCP exposure.',
+      resetLabel: '$(refresh) Reset (default exposed tools)',
+      resetDescription: 'Restore default exposed tools',
+      entries,
+    });
+    if (fallbackSelection.action === 'cancel') {
+      return;
+    }
+    if (fallbackSelection.action === 'reset') {
+      await resetExposedTools();
+      void vscode.window.showInformationMessage('Restored default exposed tools.');
+      return;
+    }
+    const fallbackNames = fallbackSelection.selected.filter((name) => !builtInDisabledSet.has(name));
+    const fallbackEnforcedNames = mergeRequiredExposedTools(new Set(fallbackNames));
+    await setExposedTools([...fallbackEnforcedNames]);
+    void vscode.window.showInformationMessage(`Configured exposure for ${fallbackEnforcedNames.size} tool(s).`);
     return;
   }
 
-  const enabledSet = new Set(getEnabledToolsSetting());
-  const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
-
-  items.push({
-    label: '$(refresh) Reset (default enabled list)',
-    description: 'Restore the default enabled tool list',
-    alwaysShow: true,
-    isReset: true,
-  });
-  items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
-
-  for (const tool of tools) {
-    items.push({
-      label: tool.name,
-      description: tool.description,
-      detail: tool.tags.length > 0 ? tool.tags.join(', ') : undefined,
-      picked: enabledSet.has(tool.name),
-      toolName: tool.name,
+  let selection: ToolConfigPanelResult;
+  try {
+    selection = await showToolConfigPanel({
+      mode: 'exposure',
+      title: 'Configure exposure for LM tools',
+      placeHolder: 'Search tools by name, description, or tags.',
+      resetLabel: 'Reset',
+      resetDescription: 'Restore default exposed tools',
+      sections,
+    });
+  } catch (error) {
+    toolingLogger.warn(`Tool config panel failed, fallback to QuickPick: ${String(error)}`);
+    selection = await pickToolsWithQuickPick({
+      title: 'Configure exposure for LM tools',
+      placeHolder: 'Select tools available for MCP exposure.',
+      resetLabel: '$(refresh) Reset (default exposed tools)',
+      resetDescription: 'Restore default exposed tools',
+      entries,
     });
   }
 
-  const selections = await vscode.window.showQuickPick(items, {
-    canPickMany: true,
-    title: 'Configure exposed LM tools',
-    placeHolder: 'Select the tools you want to expose via MCP.',
-  });
-  if (!selections || selections.length === 0) {
+  if (selection.action === 'cancel') {
+    return;
+  }
+  if (selection.action === 'reset') {
+    await resetExposedTools();
+    void vscode.window.showInformationMessage('Restored default exposed tools.');
     return;
   }
 
-  if (selections.some((item) => item.isReset)) {
-    await resetEnabledTools();
-    void vscode.window.showInformationMessage('Restored the default exposed tool list.');
-    return;
-  }
-
-  const names = selections
-    .map((item) => item.toolName)
-    .filter((name): name is string => typeof name === 'string');
-
-  if (names.length === 0) {
-    void vscode.window.showWarningMessage('No tools were selected.');
-    return;
-  }
-
-  await setEnabledTools(names);
-  void vscode.window.showInformationMessage(`Exposing ${names.length} tool(s).`);
+  const names = selection.selected;
+  const filteredNames = names.filter((name) => !builtInDisabledSet.has(name));
+  const enforcedNames = mergeRequiredExposedTools(new Set(filteredNames));
+  await setExposedTools([...enforcedNames]);
+  void vscode.window.showInformationMessage(`Configured exposure for ${enforcedNames.size} tool(s).`);
 }
 
-export async function configureBlacklistedTools(): Promise<void> {
+export async function configureEnabledTools(): Promise<void> {
   const lm = getLanguageModelNamespace();
   if (!lm) {
     void vscode.window.showWarningMessage('vscode.lm is not available in this VS Code version.');
     return;
   }
 
-  const tools = getAllLmToolsSnapshot();
+  const tools = getExposedToolsSnapshot();
   if (tools.length === 0) {
-    void vscode.window.showWarningMessage('No tools found in vscode.lm.tools.');
+    void vscode.window.showWarningMessage('No exposed tools available to enable.');
+    return;
+  }
+  const groupingRulesResult = getToolGroupingRulesFromConfig();
+  logResolvedToolGroupingRules(groupingRulesResult);
+
+  const enabledSet = new Set(getEnabledToolsSetting());
+  const entries: ToolPickerEntry[] = tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description ?? '',
+    tags: tool.tags,
+    picked: enabledSet.has(tool.name),
+  }));
+  const sections = buildGroupedToolSections(
+    tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description ?? '',
+      tags: tool.tags,
+      picked: enabledSet.has(tool.name),
+      isCustom: isCustomTool(tool),
+    })),
+    { customRules: groupingRulesResult.rules },
+  );
+  if (sections.length === 0) {
+    toolingLogger.warn('Enabled tool panel sections are empty, fallback to QuickPick.');
+    const fallbackSelection = await pickToolsWithQuickPick({
+      title: 'Configure enabled LM tools',
+      placeHolder: 'Select exposed tools to enable.',
+      resetLabel: '$(refresh) Reset (default enabled tools)',
+      resetDescription: 'Restore default enabled tools',
+      entries,
+    });
+    if (fallbackSelection.action === 'cancel') {
+      return;
+    }
+    if (fallbackSelection.action === 'reset') {
+      await resetEnabledTools();
+      await pruneEnabledDeltasByExposed(new Set(getExposedToolsSetting()));
+      void vscode.window.showInformationMessage('Restored default enabled tools.');
+      return;
+    }
+    await setEnabledTools(fallbackSelection.selected);
+    void vscode.window.showInformationMessage(`Enabled ${fallbackSelection.selected.length} tool(s).`);
     return;
   }
 
-  const blacklistedSet = new Set(getBlacklistedToolsSetting());
-  const items: Array<vscode.QuickPickItem & { toolName?: string; isReset?: boolean }> = [];
-
-  items.push({
-    label: '$(refresh) Reset (clear list)',
-    description: 'Remove all manually blacklisted tools',
-    alwaysShow: true,
-    isReset: true,
-  });
-  items.push({ label: 'Tools', kind: vscode.QuickPickItemKind.Separator });
-
-  for (const tool of tools) {
-    items.push({
-      label: tool.name,
-      description: tool.description,
-      detail: tool.tags.length > 0 ? tool.tags.join(', ') : undefined,
-      picked: blacklistedSet.has(tool.name),
-      toolName: tool.name,
+  let selection: ToolConfigPanelResult;
+  try {
+    selection = await showToolConfigPanel({
+      mode: 'enabled',
+      title: 'Configure enabled LM tools',
+      placeHolder: 'Search tools by name, description, or tags.',
+      resetLabel: 'Reset',
+      resetDescription: 'Restore default enabled tools',
+      sections,
+    });
+  } catch (error) {
+    toolingLogger.warn(`Enabled config panel failed, fallback to QuickPick: ${String(error)}`);
+    selection = await pickToolsWithQuickPick({
+      title: 'Configure enabled LM tools',
+      placeHolder: 'Select exposed tools to enable.',
+      resetLabel: '$(refresh) Reset (default enabled tools)',
+      resetDescription: 'Restore default enabled tools',
+      entries,
     });
   }
 
-  const selections = await vscode.window.showQuickPick(items, {
-    canPickMany: true,
-    title: 'Configure blacklisted LM tools',
-    placeHolder: 'Select tools you want to hide before MCP exposure.',
-  });
-  if (!selections) {
+  if (selection.action === 'cancel') {
+    return;
+  }
+  if (selection.action === 'reset') {
+    await resetEnabledTools();
+    await pruneEnabledDeltasByExposed(new Set(getExposedToolsSetting()));
+    void vscode.window.showInformationMessage('Restored default enabled tools.');
     return;
   }
 
-  if (selections.some((item) => item.isReset)) {
-    const removed = await resetBlacklistedTools();
-    if (removed) {
-      void vscode.window.showInformationMessage('Cleared blacklist and updated enabled tools list.');
-    } else {
-      void vscode.window.showInformationMessage('Cleared blacklist.');
-    }
-    return;
-  }
-
-  const names = selections
-    .map((item) => item.toolName)
-    .filter((name): name is string => typeof name === 'string');
-
-  const removed = await setBlacklistedTools(names);
-  if (removed) {
-    void vscode.window.showInformationMessage(`Blacklisted ${names.length} tool(s) and updated enabled tools list.`);
-  } else {
-    void vscode.window.showInformationMessage(`Blacklisted ${names.length} tool(s).`);
-  }
+  const names = selection.selected;
+  await setEnabledTools(names);
+  void vscode.window.showInformationMessage(`Enabled ${names.length} tool(s).`);
 }
 function extractSchemaPropertyNames(schema: unknown): Set<string> | undefined {
   const names = new Set<string>();
@@ -1609,22 +1946,16 @@ function getAllToolsSnapshot(): readonly ExposedTool[] {
   return [...getAllLmToolsSnapshot(), ...getCustomToolsSnapshot()];
 }
 
-function getVisibleToolsSnapshot(): readonly ExposedTool[] {
-  const blacklistedSet = new Set(getBlacklistedToolsSetting());
-  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
+export function getExposedToolsSnapshot(): readonly ExposedTool[] {
+  const exposedSet = new Set(getExposedToolsSetting());
   return getAllToolsSnapshot().filter((tool) => {
-    return !isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns);
+    return exposedSet.has(tool.name) && !isBuiltInDisabledTool(tool.name);
   });
 }
 
-export function getExposedToolsSnapshot(): readonly ExposedTool[] {
+export function getEnabledExposedToolsSnapshot(): readonly ExposedTool[] {
   const enabledSet = new Set(getEnabledToolsSetting());
-  const blacklistedSet = new Set(getBlacklistedToolsSetting());
-  const blacklistPatterns = compileBlacklistPatterns(getBlacklistedToolPatterns());
-  return getAllToolsSnapshot().filter((tool) => {
-    if (isToolBlacklisted(tool.name, blacklistedSet, blacklistPatterns)) {
-      return false;
-    }
+  return getExposedToolsSnapshot().filter((tool) => {
     return enabledSet.has(tool.name);
   });
 }
@@ -1649,7 +1980,7 @@ export function prioritizeTool(
 export function registerExposedTools(server: import('@modelcontextprotocol/sdk/server/mcp.js').McpServer): void {
   const toolInputSchema: z.ZodTypeAny = z.object({}).passthrough()
     .describe('Tool input object. Use lm-tools://schema/{name} for the expected shape.');
-  const tools = getExposedToolsSnapshot();
+  const tools = getEnabledExposedToolsSnapshot();
   for (const tool of tools) {
     if (tool.name === 'getVSCodeWorkspace') {
       continue;
@@ -1730,7 +2061,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
   let debugStructuredOutput: unknown;
   let debugError: unknown;
   try {
-    const tools = getExposedToolsSnapshot();
+    const tools = getEnabledExposedToolsSnapshot();
     const tool = tools.find((candidate) => candidate.name === toolName);
     if (!tool) {
       throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${toolName}`);
@@ -1782,7 +2113,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     return toolErrorResultPayload({
       error: message,
       name: toolName,
-      inputSchema: getExposedToolsSnapshot().find((tool) => tool.name === toolName)?.inputSchema ?? null,
+      inputSchema: getEnabledExposedToolsSnapshot().find((tool) => tool.name === toolName)?.inputSchema ?? null,
     });
   } finally {
     const durationMs = Date.now() - requestStartTime;

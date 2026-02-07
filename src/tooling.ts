@@ -3,6 +3,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { TextDecoder } from 'node:util';
 import * as z from 'zod';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
+import { getClangdToolsSnapshot } from './clangd';
 import {
   CONFIG_SECTION,
   getConfigValue,
@@ -40,6 +41,12 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_listCodeUsages',
   'lm_findFiles',
   'lm_findTextInFiles',
+  'lm_clangd_status',
+  'lm_clangd_switchSourceHeader',
+  'lm_clangd_ast',
+  'lm_clangd_typeHierarchy',
+  'lm_clangd_typeHierarchyResolve',
+  'lm_clangd_lspRequest',
   'copilot_getErrors',
   'copilot_readProjectStructure',
 ];
@@ -1591,7 +1598,11 @@ function isCustomTool(tool: ExposedTool): tool is CustomToolDefinition {
 }
 
 function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
-  return [buildFindFilesToolDefinition(), buildFindTextInFilesToolDefinition()];
+  return [
+    buildFindFilesToolDefinition(),
+    buildFindTextInFilesToolDefinition(),
+    ...getClangdToolsSnapshot(),
+  ];
 }
 
 function getAllToolsSnapshot(): readonly ExposedTool[] {

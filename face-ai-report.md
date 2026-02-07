@@ -31,6 +31,11 @@ Entry: lm_findFiles / lm_findTextInFiles
 Path: executeFindFilesSearch / executeFindTextInFilesSearch -> ripgrep
 Output: 文件路径或匹配列表
 
+Flow: clangd MCP 工具调用
+Entry: lm_clangd_* tools
+Path: getClangdToolsSnapshot -> sendRequestWithAutoStart -> ensureClangdRunning -> clangd.activate(按需) -> languageClient.sendRequest
+Output: clangd LSP 响应或明确错误
+
 Flow: Tool 暴露计算
 Entry: tools/list or tools/call
 Path: getEnabledToolsSetting -> getExposedToolsSnapshot -> registerExposedTools
@@ -91,6 +96,18 @@ Entry: tools.responseFormat
 Path: buildToolResult
 Files: src/tooling.ts
 
+Task: clangd 工具未暴露
+Entry: lmToolsBridge.clangd.enabled
+Path: isClangdMcpEnabled -> getClangdToolsSnapshot -> getCustomToolsSnapshot
+Files: src/clangd/index.ts, src/tooling.ts
+Log: "Tool not found or disabled"
+
+Task: clangd 调用失败或未启动
+Entry: lm_clangd_* call
+Path: sendRequestWithAutoStart -> ensureClangdRunning -> startClangdAndWait
+Files: src/clangd/transport.ts, src/clangd/bootstrap.ts
+Log: "Unable to obtain clangd client", "clangd request retry failed"
+
 ## 关键配置与行为矩阵
 Key: lmToolsBridge.server.autoStart
 Effect: Auto start MCP server
@@ -136,6 +153,26 @@ Key: lmToolsBridge.debug
 Effect: Log verbosity
 Code: getDebugLevel
 
+Key: lmToolsBridge.clangd.enabled
+Effect: Gate all lm_clangd_* tools
+Code: getClangdToolsSnapshot
+
+Key: lmToolsBridge.clangd.autoStartOnInvoke
+Effect: Auto trigger clangd.activate when client missing
+Code: ensureClangdRunning, startClangdAndWait
+
+Key: lmToolsBridge.clangd.enablePassthrough
+Effect: Enable/disable lm_clangd_lspRequest exposure
+Code: getClangdToolsSnapshot
+
+Key: lmToolsBridge.clangd.requestTimeoutMs
+Effect: Timeout for clangd MCP requests
+Code: sendRequestWithAutoStart, sendWithTimeout
+
+Key: lmToolsBridge.clangd.allowedMethods
+Effect: Allowlist for lm_clangd_lspRequest
+Code: getEffectiveAllowedPassthroughMethods
+
 ## 行为不变量
 Invariant: tools.disabledDelta 优先级高于 tools.enabledDelta.
 Invariant: blacklist 与 blacklistPatterns 永远生效.
@@ -143,6 +180,12 @@ Invariant: tool input 必须是 object, 否则返回 error payload.
 Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
 Invariant: responseFormat 控制 content 与 structuredContent 的存在.
 Invariant: 未启用或被禁用的工具返回 MethodNotFound.
+Invariant: `lmToolsBridge.clangd.enabled=false` 时不暴露任何 lm_clangd_* 工具.
+Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
+Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
+Invariant: workspace untrusted 时 clangd MCP 请求必须拒绝.
+Invariant: 低价值工具 `lm_clangd_memoryUsage` 和 `lm_clangd_inlayHints` 默认不暴露.
+Invariant: passthrough 默认 allowlist 不包含 completion, semanticTokens, memoryUsage, inlayHints.
 
 ## 失败路径矩阵
 Case: 端口占用且重试失败
@@ -168,6 +211,18 @@ Code: checkTargetHealth
 Case: Manager 不可达
 Result: ERROR_MANAGER_UNREACHABLE
 Code: forwardMcpMessage
+
+Case: clangd extension 未安装
+Result: CLANGD_EXTENSION_MISSING
+Code: startClangdAndWait
+
+Case: clangd 请求超时
+Result: REQUEST_TIMEOUT
+Code: sendWithTimeout
+
+Case: passthrough method 不在 allowlist
+Result: METHOD_NOT_ALLOWED
+Code: runLspRequestTool
 
 ## 最小调用示例
 Example: Handshake
@@ -199,6 +254,11 @@ Seed: lmToolsBridge.requestWorkspaceMCPServer | Use: Manager handshake
 Seed: lmToolsBridge.callTool | Use: Manager 直通 tool
 Seed: /mcp/status | Use: Manager 运行状态
 Seed: notifications/tools/list_changed | Use: tool list 变更通知
+Seed: getClangdToolsSnapshot | Use: clangd 工具暴露入口
+Seed: ensureClangdRunning | Use: clangd 按需启动入口
+Seed: sendRequestWithAutoStart | Use: clangd 请求统一入口
+Seed: lm_clangd_status | Use: clangd 可用性诊断
+Seed: lm_clangd_lspRequest | Use: clangd 受限透传调用
 
 ## 默认与内置列表的映射
 Default enabled source: DEFAULT_ENABLED_TOOL_NAMES in src/tooling.ts
@@ -208,6 +268,7 @@ Schema defaults source: BUILTIN_SCHEMA_DEFAULT_OVERRIDES in src/tooling.ts
 ## 模块依赖与数据流
 Graph:
 - extension.ts -> tooling.ts -> searchTools.ts
+- tooling.ts -> clangd/index.ts -> clangd/tools/*
 - extension.ts -> managerClient.ts -> manager.ts
 - tooling.ts -> configuration.ts
 
@@ -215,6 +276,7 @@ DataFlow:
 - VS Code activation -> MCP server -> tools/resources
 - Manager handshake -> target resolve -> MCP forward
 - Settings -> enablement/blacklist/schema defaults -> exposed tools
+- clangd tool call -> bootstrap -> clangd language client -> LSP response
 
 ## 更新策略
 当以下任一项变化时更新本报告:

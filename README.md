@@ -57,6 +57,12 @@ Default enabled tools are defined by `DEFAULT_ENABLED_TOOL_NAMES`:
 - `copilot_listCodeUsages`
 - `lm_findFiles`
 - `lm_findTextInFiles`
+- `lm_clangd_status` (only when `lmToolsBridge.clangd.enabled=true`)
+- `lm_clangd_switchSourceHeader` (only when `lmToolsBridge.clangd.enabled=true`)
+- `lm_clangd_ast` (only when `lmToolsBridge.clangd.enabled=true`)
+- `lm_clangd_typeHierarchy` (only when `lmToolsBridge.clangd.enabled=true`)
+- `lm_clangd_typeHierarchyResolve` (only when `lmToolsBridge.clangd.enabled=true`)
+- `lm_clangd_lspRequest` (only when `lmToolsBridge.clangd.enabled=true` and `lmToolsBridge.clangd.enablePassthrough=true`)
 - `copilot_getErrors`
 - `copilot_readProjectStructure`
 
@@ -102,6 +108,11 @@ These tools are always disabled and cannot be enabled via settings:
 - `lmToolsBridge.server.port` (default: 48123)
 - `lmToolsBridge.manager.httpPort` (default: 47100)
 - `lmToolsBridge.useWorkspaceSettings` (default: false; only honored in workspace settings)
+- `lmToolsBridge.clangd.enabled` (default: false; gates all `lm_clangd_*` tools)
+- `lmToolsBridge.clangd.autoStartOnInvoke` (default: true; invokes `clangd.activate` when clangd is not running)
+- `lmToolsBridge.clangd.enablePassthrough` (default: true; controls `lm_clangd_lspRequest`)
+- `lmToolsBridge.clangd.requestTimeoutMs` (default: 10000)
+- `lmToolsBridge.clangd.allowedMethods` (default: `[]`; empty falls back to built-in read-only allowlist)
 - `lmToolsBridge.tools.enabledDelta` (default: `[]`; additional enables relative to defaults)
 - `lmToolsBridge.tools.disabledDelta` (default: `[]`; additional disables relative to defaults)
 - `lmToolsBridge.tools.enabled` has been removed. Use `tools.enabledDelta` / `tools.disabledDelta` instead.
@@ -125,6 +136,23 @@ These tools are always disabled and cannot be enabled via settings:
 - `includePattern`: glob
 - `maxResults`: number, default 500
 - `includeIgnoredFiles`: boolean
+
+## clangd MCP tools
+
+These tools are available only when `lmToolsBridge.clangd.enabled=true`.
+
+- `lm_clangd_status`: report clangd extension/client availability, trust state, and effective settings.
+- `lm_clangd_switchSourceHeader`: call `textDocument/switchSourceHeader`.
+- `lm_clangd_ast`: call `textDocument/ast`.
+- `lm_clangd_typeHierarchy`: call `textDocument/typeHierarchy`.
+- `lm_clangd_typeHierarchyResolve`: call `typeHierarchy/resolve`.
+- `lm_clangd_lspRequest`: restricted passthrough request tool guarded by `clangd.allowedMethods`.
+- `lm_clangd_lspRequest` only allows read-only methods from the built-in allowlist. Methods outside this read-only list are ignored even if configured in `clangd.allowedMethods`.
+
+Auto-start behavior:
+
+- If clangd tools are enabled and clangd is not running, the bridge triggers `clangd.activate` once and retries the request.
+- If `clangd.enable=false`, the bridge does not mutate user settings and returns an explicit error when startup fails.
 
 ## Selected change history
 

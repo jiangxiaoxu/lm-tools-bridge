@@ -73,6 +73,35 @@
           "default": false,
           "description": "Only honored when set in workspace settings. User/global settings are ignored. When enabled, lmToolsBridge settings are read/written at the workspace scope and override user settings."
         },
+        "lmToolsBridge.clangd.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable clangd MCP tools (lm_clangd_*)."
+        },
+        "lmToolsBridge.clangd.autoStartOnInvoke": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically trigger the clangd extension startup command when a clangd MCP tool is invoked and clangd is not running."
+        },
+        "lmToolsBridge.clangd.enablePassthrough": {
+          "type": "boolean",
+          "default": true,
+          "description": "Expose lm_clangd_lspRequest, a restricted passthrough tool for allowed LSP request methods."
+        },
+        "lmToolsBridge.clangd.requestTimeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 100,
+          "description": "Default timeout in milliseconds for clangd MCP requests."
+        },
+        "lmToolsBridge.clangd.allowedMethods": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Allowed method list for lm_clangd_lspRequest. Empty uses the built-in read-only allowlist. Entries outside the built-in read-only list are ignored."
+        },
         "lmToolsBridge.tools.enabledDelta": {
           "type": "array",
           "default": [],

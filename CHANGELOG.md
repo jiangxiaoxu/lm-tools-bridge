@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+- Added an isolated `src/clangd/` module for clangd MCP integration with low coupling to `tooling.ts`.
+- Added configurable clangd MCP settings: `clangd.enabled`, `clangd.autoStartOnInvoke`, `clangd.enablePassthrough`, `clangd.requestTimeoutMs`, and `clangd.allowedMethods`.
+- Added `lm_clangd_*` tools for status, switch header/source, AST, type hierarchy, memory usage, inlay hints, and restricted passthrough requests.
+- Added auto-start-on-invoke behavior that triggers `clangd.activate` when clangd tools are enabled and the client is unavailable.
+- Restricted `lm_clangd_lspRequest` to read-only passthrough methods and ignore non-read-only configured methods.
+- Pruned low-value clangd tool exposure by removing default exposure of `lm_clangd_memoryUsage` and `lm_clangd_inlayHints`.
+- Trimmed read-only passthrough defaults by removing `textDocument/completion`, `textDocument/semanticTokens/full`, `$/memoryUsage`, and `clangd/inlayHints`.
+- Added `clangd-mcp-implementation-guide.md` as the implementation and progress tracking guide.
+
 ## [1.0.59] - 2026-02-03
 - Updated `tools.schemaDefaults` setting defaults and examples.
 

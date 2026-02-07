@@ -7,4 +7,5 @@ This folder is organized by responsibility to keep the extension entrypoint smal
 - managerClient.ts: Manager process control, restart workflow, and IPC/HTTP coordination with the manager.
 - manager.ts: Manager process server implementation and lifecycle.
 - tooling.ts: Tool exposure, schema defaults, MCP tool registration, and tool invocation formatting.
+- clangd/: Isolated clangd MCP tool layer (client bootstrap, transport, schemas, and tool implementations).
 - searchTools.ts: Workspace search helpers used by custom find tools.

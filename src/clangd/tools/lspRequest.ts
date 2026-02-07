@@ -4,6 +4,8 @@ import { sendRequestWithAutoStart } from '../transport';
 import { getEffectiveAllowedPassthroughMethods } from '../client';
 import {
   errorResult,
+  normalizeLspDataToOneBased,
+  normalizeLspDataToZeroBased,
   readOptionalObject,
   readOptionalPositiveInteger,
   readString,
@@ -18,7 +20,7 @@ function isMethodAllowed(method: string): boolean {
 export async function runLspRequestTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   try {
     const method = readString(input, 'method');
-    const params = readOptionalObject(input, 'params') ?? {};
+    const params = normalizeLspDataToZeroBased(readOptionalObject(input, 'params') ?? {}, 'params');
     const timeoutMs = readOptionalPositiveInteger(input, 'timeoutMs');
     if (!isMethodAllowed(method)) {
       throw new ClangdToolError(
@@ -31,7 +33,7 @@ export async function runLspRequestTool(input: Record<string, unknown>): Promise
     });
     return successResult({
       method,
-      result: result ?? null,
+      result: normalizeLspDataToOneBased(result ?? null),
     });
   } catch (error) {
     return errorResult(error);

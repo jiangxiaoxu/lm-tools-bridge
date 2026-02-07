@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import { INLAY_HINTS_METHOD } from '../methods';
 import { sendRequestWithAutoStart } from '../transport';
-import { errorResult, readRange, readString, successResult } from './shared';
+import {
+  errorResult,
+  normalizeLspDataToOneBased,
+  readRange,
+  readString,
+  successResult,
+} from './shared';
 
 export async function runInlayHintsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   try {
@@ -13,8 +19,8 @@ export async function runInlayHintsTool(input: Record<string, unknown>): Promise
     });
     return successResult({
       uri,
-      range,
-      hints: result ?? [],
+      range: normalizeLspDataToOneBased(range),
+      hints: normalizeLspDataToOneBased(result ?? []),
     });
   } catch (error) {
     return errorResult(error);

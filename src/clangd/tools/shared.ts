@@ -70,17 +70,86 @@ export function readOptionalInteger(input: Record<string, unknown>, key: string)
   return value;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function convertLineCharacterPair(
+  line: number,
+  character: number,
+  mode: 'toZeroBased' | 'toOneBased',
+  fieldName: string,
+): { line: number; character: number } {
+  if (!Number.isInteger(line) || !Number.isInteger(character)) {
+    throw new ClangdToolError(
+      'INVALID_INPUT',
+      `Expected '${fieldName}.line' and '${fieldName}.character' to be integers.`,
+    );
+  }
+  if (mode === 'toZeroBased') {
+    if (line < 1 || character < 1) {
+      throw new ClangdToolError(
+        'INVALID_INPUT',
+        `Expected '${fieldName}.line' and '${fieldName}.character' to be 1-based positive integers.`,
+      );
+    }
+    return {
+      line: line - 1,
+      character: character - 1,
+    };
+  }
+  return {
+    line: line + 1,
+    character: character + 1,
+  };
+}
+
+function convertLspIndexingRecursive(
+  value: unknown,
+  mode: 'toZeroBased' | 'toOneBased',
+  fieldName: string,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => convertLspIndexingRecursive(item, mode, `${fieldName}[${index}]`));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    result[key] = convertLspIndexingRecursive(nested, mode, `${fieldName}.${key}`);
+  }
+
+  const line = value.line;
+  const character = value.character;
+  if (typeof line === 'number' && typeof character === 'number') {
+    const converted = convertLineCharacterPair(line, character, mode, fieldName);
+    result.line = converted.line;
+    result.character = converted.character;
+  }
+  return result;
+}
+
+export function normalizeLspDataToZeroBased(value: unknown, fieldName = 'payload'): unknown {
+  return convertLspIndexingRecursive(value, 'toZeroBased', fieldName);
+}
+
+export function normalizeLspDataToOneBased(value: unknown): unknown {
+  return convertLspIndexingRecursive(value, 'toOneBased', 'payload');
+}
+
 function readPosition(value: unknown, fieldName: string): LspPosition {
   const position = asObject(value, fieldName);
   const line = position.line;
   const character = position.character;
-  if (typeof line !== 'number' || !Number.isInteger(line) || line < 0) {
-    throw new ClangdToolError('INVALID_INPUT', `Expected '${fieldName}.line' to be a non-negative integer.`);
+  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+    throw new ClangdToolError('INVALID_INPUT', `Expected '${fieldName}.line' to be a 1-based positive integer.`);
   }
-  if (typeof character !== 'number' || !Number.isInteger(character) || character < 0) {
-    throw new ClangdToolError('INVALID_INPUT', `Expected '${fieldName}.character' to be a non-negative integer.`);
+  if (typeof character !== 'number' || !Number.isInteger(character) || character < 1) {
+    throw new ClangdToolError('INVALID_INPUT', `Expected '${fieldName}.character' to be a 1-based positive integer.`);
   }
-  return { line, character };
+  return { line: line - 1, character: character - 1 };
 }
 
 export function readRange(input: Record<string, unknown>, key: string): LspRange {

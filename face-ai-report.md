@@ -186,6 +186,7 @@ Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
 Invariant: workspace untrusted 时 clangd MCP 请求必须拒绝.
 Invariant: 低价值工具 `lm_clangd_memoryUsage` 和 `lm_clangd_inlayHints` 默认不暴露.
 Invariant: passthrough 默认 allowlist 不包含 completion, semanticTokens, memoryUsage, inlayHints.
+Invariant: clangd MCP 输入输出中的 line/character 统一按 1-based 表达, 并在 LSP 边界自动转换.
 
 ## 失败路径矩阵
 Case: 端口占用且重试失败

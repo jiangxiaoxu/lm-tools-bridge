@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Restricted `lm_clangd_lspRequest` to read-only passthrough methods and ignore non-read-only configured methods.
 - Pruned low-value clangd tool exposure by removing default exposure of `lm_clangd_memoryUsage` and `lm_clangd_inlayHints`.
 - Trimmed read-only passthrough defaults by removing `textDocument/completion`, `textDocument/semanticTokens/full`, `$/memoryUsage`, and `clangd/inlayHints`.
+- Switched clangd tool position semantics to 1-based line/character for human-facing input and output, with automatic conversion at the LSP boundary.
 - Added `clangd-mcp-implementation-guide.md` as the implementation and progress tracking guide.
 
 ## [1.0.59] - 2026-02-03

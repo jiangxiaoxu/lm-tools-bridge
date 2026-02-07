@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import { AST_METHOD } from '../methods';
 import { sendRequestWithAutoStart } from '../transport';
-import { errorResult, readRange, readString, successResult } from './shared';
+import {
+  errorResult,
+  normalizeLspDataToOneBased,
+  readRange,
+  readString,
+  successResult,
+} from './shared';
 
 export async function runAstTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   try {
@@ -13,8 +19,8 @@ export async function runAstTool(input: Record<string, unknown>): Promise<vscode
     });
     return successResult({
       uri,
-      range,
-      ast: result ?? null,
+      range: normalizeLspDataToOneBased(range),
+      ast: normalizeLspDataToOneBased(result ?? null),
     });
   } catch (error) {
     return errorResult(error);

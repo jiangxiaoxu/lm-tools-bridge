@@ -121,6 +121,7 @@
 - [x] 更新 `CHANGELOG.md`.
 - [x] 更新 `face-ai-report.md`.
 - [x] 更新 `src/README.md` 模块结构说明.
+- [x] 新增 `clangd-tools-reference.md` (工具描述 + input/output schema).
 - DoD:
 - [x] 文档与实现行为保持一致.
 - [x] 变更记录可读并位于顶部.
@@ -150,7 +151,9 @@
 - [x] `tooling.ts` 最小接入完成.
 - [x] `package.json` clangd 配置项完成.
 - [x] `README.md`, `CHANGELOG.md`, `face-ai-report.md`, `src/README.md` 已更新.
+- [x] `clangd-tools-reference.md` 已新增并同步当前默认暴露工具.
 - [x] 低价值项剪裁完成(工具暴露与默认 passthrough 清单).
+- [x] line/character 输入输出已统一为 1-based(含自动边界转换).
 - [x] `npm run compile` 已通过.
 
 ### In progress
@@ -173,6 +176,7 @@
 - 2026-02-06: `allowedMethods=[]` 时回退内置只读 allowlist. Reason: 提供安全默认可用行为.
 - 2026-02-06: `allowedMethods` 强制只读白名单交集. Reason: 明确禁止非只读调用并降低风险面.
 - 2026-02-06: 剪裁低价值能力(`lm_clangd_memoryUsage`, `lm_clangd_inlayHints`, completion, semanticTokens). Reason: 聚焦高价值只读导航与签名分析场景.
+- 2026-02-06: line/character 输入输出统一为 1-based. Reason: 提升人类核查与手工定位效率, 在 LSP 边界自动完成 1-based<->0-based 转换.
 
 ## Validation Checklist
 - [x] `npm run compile` passes.

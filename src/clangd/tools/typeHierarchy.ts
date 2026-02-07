@@ -5,6 +5,8 @@ import { sendRequestWithAutoStart } from '../transport';
 import {
   asObject,
   errorResult,
+  normalizeLspDataToOneBased,
+  normalizeLspDataToZeroBased,
   readOptionalInteger,
   readPositionFromInput,
   readString,
@@ -35,10 +37,10 @@ export async function runTypeHierarchyTool(input: Record<string, unknown>): Prom
     });
     return successResult({
       uri,
-      position,
+      position: normalizeLspDataToOneBased(position),
       resolve,
       direction,
-      item: result ?? null,
+      item: normalizeLspDataToOneBased(result ?? null),
     });
   } catch (error) {
     return errorResult(error);
@@ -47,7 +49,7 @@ export async function runTypeHierarchyTool(input: Record<string, unknown>): Prom
 
 export async function runTypeHierarchyResolveTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   try {
-    const item = asObject(input.item, 'item');
+    const item = normalizeLspDataToZeroBased(asObject(input.item, 'item'), 'item');
     const resolve = readOptionalInteger(input, 'resolve') ?? 1;
     const direction = normalizeDirection(readOptionalInteger(input, 'direction'), 0);
     const result = await sendRequestWithAutoStart<unknown>(TYPE_HIERARCHY_RESOLVE_METHOD, {
@@ -58,7 +60,7 @@ export async function runTypeHierarchyResolveTool(input: Record<string, unknown>
     return successResult({
       resolve,
       direction,
-      item: result ?? null,
+      item: normalizeLspDataToOneBased(result ?? null),
     });
   } catch (error) {
     return errorResult(error);

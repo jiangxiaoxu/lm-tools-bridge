@@ -153,6 +153,7 @@ Auto-start behavior:
 
 - If clangd tools are enabled and clangd is not running, the bridge triggers `clangd.activate` once and retries the request.
 - If `clangd.enable=false`, the bridge does not mutate user settings and returns an explicit error when startup fails.
+- For all clangd tool inputs/outputs containing `line` and `character`, the bridge uses 1-based indexing for human readability and converts at the LSP boundary.
 
 ## Selected change history
 

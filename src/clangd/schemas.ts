@@ -6,8 +6,8 @@ const uriProperty = {
 const lspPositionSchema = {
   type: 'object',
   properties: {
-    line: { type: 'number', description: '0-based line index.' },
-    character: { type: 'number', description: '0-based character index.' },
+    line: { type: 'number', description: '1-based line index.' },
+    character: { type: 'number', description: '1-based character index.' },
   },
   required: ['line', 'character'],
 };
@@ -82,7 +82,7 @@ export const lspRequestToolSchema: Record<string, unknown> = {
   type: 'object',
   properties: {
     method: { type: 'string', description: 'LSP method name.' },
-    params: { type: 'object', description: 'Request params object.' },
+    params: { type: 'object', description: 'Request params object using 1-based line/character positions.' },
     timeoutMs: { type: 'number', description: 'Optional per-call timeout in milliseconds.' },
   },
   required: ['method'],

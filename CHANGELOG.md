@@ -1,10 +1,38 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to this project are documented in this file.
+
+Maintenance rule:
+- For each release, keep both `### English` and `### 中文` sections.
+- Keep section order aligned to reduce translation drift.
 
 ## [Unreleased]
 
+## [1.0.61] - 2026-02-07
+
+### English
+
+#### Changed
+- Improved exposure-panel read-only affordance: `Always Exposed` and `Built-in Disabled` tools now use distinct color accents and badges for faster visual recognition.
+- Hid group-level checkboxes for fully read-only groups to reduce visual noise in `Built-in Disabled` sections.
+- Reworked `README.md` into a bilingual English/Chinese format and aligned it with current implementation details.
+- Clarified Manager-to-workspace MCP server relationship in README and documented the recommended client connection flow (`Manager /mcp` + workspace handshake).
+- Added a user-facing README section for multi-instance port avoidance and re-routing behavior, including `POST /allocate` reservation and runtime `EADDRINUSE` retry semantics.
+
+### 中文
+
+#### 变更
+- 改进 Exposure 面板只读项的可视化区分: `Always Exposed` 与 `Built-in Disabled` 使用了更明显的颜色和 badge.
+- 对全只读分组隐藏组级复选框,减少 `Built-in Disabled` 区域的视觉噪音.
+- 将 `README.md` 重构为中英双语格式,并与当前实现细节完成对齐.
+- 在 README 中补充 Manager 与工作区 MCP server 的关系说明,并给出推荐客户端连接流程(`Manager /mcp` + 工作区握手).
+- 在 README 中新增多实例端口避让与重路由说明,覆盖 `POST /allocate` 保留分配和运行时 `EADDRINUSE` 递增重试语义.
+
 ## [1.0.60] - 2026-02-07
+
+### English
+
+#### Changed
 - Added an isolated `src/clangd/` module for clangd MCP integration with low coupling to `tooling.ts`.
 - Added configurable clangd MCP settings: `clangd.enabled`, `clangd.autoStartOnInvoke`, `clangd.enablePassthrough`, `clangd.requestTimeoutMs`, and `clangd.allowedMethods`.
 - Added `lm_clangd_*` tools for status, switch header/source, AST, type hierarchy, memory usage, inlay hints, and restricted passthrough requests.
@@ -16,7 +44,6 @@ All notable changes to this project will be documented in this file.
 - Added `clangd-mcp-implementation-guide.md` as the implementation and progress tracking guide.
 - Replaced QuickPick tool configuration pages with a grouped tree webview panel for both exposure tools and enabled tools, with collapse, group batch selection, search, and reset/confirm/cancel actions.
 - Added resilient fallback to legacy QuickPick configuration when the webview path fails.
-- Fixed blank tool-configuration webview caused by invalid JSON state serialization in the embedded `application/json` script block.
 - Reworked tool selection into a two-layer `exposure + enabled` model with new settings: `tools.exposedDelta` and `tools.unexposedDelta`.
 - Replaced command IDs `lm-tools-bridge.configureTools` and `lm-tools-bridge.configureBlacklist` with `lm-tools-bridge.configureExposure` and `lm-tools-bridge.configureEnabled`.
 - Removed `tools.blacklist` and `tools.blacklistPatterns`, and now auto-clears legacy values on activation.
@@ -28,47 +55,189 @@ All notable changes to this project will be documented in this file.
 - Replaced hardcoded `angelscript_` grouping with configurable regex rules via `tools.groupingRules` (built-in disabled > custom rules > built-in groups).
 - Added a default `Clangd` custom grouping rule (`^lm_clangd_`) so clangd tools appear in their own top-level group by default.
 
+#### Fixed
+- Fixed blank tool-configuration webview caused by invalid JSON state serialization in the embedded `application/json` script block.
+
+### 中文
+
+#### 变更
+- 新增独立 `src/clangd/` 模块,用于低耦合集成 clangd MCP 能力,降低对 `tooling.ts` 的耦合.
+- 新增可配置 clangd MCP 设置: `clangd.enabled`, `clangd.autoStartOnInvoke`, `clangd.enablePassthrough`, `clangd.requestTimeoutMs`, `clangd.allowedMethods`.
+- 新增 `lm_clangd_*` 工具,覆盖 status, switch header/source, AST, type hierarchy, memory usage, inlay hints,以及受限 passthrough 请求.
+- 新增按需自动启动逻辑: clangd 工具调用时客户端不可用则触发 `clangd.activate`.
+- 限制 `lm_clangd_lspRequest` 仅允许只读 passthrough 方法,并忽略非只读配置方法.
+- 剪裁低价值 clangd 工具默认暴露,移除 `lm_clangd_memoryUsage` 与 `lm_clangd_inlayHints` 的默认暴露.
+- 精简只读 passthrough 默认方法,移除 `textDocument/completion`, `textDocument/semanticTokens/full`, `$/memoryUsage`, `clangd/inlayHints`.
+- 将 clangd 工具的行列位置语义统一为 1-based 输入输出,并在 LSP 边界自动转换.
+- 新增 `clangd-mcp-implementation-guide.md` 作为实施与进度跟踪指南.
+- 将 Exposure/Enabled 配置 UI 从 QuickPick 替换为分组树形 webview,支持折叠,分组批量勾选,搜索,以及 reset/confirm/cancel.
+- 增加 webview 失败时回退到 legacy QuickPick 的兜底路径.
+- 将工具选择模型重构为双层 `exposure + enabled`,新增 `tools.exposedDelta` 与 `tools.unexposedDelta`.
+- 将命令 ID 从 `lm-tools-bridge.configureTools` 和 `lm-tools-bridge.configureBlacklist` 替换为 `lm-tools-bridge.configureExposure` 和 `lm-tools-bridge.configureEnabled`.
+- 移除 `tools.blacklist` 与 `tools.blacklistPatterns`,并在激活时自动清理 legacy 值.
+- 强化一致性规则: 工具变为 unexposed 时,自动清理其 `enabledDelta` 和 `disabledDelta` 项.
+- 对默认启用工具强制暴露,并在 Exposure 面板中以只读复选框呈现.
+- 恢复 built-in disabled 硬规则: 禁用工具移入底部 `Built-in Disabled` 父分组及其来源子分组,只读显示,不会出现在 Enabled,并会从四个 delta 配置自动清理.
+- 将 `copilot_askQuestions`, `copilot_readNotebookCellOutput`, `copilot_switchAgent`, `copilot_toolReplay`, `search_subagent` 加入 built-in disabled 列表.
+- 新增 `angelscript_` 前缀工具专用 `AngelScript` 分组.
+- 将 `angelscript_` 硬编码分组替换为 `tools.groupingRules` 正则规则分组(优先级: built-in disabled > custom rules > built-in groups).
+- 新增默认 `Clangd` 分组规则(`^lm_clangd_`),使 clangd 工具默认显示在独立顶层分组.
+
+#### 修复
+- 修复工具配置 webview 为空白的问题,原因是嵌入 `application/json` 脚本块时状态序列化无效.
+
 ## [1.0.59] - 2026-02-03
+
+### English
+
+#### Changed
 - Updated `tools.schemaDefaults` setting defaults and examples.
 
+### 中文
+
+#### 变更
+- 更新 `tools.schemaDefaults` 配置的默认值与示例.
+
 ## [1.0.58] - 2026-02-03
+
+### English
+
+#### Changed
 - Added `tools.enabledDelta` / `tools.disabledDelta` to the settings UI and removed `lmToolsBridge.tools.enabled`.
 - Removed conflicting built-in blacklist entries so default enabled tools can be configured correctly.
 - Automatically clears legacy `lmToolsBridge.tools.enabled` values on activation.
 - Reduced the default enabled tool list (removed tests, changed files, and terminal tools).
 
+### 中文
+
+#### 变更
+- 在设置 UI 中新增 `tools.enabledDelta` / `tools.disabledDelta`,并移除 `lmToolsBridge.tools.enabled`.
+- 移除与默认启用列表冲突的 built-in blacklist 项,确保默认启用工具可被正确配置.
+- 激活时自动清理 legacy `lmToolsBridge.tools.enabled` 值.
+- 收紧默认启用工具列表(移除 tests, changed files, terminal 相关工具).
+
 ## [1.0.57] - 2026-02-03
+
+### English
+
+#### Changed
 - Removed the legacy `lmToolsBridge.tools.enabled` setting from configuration UI. Use `tools.enabledDelta` / `tools.disabledDelta` instead.
 
+### 中文
+
+#### 变更
+- 从配置 UI 移除 legacy `lmToolsBridge.tools.enabled` 设置,改用 `tools.enabledDelta` / `tools.disabledDelta`.
+
 ## [1.0.56] - 2026-02-03
+
+### English
+
+#### Changed
 - Added `includeIgnoredFiles` to `lm_findFiles` (schema + rg flags).
 - Applied include globs before exclude globs in `lm_findTextInFiles` and `lm_findFiles` so excludes still take effect.
 
+### 中文
+
+#### 变更
+- 为 `lm_findFiles` 新增 `includeIgnoredFiles` 支持(schema + rg flags).
+- 在 `lm_findTextInFiles` 和 `lm_findFiles` 中调整为先应用 include globs,再应用 exclude globs,确保 exclude 仍然生效.
+
 ## [1.0.55] - 2026-02-03
+
+### English
+
+#### Changed
 - Merged workspace and folder `search.exclude` / `files.exclude` so `.code-workspace` exclusions are honored.
 - Unified exclusion configuration for `lm_findTextInFiles` and `lm_findFiles`.
 
+### 中文
+
+#### 变更
+- 合并 workspace 与 folder 的 `search.exclude` / `files.exclude`,确保 `.code-workspace` 排除规则被正确应用.
+- 统一 `lm_findTextInFiles` 与 `lm_findFiles` 的排除配置逻辑.
+
 ## [1.0.54] - 2026-02-02
+
+### English
+
+#### Changed
 - Switched `lm_findFiles` backend to ripgrep (`rg --files`) for consistent file discovery.
 - Reworked tool enablement storage to `tools.enabledDelta` + `tools.disabledDelta` relative to defaults.
 - Default enabled tools now use `lm_findFiles` / `lm_findTextInFiles`; set `lm_findFiles.maxResults=200` by default.
 
+### 中文
+
+#### 变更
+- 将 `lm_findFiles` 后端切换为 ripgrep(`rg --files`),统一文件发现行为.
+- 将工具启用状态存储重构为相对默认值的 `tools.enabledDelta` + `tools.disabledDelta`.
+- 默认启用工具改为 `lm_findFiles` / `lm_findTextInFiles`,并将 `lm_findFiles.maxResults` 默认设为 200.
+
 ## [1.0.53] - 2026-02-01
+
+### English
+
+#### Changed
 - Enabled `copilot_findFiles` and `copilot_findTextInFiles` by default.
 - Removed copilot find tools from the built-in blacklist while keeping schema default overrides.
 
+### 中文
+
+#### 变更
+- 默认启用 `copilot_findFiles` 与 `copilot_findTextInFiles`.
+- 在保留 schema 默认覆盖规则的同时,将 copilot find 工具移出 built-in blacklist.
+
 ## [1.0.52] - 2026-01-31
+
+### English
+
+#### Changed
 - Refined schema discovery guidance: keep schema entries template-only in `resources/list`.
 - Clarified handshake flow to read `lm-tools://schema/{name}` once before the first tool call.
 
+### 中文
+
+#### 变更
+- 优化 schema 发现指引: 在 `resources/list` 中保持 schema 条目为 template-only.
+- 明确握手流程: 首次调用工具前先读取一次 `lm-tools://schema/{name}`.
+
 ## [1.0.51] - 2026-01-31
+
+### English
+
+#### Changed
 - Expanded handshake resource guidance and added rebind hints for expired sessions.
 
+### 中文
+
+#### 变更
+- 扩展 handshake 资源指引,并补充会话过期后的 rebind 提示.
+
 ## [1.0.50] - 2026-01-31
+
+### English
+
+#### Changed
 - Improved MCP discovery and handshake SSE behavior.
 - Listed schema resources after handshake and returned MethodNotFound for unknown tools.
 - Sent `resources/tools list_changed` notifications via SSE to trigger client refresh.
 - Formalized the Manager control endpoint (default `47100`) as the handshake/status entry point.
 
+### 中文
+
+#### 变更
+- 改进 MCP discovery 与 handshake 的 SSE 行为.
+- 握手后列出 schema 资源,并对未知工具返回 MethodNotFound.
+- 通过 SSE 发送 `resources/tools list_changed` 通知,触发客户端刷新.
+- 将 Manager 控制端点(默认 `47100`)标准化为握手与状态入口.
+
 ## [1.0.49] - 2026-01-31
+
+### English
+
+#### Changed
 - Latest release branch baseline used for this changelog.
+
+### 中文
+
+#### 变更
+- 本 changelog 的 release 分支基线版本.

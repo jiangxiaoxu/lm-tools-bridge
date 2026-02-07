@@ -196,6 +196,11 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
     .group-title {
       font-weight: 600;
     }
+    .group-checkbox-placeholder {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+    }
     .group-count {
       color: var(--vscode-descriptionForeground);
       font-size: 12px;
@@ -219,8 +224,34 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
       flex-direction: column;
       gap: 2px;
     }
+    .tool-main-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
     .tool-name {
       font-size: 13px;
+    }
+    .tool-badge {
+      border-radius: 999px;
+      border: 1px solid transparent;
+      padding: 0 8px;
+      font-size: 10px;
+      line-height: 16px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+    }
+    .tool-badge.required {
+      color: var(--vscode-charts-green, #89d185);
+      border-color: color-mix(in srgb, var(--vscode-charts-green, #89d185) 55%, transparent);
+      background: color-mix(in srgb, var(--vscode-charts-green, #89d185) 18%, transparent);
+    }
+    .tool-badge.blocked {
+      color: var(--vscode-testing-iconFailed, #f48771);
+      border-color: color-mix(in srgb, var(--vscode-testing-iconFailed, #f48771) 55%, transparent);
+      background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f48771) 18%, transparent);
     }
     .tool-desc {
       color: var(--vscode-descriptionForeground);
@@ -232,6 +263,16 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
     }
     .tool.readonly {
       opacity: 0.75;
+    }
+    .tool.readonly-required {
+      border-left: 3px solid color-mix(in srgb, var(--vscode-charts-green, #89d185) 70%, transparent);
+      padding-left: 7px;
+      background: color-mix(in srgb, var(--vscode-charts-green, #89d185) 9%, transparent);
+    }
+    .tool.readonly-blocked {
+      border-left: 3px solid color-mix(in srgb, var(--vscode-testing-iconFailed, #f48771) 70%, transparent);
+      padding-left: 7px;
+      background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f48771) 9%, transparent);
     }
     .hidden {
       display: none !important;
@@ -362,8 +403,22 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
           const escapedDescription = escapeHtmlText(item.description);
           const checked = item.selected ? 'checked' : '';
           const disabled = item.readOnly ? 'disabled' : '';
-          const toolClass = item.readOnly ? 'tool readonly' : 'tool';
+          const descriptionLower = lower(item.description);
+          const isBlocked = item.readOnly && descriptionLower.includes('built-in disabled tool; exposure is blocked');
+          const isRequired = item.readOnly && !isBlocked && descriptionLower.includes('always exposed by default policy');
+          const toolClass = isBlocked
+            ? 'tool readonly readonly-blocked'
+            : isRequired
+              ? 'tool readonly readonly-required'
+              : item.readOnly
+                ? 'tool readonly'
+                : 'tool';
           const readOnlyTitle = item.readOnly ? ' title="Read-only item"' : '';
+          const badge = isBlocked
+            ? '<span class="tool-badge blocked">Built-in Disabled</span>'
+            : isRequired
+              ? '<span class="tool-badge required">Always Exposed</span>'
+              : '';
           const tags = item.tags && item.tags.length > 0
             ? '<div class="tool-tags">' + escapeHtmlText(item.tags.join(', ')) + '</div>'
             : '';
@@ -374,7 +429,10 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
             '<label class="' + toolClass + '" data-tool-name="' + escapedName + '"' + readOnlyTitle + '>',
             '<input class="tool-checkbox" type="checkbox" data-tool-name="' + escapedName + '" ' + checked + ' ' + disabled + ' />',
             '<span class="tool-main">',
+            '<span class="tool-main-header">',
             '<span class="tool-name">' + escapedName + '</span>',
+            badge,
+            '</span>',
             desc,
             tags,
             '</span>',
@@ -390,6 +448,9 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
         const groupChecked = groupState === 'checked' ? 'checked' : '';
         const hasEditableItems = section.items.some((item) => !item.readOnly);
         const groupDisabled = hasEditableItems ? '' : 'disabled';
+        const groupControl = hasEditableItems
+          ? '<input class="group-checkbox" type="checkbox" data-group-id="' + escapeHtmlText(section.id) + '" ' + groupChecked + ' ' + groupDisabled + ' data-group-state="' + groupState + '" />'
+          : '<span class="group-checkbox-placeholder" aria-hidden="true"></span>';
         const toolRows = buildToolRows(matchedItems);
         const collapsedClass = section.collapsed ? 'hidden' : '';
         const arrow = section.collapsed ? '▸' : '▾';
@@ -400,7 +461,7 @@ function buildWebviewHtml(payload: WebviewInitPayload): string {
           '<section class="' + sectionClass + '" data-group-id="' + escapedGroupId + '">',
           '<div class="group-header">',
           '<button class="toggle" type="button" data-group-toggle="' + escapedGroupId + '">' + arrow + '</button>',
-          '<input class="group-checkbox" type="checkbox" data-group-id="' + escapedGroupId + '" ' + groupChecked + ' ' + groupDisabled + ' data-group-state="' + groupState + '" />',
+          groupControl,
           '<span class="group-title">' + escapedGroupLabel + '</span>',
           '<span class="group-count">' + matchedItems.length + '/' + section.items.length + '</span>',
           '</div>',

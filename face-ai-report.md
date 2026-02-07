@@ -194,6 +194,8 @@ Invariant: 内置禁用工具必须被自动从 exposedDelta/unexposedDelta/enab
 Invariant: DEFAULT_ENABLED_TOOL_NAMES 中的工具必须始终暴露, 不可在 Exposure UI 中取消.
 Invariant: 内置禁用工具在 Exposure 中只能出现在 `Built-in Disabled` 父组下的来源子组, 且只读.
 Invariant: 内置禁用工具不能进入 effectiveExposed/effectiveEnabled, 且不显示在 Enabled UI.
+Invariant: Exposure UI 中只读项需有明显视觉区分: `Always Exposed` 与 `Built-in Disabled` 使用不同 badge/色彩.
+Invariant: Exposure UI 中“全只读分组”不显示组级复选框, 避免误导可批量编辑.
 Invariant: tool input 必须是 object, 否则返回 error payload.
 Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
 Invariant: responseFormat 控制 content 与 structuredContent 的存在.

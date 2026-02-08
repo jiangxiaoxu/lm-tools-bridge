@@ -79,6 +79,32 @@ Enable clangd MCP tools with:
 - `lmToolsBridge.clangd.enabled`
 
 Notes:
+- AI-first tools now use `filePath` input instead of `uri`.
+- `filePath` supports:
+- workspace-prefixed path, for example `UE5/Engine/Source/...`
+- absolute path, for example `G:/UE_Folder/...` or `G:\\UE_Folder\\...`
+- `file:///...` URI input is rejected.
+- AI-first outputs use summary text blocks:
+- first line `counts ...`
+- second line `---`
+- then repeated `<path>#<lineOrRange>` + summary line entries with `---` separators
+- AI-first clangd tools also return `structuredContent` with the same semantic data for machine-stable parsing.
+- `lm_clangd_symbolSearch` now includes full symbol signature by default in both text summary and `structuredContent`.
+- `lm_clangd_symbolInfo` snippet source excludes generated files (`*.generated.h`, `*.gen.cpp`) by default.
+- `lm_clangd_typeHierarchy` `SOURCE` section now emits `type -> preview -> path` to improve AI readability.
+- `lm_clangd_typeHierarchy` `structuredContent.sourceByClass` includes `preview` in addition to `filePath/startLine/endLine/summaryPath`.
+- summary path format is `WorkspaceName/...#line` for workspace files, absolute path for external files.
+- Default exposed clangd AI tools:
+- `lm_clangd_status`
+- `lm_clangd_switchSourceHeader`
+- `lm_clangd_ast`
+- `lm_clangd_typeHierarchy`
+- `lm_clangd_symbolSearch`
+- `lm_clangd_symbolBundle`
+- `lm_clangd_symbolInfo`
+- `lm_clangd_symbolReferences`
+- `lm_clangd_symbolImplementations`
+- `lm_clangd_callHierarchy`
 - `lm_clangd_lspRequest` is controlled by `lmToolsBridge.clangd.enablePassthrough` and `lmToolsBridge.clangd.allowedMethods`.
 - With `lmToolsBridge.clangd.autoStartOnInvoke=true`, clangd can auto-start on first clangd tool invocation.
 - `clangd.enable` is clangd extension setting, not an `lmToolsBridge.*` setting.
@@ -195,6 +221,32 @@ url = "http://127.0.0.1:47100/mcp"
 - `lmToolsBridge.clangd.enabled`
 
 说明:
+- AI-first 工具输入已从 `uri` 改为 `filePath`。
+- `filePath` 支持:
+- 工作区前缀路径,例如 `UE5/Engine/Source/...`
+- 绝对路径,例如 `G:/UE_Folder/...` 或 `G:\\UE_Folder\\...`
+- `file:///...` URI 输入会被拒绝。
+- AI-first 输出统一为摘要文本块:
+- 第一行 `counts ...`
+- 第二行 `---`
+- 后续按 `<path>#<lineOrRange>` + 摘要行输出,条目间用 `---` 分隔
+- clangd AI-first 工具同时返回等价语义的 `structuredContent`,便于模型稳定解析.
+- `lm_clangd_symbolSearch` 默认在文本摘要和 `structuredContent` 中附带完整符号签名.
+- `lm_clangd_symbolInfo` 的 snippet 默认排除 generated 文件(`*.generated.h`, `*.gen.cpp`)来源.
+- `lm_clangd_typeHierarchy` 的 `SOURCE` 区块按 `type -> preview -> path` 顺序输出,更利于 AI 阅读.
+- `lm_clangd_typeHierarchy` 的 `structuredContent.sourceByClass` 在 `filePath/startLine/endLine/summaryPath` 之外新增 `preview`.
+- 工作区内路径格式为 `WorkspaceName/...#line`,工作区外回退为绝对路径。
+- 默认暴露的 clangd AI 工具:
+- `lm_clangd_status`
+- `lm_clangd_switchSourceHeader`
+- `lm_clangd_ast`
+- `lm_clangd_typeHierarchy`
+- `lm_clangd_symbolSearch`
+- `lm_clangd_symbolBundle`
+- `lm_clangd_symbolInfo`
+- `lm_clangd_symbolReferences`
+- `lm_clangd_symbolImplementations`
+- `lm_clangd_callHierarchy`
 - `lm_clangd_lspRequest` 受 `lmToolsBridge.clangd.enablePassthrough` 和 `lmToolsBridge.clangd.allowedMethods` 控制.
 - 当 `lmToolsBridge.clangd.autoStartOnInvoke=true` 时,首次 clangd 工具调用可自动拉起 clangd.
 - `clangd.enable` 是 clangd 扩展配置,不是 `lmToolsBridge.*` 配置项.

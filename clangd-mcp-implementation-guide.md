@@ -3,7 +3,7 @@
 ## Title + Metadata
 - Project: clangd MCP integration for `lm-tools-bridge`
 - Created: 2026-02-06
-- Last updated: 2026-02-07
+- Last updated: 2026-02-08
 - Status: In Progress
 - Current milestone: M6 - Validation, hardening, and handoff
 - Owner: Codex + repository maintainer
@@ -33,7 +33,12 @@
 - `lm_clangd_switchSourceHeader`
 - `lm_clangd_ast`
 - `lm_clangd_typeHierarchy`
-- `lm_clangd_typeHierarchyResolve`
+- `lm_clangd_symbolSearch`
+- `lm_clangd_symbolBundle`
+- `lm_clangd_symbolInfo`
+- `lm_clangd_symbolReferences`
+- `lm_clangd_symbolImplementations`
+- `lm_clangd_callHierarchy`
 - `lm_clangd_lspRequest` (allowlist 限制)
 
 ### Planned configuration keys
@@ -92,7 +97,7 @@
 - [x] 实现 `lm_clangd_status`.
 - [x] 实现 `lm_clangd_switchSourceHeader`.
 - [x] 实现 `lm_clangd_ast`.
-- [x] 实现 `lm_clangd_typeHierarchy` 和 `lm_clangd_typeHierarchyResolve`.
+- [x] 实现 `lm_clangd_typeHierarchy`.
 - [x] 剪裁低价值工具暴露(`lm_clangd_memoryUsage`, `lm_clangd_inlayHints`).
 - DoD:
 - [x] 工具输出可进入现有 text/structured 结果链路.
@@ -160,6 +165,16 @@
 - [x] Exposure 底部新增 `Built-in Disabled` 父分组和来源子分组并启用硬禁用约束, 禁用工具不可暴露不可启用.
 - [x] settings 归一化扩展为同时清理内置禁用工具在四个 delta 中的无效项.
 - [x] 树形配置页状态传输改为 base64 初始化, 修复空白页风险并保留 QuickPick 回退.
+- [x] `lm_clangd_typeHierarchy` 改为结构化摘要输出(`root/supers/derivedByParent/sourceByClass/limits/truncated`),并支持 `maxSuperDepth/maxSubDepth/maxSubBreadth` 边界输入.
+- [x] `lm_clangd_typeHierarchy.sourceByClass` 增加 Unreal 宏感知起始行归一化: 若声明前一行是 `UCLASS/USTRUCT` 宏,则将 `startLine` 对齐到宏行.
+- [x] clangd AI-first 输入路径契约统一为 `filePath`,支持 `WorkspaceName/...` 与绝对路径,移除 `uri` 输入兼容.
+- [x] clangd AI-first 输出协议统一为摘要文本(`counts + --- + entries`),路径渲染为 `WorkspaceName/...#line` 或绝对路径.
+- [x] 新增符号/关系工具: `lm_clangd_symbolSearch`, `lm_clangd_symbolBundle`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, `lm_clangd_callHierarchy`.
+- [x] clangd AI-first 工具补充 `structuredContent`,提供与摘要文本等价的稳定机读载荷.
+- [x] `lm_clangd_symbolSearch` 默认补充完整签名并在 `structuredContent` 提供 `signature/signatureSource` 字段.
+- [x] `lm_clangd_symbolInfo` 的 snippet 默认排除 generated 文件来源(`*.generated.h`, `*.gen.cpp`),且不回退到 generated 位置.
+- [x] `lm_clangd_typeHierarchy` 的 SOURCE 文本顺序调整为 `type -> preview -> path`,并在 `sourceByClass` 增加 `preview` 字段.
+- [x] `lm_clangd_typeHierarchy` 区间校正切换为 `documentSymbol` 唯一来源: 命中则用符号范围,未命中则回退单行(`endLine = startLine`).
 
 ### In progress
 - [ ] 运行时链路验证(handshake + clangd 自动启动).
@@ -187,6 +202,15 @@
 - 2026-02-07: DEFAULT_ENABLED_TOOL_NAMES 内工具强制暴露并在 Exposure UI 中设为只读. Reason: 防止误操作破坏核心默认工具可见性.
 - 2026-02-07: 内置禁用名单恢复为最高优先级, 并在 Exposure 底部分组单独显示. Reason: 保留安全边界且提升配置可解释性.
 - 2026-02-07: 工具配置 webview 初始状态改为 base64 载荷解码. Reason: 避免 script 内嵌 JSON 解析异常导致空白页.
+- 2026-02-08: `lm_clangd_typeHierarchy` 从透传 raw item 调整为稳定摘要输出并引入可配置上下界. Reason: 提升结果可读性,便于 C++ 继承链分析和人工核查.
+- 2026-02-08: `sourceByClass.startLine` 增加 Unreal 宏行归一化. Reason: UE 类型声明通常由 `UCLASS/USTRUCT` 宏起始,仅返回声明行会影响人工核查准确性.
+- 2026-02-08: 移除 `lm_clangd_typeHierarchyResolve` 工具暴露与实现入口. Reason: `lm_clangd_typeHierarchy` 已提供稳定摘要输出,保留 resolve 工具会增加低价值维护面.
+- 2026-02-08: clangd AI-first 工具统一 `filePath` 输入并弃用 `uri` 参数. Reason: 对齐 AI 任务输入习惯并减少 URI 处理噪音.
+- 2026-02-08: clangd AI-first 工具统一摘要文本输出与工作区路径渲染. Reason: 提高 AI 直接消费效率并强化跨项目可读性.
+- 2026-02-08: `lm_clangd_symbolSearch` 默认返回完整签名并启用 `signatureHelp -> hover -> definitionLine` 回退链路. Reason: 提升单次搜索的信息密度并减少后续补查调用.
+- 2026-02-08: `lm_clangd_symbolInfo` snippet 选点排除 generated 文件,且不再回退到 generated. Reason: 避免 UHT 生成代码片段干扰 AI 代码理解主路径.
+- 2026-02-08: `lm_clangd_typeHierarchy` SOURCE 条目顺序改为 `type -> preview -> path`,并在结构化结果补充 `preview`. Reason: 提升 AI 对类型信息和定位预览的快速理解效率.
+- 2026-02-08: `lm_clangd_typeHierarchy` 结束行策略改为仅依赖 `textDocument/documentSymbol`; 未匹配时强制回退为单行区间. Reason: 避免本地扫描猜测导致区间偏差,优先 clangd 语义结果.
 
 ## Validation Checklist
 - [x] `npm run compile` passes.

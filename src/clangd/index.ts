@@ -2,10 +2,15 @@ import { getEffectiveAllowedPassthroughMethods, isClangdMcpEnabled, isClangdPass
 import type { ClangdCustomToolDefinition } from './types';
 import {
   buildAstTool,
+  buildCallHierarchyTool,
   buildLspRequestTool,
   buildStatusTool,
   buildSwitchSourceHeaderTool,
-  buildTypeHierarchyResolveTool,
+  buildSymbolBundleTool,
+  buildSymbolImplementationsTool,
+  buildSymbolInfoTool,
+  buildSymbolReferencesTool,
+  buildSymbolSearchTool,
   buildTypeHierarchyTool,
 } from './tools';
 
@@ -18,7 +23,12 @@ export function getClangdToolsSnapshot(): readonly ClangdCustomToolDefinition[] 
     buildSwitchSourceHeaderTool(),
     buildAstTool(),
     buildTypeHierarchyTool(),
-    buildTypeHierarchyResolveTool(),
+    buildSymbolSearchTool(),
+    buildSymbolBundleTool(),
+    buildSymbolInfoTool(),
+    buildSymbolReferencesTool(),
+    buildSymbolImplementationsTool(),
+    buildCallHierarchyTool(),
   ];
   if (isClangdPassthroughEnabled()) {
     const allowlist = getEffectiveAllowedPassthroughMethods();

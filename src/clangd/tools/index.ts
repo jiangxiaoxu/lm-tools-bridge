@@ -2,21 +2,32 @@ import { DEFAULT_ALLOWED_PASSTHROUGH_METHODS } from '../methods';
 import { ClangdCustomToolDefinition } from '../types';
 import {
   astToolSchema,
+  callHierarchyToolSchema,
   inlayHintsToolSchema,
   lspRequestToolSchema,
   memoryUsageToolSchema,
   statusToolSchema,
   switchSourceHeaderToolSchema,
-  typeHierarchyResolveToolSchema,
+  symbolBundleToolSchema,
+  symbolImplementationsToolSchema,
+  symbolInfoToolSchema,
+  symbolReferencesToolSchema,
+  symbolSearchToolSchema,
   typeHierarchyToolSchema,
 } from '../schemas';
 import { runAstTool } from './ast';
+import { runCallHierarchyTool } from './callHierarchy';
 import { runInlayHintsTool } from './inlayHints';
 import { runLspRequestTool } from './lspRequest';
 import { runMemoryUsageTool } from './memoryUsage';
 import { runStatusTool } from './status';
+import { runSymbolBundleTool } from './symbolBundle';
 import { runSwitchSourceHeaderTool } from './switchSourceHeader';
-import { runTypeHierarchyResolveTool, runTypeHierarchyTool } from './typeHierarchy';
+import { runSymbolImplementationsTool } from './symbolImplementations';
+import { runSymbolInfoTool } from './symbolInfo';
+import { runSymbolReferencesTool } from './symbolReferences';
+import { runSymbolSearchTool } from './symbolSearch';
+import { runTypeHierarchyTool } from './typeHierarchy';
 
 export function buildStatusTool(): ClangdCustomToolDefinition {
   return {
@@ -54,7 +65,7 @@ export function buildAstTool(): ClangdCustomToolDefinition {
 export function buildTypeHierarchyTool(): ClangdCustomToolDefinition {
   return {
     name: 'lm_clangd_typeHierarchy',
-    description: 'Query clangd textDocument/typeHierarchy at a given source position.',
+    description: 'Summarize clangd type hierarchy at a position with bounded super/sub type expansion.',
     tags: ['clangd', 'hierarchy'],
     inputSchema: typeHierarchyToolSchema,
     isCustom: true,
@@ -62,14 +73,69 @@ export function buildTypeHierarchyTool(): ClangdCustomToolDefinition {
   };
 }
 
-export function buildTypeHierarchyResolveTool(): ClangdCustomToolDefinition {
+export function buildSymbolSearchTool(): ClangdCustomToolDefinition {
   return {
-    name: 'lm_clangd_typeHierarchyResolve',
-    description: 'Resolve additional clangd type hierarchy levels using typeHierarchy/resolve.',
-    tags: ['clangd', 'hierarchy'],
-    inputSchema: typeHierarchyResolveToolSchema,
+    name: 'lm_clangd_symbolSearch',
+    description: 'Search symbols by exact name or regex and return AI-friendly summaries.',
+    tags: ['clangd', 'symbols'],
+    inputSchema: symbolSearchToolSchema,
     isCustom: true,
-    invoke: runTypeHierarchyResolveTool,
+    invoke: runSymbolSearchTool,
+  };
+}
+
+export function buildSymbolInfoTool(): ClangdCustomToolDefinition {
+  return {
+    name: 'lm_clangd_symbolInfo',
+    description: 'Get definition/declaration/hover/signature summary for a symbol at filePath+position.',
+    tags: ['clangd', 'symbols'],
+    inputSchema: symbolInfoToolSchema,
+    isCustom: true,
+    invoke: runSymbolInfoTool,
+  };
+}
+
+export function buildSymbolBundleTool(): ClangdCustomToolDefinition {
+  return {
+    name: 'lm_clangd_symbolBundle',
+    description: 'Aggregate symbol info, references, implementations, and call hierarchy in one AI-first response.',
+    tags: ['clangd', 'symbols', 'aggregate'],
+    inputSchema: symbolBundleToolSchema,
+    isCustom: true,
+    invoke: runSymbolBundleTool,
+  };
+}
+
+export function buildSymbolReferencesTool(): ClangdCustomToolDefinition {
+  return {
+    name: 'lm_clangd_symbolReferences',
+    description: 'List symbol references in AI-friendly summary text.',
+    tags: ['clangd', 'references'],
+    inputSchema: symbolReferencesToolSchema,
+    isCustom: true,
+    invoke: runSymbolReferencesTool,
+  };
+}
+
+export function buildSymbolImplementationsTool(): ClangdCustomToolDefinition {
+  return {
+    name: 'lm_clangd_symbolImplementations',
+    description: 'List symbol implementation locations in AI-friendly summary text.',
+    tags: ['clangd', 'references'],
+    inputSchema: symbolImplementationsToolSchema,
+    isCustom: true,
+    invoke: runSymbolImplementationsTool,
+  };
+}
+
+export function buildCallHierarchyTool(): ClangdCustomToolDefinition {
+  return {
+    name: 'lm_clangd_callHierarchy',
+    description: 'Get incoming/outgoing call hierarchy summary for symbol at filePath+position.',
+    tags: ['clangd', 'hierarchy'],
+    inputSchema: callHierarchyToolSchema,
+    isCustom: true,
+    invoke: runCallHierarchyTool,
   };
 }
 

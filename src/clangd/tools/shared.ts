@@ -6,10 +6,43 @@ function toPrettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function toStructuredPayload(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { value };
+}
+
 export function successResult(payload: unknown): vscode.LanguageModelToolResult {
-  return {
+  const result = {
     content: [new vscode.LanguageModelTextPart(toPrettyJson(payload))],
+    structuredContent: toStructuredPayload(payload),
   };
+  return result as unknown as vscode.LanguageModelToolResult;
+}
+
+export function successTextResult(
+  text: string,
+  structuredContent?: Record<string, unknown>,
+): vscode.LanguageModelToolResult {
+  const result = {
+    content: [new vscode.LanguageModelTextPart(text)],
+  };
+  if (structuredContent) {
+    (result as { structuredContent?: Record<string, unknown> }).structuredContent = structuredContent;
+  }
+  return result as unknown as vscode.LanguageModelToolResult;
+}
+
+export function successTextWithPayloadResult(
+  text: string,
+  payload: unknown,
+): vscode.LanguageModelToolResult {
+  const result = {
+    content: [new vscode.LanguageModelTextPart(text)],
+    structuredContent: toStructuredPayload(payload),
+  };
+  return result as unknown as vscode.LanguageModelToolResult;
 }
 
 export function errorResult(error: unknown): vscode.LanguageModelToolResult {

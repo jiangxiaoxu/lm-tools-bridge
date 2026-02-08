@@ -48,7 +48,12 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_clangd_switchSourceHeader',
   'lm_clangd_ast',
   'lm_clangd_typeHierarchy',
-  'lm_clangd_typeHierarchyResolve',
+  'lm_clangd_symbolSearch',
+  'lm_clangd_symbolBundle',
+  'lm_clangd_symbolInfo',
+  'lm_clangd_symbolReferences',
+  'lm_clangd_symbolImplementations',
+  'lm_clangd_callHierarchy',
   'lm_clangd_lspRequest',
   'copilot_getErrors',
   'copilot_readProjectStructure',
@@ -2014,12 +2019,17 @@ function toolErrorResultPayload(payload: unknown) {
   return buildToolResult(payload, true, textOverride);
 }
 
-function buildToolResult(payload: unknown, isError: boolean, textOverride?: string) {
+function buildToolResult(
+  payload: unknown,
+  isError: boolean,
+  textOverride?: string,
+  structuredOverride?: Record<string, unknown>,
+) {
   const responseFormat = getResponseFormat();
   const text = textOverride ?? payloadToText(payload);
   const structuredContent = responseFormat === 'text'
     ? undefined
-    : (isPlainObject(payload) ? payload : { text });
+    : (structuredOverride ?? (isPlainObject(payload) ? payload : { text }));
 
   if (responseFormat === 'structured') {
     return {
@@ -2077,15 +2087,21 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema, tool.name);
     debugInvokeInput = normalizedInput;
     let outputText: string | undefined;
-    let structuredOutput: { blocks: unknown[] } | undefined;
+    let structuredOutput: Record<string, unknown> | undefined;
     if (isCustomTool(tool)) {
       const result = await tool.invoke(normalizedInput);
-      const serialized = serializeToolResult(result as vscode.LanguageModelToolResult);
+      const languageToolResult = result as vscode.LanguageModelToolResult;
+      const serialized = serializeToolResult(languageToolResult);
       outputText = serializedToolResultToText(serialized);
-      structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+      const structuredFromTool = (
+        languageToolResult as vscode.LanguageModelToolResult & { structuredContent?: unknown }
+      ).structuredContent;
+      structuredOutput = isPlainObject(structuredFromTool)
+        ? (structuredFromTool as Record<string, unknown>)
+        : { blocks: toolResultToStructuredBlocks(serialized) };
       debugOutputText = outputText;
       debugStructuredOutput = structuredOutput;
-      return buildToolResult(structuredOutput, false, outputText);
+      return buildToolResult(structuredOutput, false, outputText, structuredOutput);
     }
 
     const lm = getLanguageModelNamespace();

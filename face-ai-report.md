@@ -34,7 +34,7 @@ Output: 文件路径或匹配列表
 Flow: clangd MCP 工具调用
 Entry: lm_clangd_* tools
 Path: getClangdToolsSnapshot -> sendRequestWithAutoStart -> ensureClangdRunning -> clangd.activate(按需) -> languageClient.sendRequest
-Output: clangd LSP 响应或明确错误
+Output: AI-first 摘要文本输出(counts + section + entries)或明确错误
 
 Flow: Tool 暴露计算
 Entry: tools/list or tools/call
@@ -113,6 +113,12 @@ Entry: lm_clangd_* call
 Path: sendRequestWithAutoStart -> ensureClangdRunning -> startClangdAndWait
 Files: src/clangd/transport.ts, src/clangd/bootstrap.ts
 Log: "Unable to obtain clangd client", "clangd request retry failed"
+
+Task: clangd filePath 输入解析失败
+Entry: lm_clangd_* call with filePath
+Path: resolveInputFilePath
+Files: src/clangd/workspacePath.ts
+Log: "Input no longer accepts URI. Use 'filePath' instead of 'uri'."
 
 ## 关键配置与行为矩阵
 Key: lmToolsBridge.server.autoStart
@@ -206,7 +212,12 @@ Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
 Invariant: workspace untrusted 时 clangd MCP 请求必须拒绝.
 Invariant: 低价值工具 `lm_clangd_memoryUsage` 和 `lm_clangd_inlayHints` 默认不暴露.
 Invariant: passthrough 默认 allowlist 不包含 completion, semanticTokens, memoryUsage, inlayHints.
-Invariant: clangd MCP 输入输出中的 line/character 统一按 1-based 表达, 并在 LSP 边界自动转换.
+Invariant: clangd AI-first 工具输入统一使用 `filePath`, 支持 `WorkspaceName/...` 与绝对路径, 拒绝 `file:///...`.
+Invariant: clangd AI-first 工具输出统一为 summary text 协议(counts 行 + `---` 分隔 + `<path>#<lineOrRange>` + summary).
+Invariant: clangd AI-first 工具同时提供等价语义的 `structuredContent`.
+Invariant: `lm_clangd_symbolSearch` 默认返回完整签名,并按 `signatureHelp -> hover -> definitionLine` 回退补全.
+Invariant: clangd tool input 的 line/character 对外统一按 1-based 表达, 并在 LSP 边界自动转换.
+Invariant: `lm_clangd_typeHierarchyResolve` 不再作为独立工具暴露.
 
 ## 失败路径矩阵
 Case: 端口占用且重试失败
@@ -285,7 +296,16 @@ Seed: notifications/tools/list_changed | Use: tool list 变更通知
 Seed: getClangdToolsSnapshot | Use: clangd 工具暴露入口
 Seed: ensureClangdRunning | Use: clangd 按需启动入口
 Seed: sendRequestWithAutoStart | Use: clangd 请求统一入口
+Seed: resolveInputFilePath | Use: clangd filePath 输入解析入口
+Seed: formatSummaryPath | Use: clangd 摘要路径渲染入口
 Seed: lm_clangd_status | Use: clangd 可用性诊断
+Seed: lm_clangd_typeHierarchy | Use: clangd 继承链摘要
+Seed: lm_clangd_symbolSearch | Use: clangd 名字/正则检索
+Seed: lm_clangd_symbolBundle | Use: clangd 聚合信息单次查询入口
+Seed: lm_clangd_symbolInfo | Use: clangd 符号定义摘要
+Seed: lm_clangd_symbolReferences | Use: clangd 引用关系摘要
+Seed: lm_clangd_symbolImplementations | Use: clangd 实现点摘要
+Seed: lm_clangd_callHierarchy | Use: clangd 调用关系摘要
 Seed: lm_clangd_lspRequest | Use: clangd 受限透传调用
 
 ## 默认与内置列表的映射

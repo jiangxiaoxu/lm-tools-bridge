@@ -1,76 +1,52 @@
 # clangd Tools Reference
 
 ## Scope
-This reference documents clangd MCP tools that are currently exposed by default when:
+This file documents current `lm_clangd_*` MCP tools in this repository.
 
-- `lmToolsBridge.clangd.enabled=true`
-- and, for passthrough, `lmToolsBridge.clangd.enablePassthrough=true`
+## Input Path Contract (AI-first tools)
+Most clangd AI-first tools now require `filePath` (not `uri`).
 
-Current default-exposed tools:
+Accepted `filePath` formats:
+- Workspace-prefixed path: `UE5/Engine/Source/...` or `CthulhuGame/Source/...`
+- Absolute path: `G:/UE_Folder/...` or `G:\UE_Folder\...`
 
+Rejected format:
+- `file:///...` URI
+
+## Output Contract (AI-first tools)
+AI-first tools return summary text blocks:
+1. `counts ...`
+2. `---`
+3. Repeated entries:
+- `<path>#<lineOrRange>`
+- `<summary line>`
+- `---`
+
+Path rendering:
+- Workspace file: `WorkspaceName/...#line` or `WorkspaceName/...#start-end`
+- External file: absolute path with `/` separators
+- Most AI-first tools also return `structuredContent` with equivalent semantic fields.
+
+## Default-exposed clangd tools
 - `lm_clangd_status`
 - `lm_clangd_switchSourceHeader`
 - `lm_clangd_ast`
 - `lm_clangd_typeHierarchy`
-- `lm_clangd_typeHierarchyResolve`
-- `lm_clangd_lspRequest`
+- `lm_clangd_symbolSearch`
+- `lm_clangd_symbolBundle`
+- `lm_clangd_symbolInfo`
+- `lm_clangd_symbolReferences`
+- `lm_clangd_symbolImplementations`
+- `lm_clangd_callHierarchy`
+- `lm_clangd_lspRequest` (when passthrough is enabled)
 
-## Global MCP Output Envelope
+`lm_clangd_typeHierarchyResolve` is removed.
 
-All tools here are custom tools and return a logical payload encoded as JSON text.
-The MCP outer envelope depends on `lmToolsBridge.tools.responseFormat`:
-
-- `text` (default):
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "{...logicalPayloadJson...}"
-    }
-  ]
-}
-```
-
-- `structured`:
-```json
-{
-  "content": [],
-  "structuredContent": {
-    "blocks": [
-      {
-        "type": "text",
-        "text": "{...logicalPayloadJson...}"
-      }
-    ]
-  }
-}
-```
-
-- `both`:
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "{...logicalPayloadJson...}"
-    }
-  ],
-  "structuredContent": {
-    "blocks": [
-      {
-        "type": "text",
-        "text": "{...logicalPayloadJson...}"
-      }
-    ]
-  }
-}
-```
+---
 
 ## Tool: lm_clangd_status
-
 Description:
-`Get clangd extension and client status for MCP diagnostics.`
+- Get clangd extension and client status for diagnostics.
 
 Input schema:
 ```json
@@ -80,106 +56,57 @@ Input schema:
 }
 ```
 
-Logical output schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "clangdMcpEnabled": { "type": "boolean" },
-    "extensionInstalled": { "type": "boolean" },
-    "extensionActive": { "type": "boolean" },
-    "apiAvailable": { "type": "boolean" },
-    "clientAvailable": { "type": "boolean" },
-    "clientState": { "type": "string" },
-    "clangdEnableSetting": { "type": "boolean" },
-    "workspaceTrusted": { "type": "boolean" },
-    "autoStartOnInvoke": { "type": "boolean" },
-    "requestTimeoutMs": { "type": "number" },
-    "passthroughEnabled": { "type": "boolean" },
-    "allowedPassthroughMethods": {
-      "type": "array",
-      "items": { "type": "string" }
-    }
-  },
-  "required": [
-    "clangdMcpEnabled",
-    "extensionInstalled",
-    "extensionActive",
-    "apiAvailable",
-    "clientAvailable",
-    "clientState",
-    "clangdEnableSetting",
-    "workspaceTrusted",
-    "autoStartOnInvoke",
-    "requestTimeoutMs",
-    "passthroughEnabled",
-    "allowedPassthroughMethods"
-  ]
-}
-```
+Output:
+- JSON text payload (status fields), unchanged.
+
+---
 
 ## Tool: lm_clangd_switchSourceHeader
-
 Description:
-`Resolve the paired header/source file using clangd textDocument/switchSourceHeader.`
+- Resolve paired header/source file.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
-    "uri": {
-      "type": "string",
-      "description": "File URI, for example: file:///path/to/file.cpp"
-    }
+    "filePath": { "type": "string" }
   },
-  "required": ["uri"]
+  "required": ["filePath"]
 }
 ```
 
-Logical output schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "uri": { "type": "string" },
-    "sourceUri": { "type": ["string", "null"] },
-    "found": { "type": "boolean" }
-  },
-  "required": ["uri", "sourceUri", "found"]
-}
-```
+Output:
+- AI summary text with source and paired file path.
+
+---
 
 ## Tool: lm_clangd_ast
-
 Description:
-`Query clangd textDocument/ast for the selected source range.`
+- Query AST for a selected range.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
-    "uri": {
-      "type": "string",
-      "description": "File URI, for example: file:///path/to/file.cpp"
-    },
+    "filePath": { "type": "string" },
     "range": {
       "type": "object",
       "properties": {
         "start": {
           "type": "object",
           "properties": {
-            "line": { "type": "number", "description": "1-based line index." },
-            "character": { "type": "number", "description": "1-based character index." }
+            "line": { "type": "number" },
+            "character": { "type": "number" }
           },
           "required": ["line", "character"]
         },
         "end": {
           "type": "object",
           "properties": {
-            "line": { "type": "number", "description": "1-based line index." },
-            "character": { "type": "number", "description": "1-based character index." }
+            "line": { "type": "number" },
+            "character": { "type": "number" }
           },
           "required": ["line", "character"]
         }
@@ -187,87 +114,25 @@ Input schema:
       "required": ["start", "end"]
     }
   },
-  "required": ["uri", "range"]
+  "required": ["filePath", "range"]
 }
 ```
 
-Logical output schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "uri": { "type": "string" },
-    "range": {
-      "type": "object",
-      "properties": {
-        "start": {
-          "type": "object",
-          "properties": {
-            "line": { "type": "number" },
-            "character": { "type": "number" }
-          },
-          "required": ["line", "character"]
-        },
-        "end": {
-          "type": "object",
-          "properties": {
-            "line": { "type": "number" },
-            "character": { "type": "number" }
-          },
-          "required": ["line", "character"]
-        }
-      },
-      "required": ["start", "end"]
-    },
-    "ast": {
-      "anyOf": [
-        {
-          "type": "object",
-          "description": "clangd AST node tree (implementation-defined)."
-        },
-        { "type": "null" }
-      ]
-    }
-  },
-  "required": ["uri", "range", "ast"]
-}
-```
+Output:
+- AI summary text + AST JSON text section.
+
+---
 
 ## Tool: lm_clangd_typeHierarchy
-
 Description:
-`Query clangd textDocument/typeHierarchy at a given source position.`
+- Summarize class/struct type hierarchy with bounded depth/breadth.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
-    "uri": {
-      "type": "string",
-      "description": "File URI, for example: file:///path/to/file.cpp"
-    },
-    "position": {
-      "type": "object",
-      "properties": {
-        "line": { "type": "number", "description": "1-based line index." },
-        "character": { "type": "number", "description": "1-based character index." }
-      },
-      "required": ["line", "character"]
-    },
-    "resolve": { "type": "number", "description": "Initial hierarchy resolve depth. Default is 5." },
-    "direction": { "type": "number", "description": "0=children, 1=parents, 2=both. Default is 2." }
-  },
-  "required": ["uri", "position"]
-}
-```
-
-Logical output schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "uri": { "type": "string" },
+    "filePath": { "type": "string" },
     "position": {
       "type": "object",
       "properties": {
@@ -276,122 +141,242 @@ Logical output schema:
       },
       "required": ["line", "character"]
     },
-    "resolve": { "type": "number" },
-    "direction": { "type": "number", "enum": [0, 1, 2] },
-    "item": {
-      "anyOf": [
-        {
-          "type": "object",
-          "description": "clangd type hierarchy item (implementation-defined)."
-        },
-        { "type": "null" }
-      ]
-    }
+    "maxSuperDepth": { "type": "number" },
+    "maxSubDepth": { "type": "number" },
+    "maxSubBreadth": { "type": "number" }
   },
-  "required": ["uri", "position", "resolve", "direction", "item"]
+  "required": ["filePath", "position"]
 }
 ```
 
-## Tool: lm_clangd_typeHierarchyResolve
+Output:
+- AI summary text with sections: `ROOT`, `SUPERS`, `DERIVED`.
+- `SOURCE` section emits each entry in this order:
+- `type <Name>`
+- `preview: <single-line source preview>`
+- `path: <path>#<lineOrRange>`
+- `SOURCE` entries are separated by `---`.
+- `structuredContent.sourceByClass.<TypeName>` includes:
+- `filePath`, `startLine`, `endLine`, `summaryPath`, `preview`
 
+---
+
+## Tool: lm_clangd_symbolSearch
 Description:
-`Resolve additional clangd type hierarchy levels using typeHierarchy/resolve.`
+- Search symbols by exact name or regex.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
-    "item": {
-      "type": "object",
-      "description": "Type hierarchy item returned from previous request."
-    },
-    "resolve": { "type": "number", "description": "Resolve depth. Default is 1." },
-    "direction": { "type": "number", "description": "0=children, 1=parents. Default is 0." }
+    "query": { "type": "string" },
+    "matchMode": { "type": "string", "enum": ["exact", "regex"] },
+    "kinds": { "type": "array", "items": { "type": "string" } },
+    "scopePath": { "type": "string" },
+    "limit": { "type": "number" }
   },
-  "required": ["item"]
+  "required": ["query"]
 }
 ```
 
-Logical output schema:
+Output:
+- AI summary text entries for matched symbols.
+- Each summary entry includes full signature text by default: `<kind> <name> (<container>) | signature: <...>`.
+- `structuredContent.entries[]` includes:
+- `signature: string | null`
+- `signatureSource: "signatureHelp" | "hover" | "definitionLine" | "none"`
+
+---
+
+## Tool: lm_clangd_symbolBundle
+Description:
+- Aggregate symbol search/info/references/implementations/call hierarchy in one call.
+- Use either `query` mode or `filePath + position` mode.
+
+Input schema:
 ```json
 {
   "type": "object",
   "properties": {
-    "resolve": { "type": "number" },
-    "direction": { "type": "number", "enum": [0, 1, 2] },
-    "item": {
-      "anyOf": [
-        {
-          "type": "object",
-          "description": "Resolved clangd type hierarchy item (implementation-defined)."
-        },
-        { "type": "null" }
-      ]
-    }
-  },
-  "required": ["resolve", "direction", "item"]
+    "query": { "type": "string" },
+    "matchMode": { "type": "string", "enum": ["exact", "regex"] },
+    "filePath": { "type": "string" },
+    "position": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "number" },
+        "character": { "type": "number" }
+      },
+      "required": ["line", "character"]
+    },
+    "kinds": { "type": "array", "items": { "type": "string" } },
+    "scopePath": { "type": "string" },
+    "candidateLimit": { "type": "number" },
+    "candidateIndex": { "type": "number" },
+    "includeDeclaration": { "type": "boolean" },
+    "referencesLimit": { "type": "number" },
+    "implementationsLimit": { "type": "number" },
+    "includeSnippet": { "type": "boolean" },
+    "snippetMaxLines": { "type": "number" },
+    "callDirection": { "type": "string", "enum": ["incoming", "outgoing", "both"] },
+    "callMaxDepth": { "type": "number" },
+    "callMaxBreadth": { "type": "number" }
+  }
 }
 ```
+
+Output:
+- AI summary text with sections: `TARGET`, `CANDIDATES`, `SYMBOL_INFO`, `REFERENCES_TOP`, `IMPLEMENTATIONS_TOP`, `CALLS_INCOMING`, `CALLS_OUTGOING`.
+- `CANDIDATES` section includes signature text from symbol search results.
+- `structuredContent` includes `target`, `candidates`(with signature fields), `symbolInfo`, `references`, `implementations`, and `callHierarchy`.
+
+---
+
+## Tool: lm_clangd_symbolInfo
+Description:
+- Get definition/declaration/hover/signature/snippet summary at position.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "filePath": { "type": "string" },
+    "position": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "number" },
+        "character": { "type": "number" }
+      },
+      "required": ["line", "character"]
+    },
+    "includeSnippet": { "type": "boolean" },
+    "snippetMaxLines": { "type": "number" }
+  },
+  "required": ["filePath", "position"]
+}
+```
+
+Output:
+- AI summary text with `HOVER`, `SIGNATURE`, optional `SNIPPET` sections.
+- `SNIPPET` source excludes generated files by default: `*.generated.h`, `*.gen.cpp`.
+- `structuredContent` fields include:
+- `snippetSource: "definition" | "declaration" | "none"`
+- `snippetFilteredGenerated: boolean`
+
+---
+
+## Tool: lm_clangd_symbolReferences
+Description:
+- List references for symbol at position.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "filePath": { "type": "string" },
+    "position": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "number" },
+        "character": { "type": "number" }
+      },
+      "required": ["line", "character"]
+    },
+    "includeDeclaration": { "type": "boolean" },
+    "limit": { "type": "number" }
+  },
+  "required": ["filePath", "position"]
+}
+```
+
+Output:
+- AI summary text entries for references.
+
+---
+
+## Tool: lm_clangd_symbolImplementations
+Description:
+- List implementation locations for symbol at position.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "filePath": { "type": "string" },
+    "position": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "number" },
+        "character": { "type": "number" }
+      },
+      "required": ["line", "character"]
+    },
+    "limit": { "type": "number" }
+  },
+  "required": ["filePath", "position"]
+}
+```
+
+Output:
+- AI summary text entries for implementation points.
+
+---
+
+## Tool: lm_clangd_callHierarchy
+Description:
+- Get incoming/outgoing call hierarchy summary at position.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "filePath": { "type": "string" },
+    "position": {
+      "type": "object",
+      "properties": {
+        "line": { "type": "number" },
+        "character": { "type": "number" }
+      },
+      "required": ["line", "character"]
+    },
+    "direction": { "type": "string", "enum": ["incoming", "outgoing", "both"] },
+    "maxDepth": { "type": "number" },
+    "maxBreadth": { "type": "number" }
+  },
+  "required": ["filePath", "position"]
+}
+```
+
+Output:
+- AI summary text with `ROOT`, `INCOMING`, `OUTGOING` sections.
+
+---
 
 ## Tool: lm_clangd_lspRequest
-
 Description:
-`Call an allowed clangd LSP request method.`
+- Call allowed read-only LSP methods.
 
 Input schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "method": { "type": "string", "description": "LSP method name." },
-    "params": { "type": "object", "description": "Request params object using 1-based line/character positions." },
-    "timeoutMs": { "type": "number", "description": "Optional per-call timeout in milliseconds." }
-  },
-  "required": ["method"]
-}
-```
-
-Logical output schema:
 ```json
 {
   "type": "object",
   "properties": {
     "method": { "type": "string" },
-    "result": {
-      "anyOf": [
-        { "type": "object" },
-        { "type": "array" },
-        { "type": "string" },
-        { "type": "number" },
-        { "type": "boolean" },
-        { "type": "null" }
-      ]
-    }
+    "params": { "type": "object" },
+    "timeoutMs": { "type": "number" }
   },
-  "required": ["method", "result"]
+  "required": ["method"]
 }
 ```
 
-Allowed methods (effective default read-only set):
-
-- `textDocument/hover`
-- `textDocument/definition`
-- `textDocument/declaration`
-- `textDocument/typeDefinition`
-- `textDocument/implementation`
-- `textDocument/references`
-- `textDocument/documentSymbol`
-- `workspace/symbol`
-- `textDocument/signatureHelp`
-- `textDocument/switchSourceHeader`
-- `textDocument/ast`
-- `textDocument/typeHierarchy`
-- `typeHierarchy/resolve`
+Output:
+- JSON text payload (method + result).
 
 ## Notes
-
-- All tool inputs that include `line`/`character` use 1-based indexing.
-- All tool outputs that include `line`/`character` are normalized to 1-based indexing.
-- `lm_clangd_memoryUsage` and `lm_clangd_inlayHints` are implemented in source but are currently pruned from default exposure.
-- `output schema` in this document describes the logical payload encoded into tool text content.
+- Input/output position semantics exposed to users are 1-based.
+- `lm_clangd_lspRequest` remains an advanced fallback path.

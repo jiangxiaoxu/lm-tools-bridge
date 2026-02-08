@@ -26,6 +26,7 @@ Maintenance rule:
 - Updated `lm_clangd_typeHierarchy` source range strategy to rely on `textDocument/documentSymbol` only; when no matching symbol is found, output now falls back to single-line range (`endLine = startLine`).
 - Disabled `lm_clangd_ast` exposure and removed it from default exposed/enabled clangd tool list.
 - Updated `lm_clangd_status` and `lm_clangd_lspRequest` to return human-readable text content while preserving structured JSON objects in `structuredContent`.
+- Updated LM tool forwarding output mapping: `LanguageModelDataPart` JSON object is now passed through as `structuredContent`, while `LanguageModelTextPart` is used for `content.text` to avoid duplicate wrapping.
 - Updated `lm_clangd_typeHierarchy` to return a compact summary payload (`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`) with bounded expansion controls.
 - Replaced `lm_clangd_typeHierarchy` input options `resolve/direction` with `maxSuperDepth`, `maxSubDepth`, and `maxSubBreadth`.
 - Improved `sourceByClass.startLine` for Unreal C++ types: when the previous line is `UCLASS(...)` or `USTRUCT(...)`, the macro line is reported as the start line.
@@ -49,6 +50,7 @@ Maintenance rule:
 - 调整 `lm_clangd_typeHierarchy` 区间策略为仅依赖 `textDocument/documentSymbol`; 未命中匹配符号时回退为单行区间(`endLine = startLine`),不再使用本地大括号扫描.
 - 禁用 `lm_clangd_ast` 暴露并将其从 clangd 默认 exposed/enabled 列表移除.
 - 将 `lm_clangd_status` 与 `lm_clangd_lspRequest` 的 `content` 调整为人类可读文本,同时保留 `structuredContent` 结构化对象.
+- 调整 LM tool 转发输出映射: `LanguageModelDataPart` 的 JSON object 直通 `structuredContent`,`LanguageModelTextPart` 仅作为 `content.text`,避免重复包装.
 - 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`),并支持有界展开。
 - 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`, `maxSubDepth`, `maxSubBreadth`。
 - 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行。

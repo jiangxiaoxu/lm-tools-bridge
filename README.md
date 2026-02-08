@@ -74,6 +74,11 @@ User guidance:
 - `Tool not found or disabled`:
   - Ensure the tool is both exposed and enabled.
 
+### Tool Output Mapping
+- LM tool `LanguageModelTextPart` is used as `content.text`.
+- LM tool `LanguageModelDataPart` with `application/json` is parsed as JSON object and used as `structuredContent` when possible.
+- If no JSON object is available for `structuredContent`, bridge falls back to `{ blocks: [...] }`.
+
 ### Clangd Tools (Optional)
 Enable clangd MCP tools with:
 - `lmToolsBridge.clangd.enabled`
@@ -218,6 +223,11 @@ url = "http://127.0.0.1:47100/mcp"
   - 改为连接 Manager `/mcp`,不要继续连接旧的工作区运行时端口.
 - `Tool not found or disabled`:
   - 确认工具同时处于 exposed 和 enabled.
+
+### 工具输出映射
+- LM 工具的 `LanguageModelTextPart` 作为 `content.text`.
+- LM 工具的 `LanguageModelDataPart`(`application/json`) 会在可解析为 JSON object 时映射为 `structuredContent`.
+- 当没有可用 JSON object 作为 `structuredContent` 时,bridge 回退为 `{ blocks: [...] }`.
 
 ### Clangd 工具(可选)
 通过以下配置启用 clangd MCP 工具:

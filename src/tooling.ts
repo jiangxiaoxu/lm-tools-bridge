@@ -1554,6 +1554,64 @@ function serializedToolResultToText(parts: readonly Record<string, unknown>[]): 
   return joinPromptTsxTextParts(segments);
 }
 
+function serializedTextPartsToText(parts: readonly Record<string, unknown>[]): string {
+  const segments: string[] = [];
+  for (const part of parts) {
+    if (part.type === 'text' && typeof part.text === 'string') {
+      segments.push(part.text);
+    }
+  }
+  if (segments.length > 0) {
+    return joinPromptTsxTextParts(segments);
+  }
+  return serializedToolResultToText(parts);
+}
+
+function tryParseJsonObject(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return isPlainObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractStructuredContentFromDataParts(
+  parts: readonly Record<string, unknown>[],
+): Record<string, unknown> | undefined {
+  for (const part of parts) {
+    if (part.type !== 'data' || part.mimeType !== 'application/json' || typeof part.text !== 'string') {
+      continue;
+    }
+    const parsed = tryParseJsonObject(part.text);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function resolveStructuredToolResultPayload(
+  result: vscode.LanguageModelToolResult,
+  serialized: readonly Record<string, unknown>[],
+): Record<string, unknown> {
+  const structuredFromTool = (
+    result as vscode.LanguageModelToolResult & { structuredContent?: unknown }
+  ).structuredContent;
+  if (isPlainObject(structuredFromTool)) {
+    return structuredFromTool as Record<string, unknown>;
+  }
+  const structuredFromData = extractStructuredContentFromDataParts(serialized);
+  if (structuredFromData) {
+    return structuredFromData;
+  }
+  return { blocks: toolResultToStructuredBlocks(serialized) };
+}
+
 function normalizeFindTextInFilesText(text: string): string {
   const matchRegex = /<match\s+path="([^"]+)"\s+line="?(\d+)"?\s*>\s*([\s\S]*?)<\/match>/gi;
   const summaryRegex = /(\d{1,5})\s+matches?\b[^\r\n]*?\bmaxResults\s+capped\s+at\s+(\d{1,5})\b/i;
@@ -2091,13 +2149,8 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       const result = await tool.invoke(normalizedInput);
       const languageToolResult = result as vscode.LanguageModelToolResult;
       const serialized = serializeToolResult(languageToolResult);
-      outputText = serializedToolResultToText(serialized);
-      const structuredFromTool = (
-        languageToolResult as vscode.LanguageModelToolResult & { structuredContent?: unknown }
-      ).structuredContent;
-      structuredOutput = isPlainObject(structuredFromTool)
-        ? (structuredFromTool as Record<string, unknown>)
-        : { blocks: toolResultToStructuredBlocks(serialized) };
+      outputText = serializedTextPartsToText(serialized);
+      structuredOutput = resolveStructuredToolResultPayload(languageToolResult, serialized);
       debugOutputText = outputText;
       debugStructuredOutput = structuredOutput;
       return buildToolResult(structuredOutput, false, outputText, structuredOutput);
@@ -2112,13 +2165,14 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       toolInvocationToken: undefined,
     });
     const serialized = serializeToolResult(result);
+    const textFromTextParts = serializedTextPartsToText(serialized);
     outputText = tool.name === 'copilot_findTextInFiles'
-      ? normalizeFindTextInFilesText(serializedToolResultToText(serialized))
-      : serializedToolResultToText(serialized);
-    structuredOutput = { blocks: toolResultToStructuredBlocks(serialized) };
+      ? normalizeFindTextInFilesText(textFromTextParts)
+      : textFromTextParts;
+    structuredOutput = resolveStructuredToolResultPayload(result, serialized);
     debugOutputText = outputText;
     debugStructuredOutput = structuredOutput;
-    return buildToolResult(structuredOutput, false, outputText);
+    return buildToolResult(structuredOutput, false, outputText, structuredOutput);
   } catch (error) {
     if (error instanceof McpError) {
       throw error;

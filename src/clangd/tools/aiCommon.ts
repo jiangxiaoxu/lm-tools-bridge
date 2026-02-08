@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ClangdToolError } from '../errors';
 import { HOVER_METHOD, SIGNATURE_HELP_METHOD } from '../methods';
 import { sendRequestWithAutoStart } from '../transport';
-import { formatSummaryPath, resolveInputFilePath } from '../workspacePath';
+import { formatSummaryPath, resolveInputFilePath, resolveStructuredPath } from '../workspacePath';
 import { readPositionFromInput, readString } from './shared';
 
 export interface OneBasedRange {
@@ -14,6 +14,12 @@ export interface OneBasedRange {
 
 export interface FlatLocation extends OneBasedRange {
   filePath: string;
+}
+
+export interface StructuredLocation extends OneBasedRange {
+  absolutePath: string;
+  workspacePath: string | null;
+  preview?: string;
 }
 
 export type SymbolSignatureSource = 'signatureHelp' | 'hover' | 'definitionLine' | 'none';
@@ -116,6 +122,20 @@ export function locationToSummaryPath(location: FlatLocation): string {
     location.startLine,
     location.endLine !== location.startLine ? location.endLine : undefined,
   );
+}
+
+export function toStructuredLocation(location: FlatLocation, preview?: string): StructuredLocation {
+  const pathInfo = resolveStructuredPath(location.filePath);
+  const normalizedPreview = typeof preview === 'string' ? preview.trim() : '';
+  return {
+    absolutePath: pathInfo.absolutePath,
+    workspacePath: pathInfo.workspacePath,
+    startLine: location.startLine,
+    startCharacter: location.startCharacter,
+    endLine: location.endLine,
+    endCharacter: location.endCharacter,
+    preview: normalizedPreview.length > 0 ? normalizedPreview : undefined,
+  };
 }
 
 export function renderReferenceSummary(location: FlatLocation, lineText: string): string {

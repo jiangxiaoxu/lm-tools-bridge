@@ -11,7 +11,7 @@ import {
   getClangdApi,
   getClangdClient,
 } from '../client';
-import { successResult, errorResult } from './shared';
+import { errorResult, successTextResult } from './shared';
 
 function normalizeClientState(raw: unknown): string {
   if (raw === undefined || raw === null) {
@@ -51,7 +51,23 @@ export async function runStatusTool(_input: Record<string, unknown>): Promise<vs
       passthroughEnabled: isClangdPassthroughEnabled(),
       allowedPassthroughMethods: getEffectiveAllowedPassthroughMethods(),
     };
-    return successResult(payload);
+    const text = [
+      'counts total=1 shown=1 truncated=false kind=status',
+      '---',
+      `clangdMcpEnabled: ${String(payload.clangdMcpEnabled)}`,
+      `extensionInstalled: ${String(payload.extensionInstalled)}`,
+      `extensionActive: ${String(payload.extensionActive)}`,
+      `apiAvailable: ${String(payload.apiAvailable)}`,
+      `clientAvailable: ${String(payload.clientAvailable)}`,
+      `clientState: ${payload.clientState}`,
+      `clangdEnableSetting: ${String(payload.clangdEnableSetting)}`,
+      `workspaceTrusted: ${String(payload.workspaceTrusted)}`,
+      `autoStartOnInvoke: ${String(payload.autoStartOnInvoke)}`,
+      `requestTimeoutMs: ${payload.requestTimeoutMs}`,
+      `passthroughEnabled: ${String(payload.passthroughEnabled)}`,
+      `allowedPassthroughMethods: ${payload.allowedPassthroughMethods.length > 0 ? payload.allowedPassthroughMethods.join(', ') : '(none)'}`,
+    ].join('\n');
+    return successTextResult(text, payload);
   } catch (error) {
     return errorResult(error);
   }

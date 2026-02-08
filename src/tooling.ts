@@ -46,7 +46,6 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_findTextInFiles',
   'lm_clangd_status',
   'lm_clangd_switchSourceHeader',
-  'lm_clangd_ast',
   'lm_clangd_typeHierarchy',
   'lm_clangd_symbolSearch',
   'lm_clangd_symbolBundle',

@@ -2,19 +2,21 @@ import * as vscode from 'vscode';
 import { renderSection, renderSummaryText, type SummaryEntry } from '../format/aiSummary';
 import { ClangdToolError } from '../errors';
 import { readOptionalInteger, readPositionFromInput, readString, successTextResult, errorResult } from './shared';
-import { resolveInputFilePath } from '../workspacePath';
+import { formatSummaryPath, resolveInputFilePath, resolveStructuredPath } from '../workspacePath';
 import { runCallHierarchyTool } from './callHierarchy';
 import { runSymbolImplementationsTool } from './symbolImplementations';
 import { runSymbolInfoTool } from './symbolInfo';
 import { runSymbolReferencesTool } from './symbolReferences';
 import { runSymbolSearchTool } from './symbolSearch';
+import type { StructuredLocation } from './aiCommon';
 
 interface BundleTarget {
   filePath: string;
+  workspacePath: string | null;
   line: number;
   character: number;
   label: string;
-  path: string;
+  summaryPath: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -76,12 +78,14 @@ function buildTargetFromPosition(input: Record<string, unknown>): BundleTarget |
   const position = readPositionFromInput(input, 'position');
   const line = position.line + 1;
   const character = position.character + 1;
+  const resolvedPath = resolveStructuredPath(absoluteFilePath);
   return {
     filePath: absoluteFilePath,
+    workspacePath: resolvedPath.workspacePath,
     line,
     character,
     label: `${absoluteFilePath}:${line}:${character}`,
-    path: `${absoluteFilePath}#${line}`,
+    summaryPath: formatSummaryPath(absoluteFilePath, line),
   };
 }
 
@@ -102,10 +106,10 @@ function buildTargetFromSearch(
   if (!location) {
     throw new ClangdToolError('REQUEST_FAILED', 'Selected symbol has no location.');
   }
-  const filePath = typeof location.filePath === 'string' ? location.filePath : undefined;
+  const filePath = typeof location.absolutePath === 'string' ? location.absolutePath : undefined;
+  const workspacePath = typeof location.workspacePath === 'string' ? location.workspacePath : null;
   const startLine = typeof location.startLine === 'number' ? location.startLine : undefined;
   const startCharacter = typeof location.startCharacter === 'number' ? location.startCharacter : undefined;
-  const path = typeof location.path === 'string' ? location.path : undefined;
   if (!filePath || !startLine || !startCharacter) {
     throw new ClangdToolError('REQUEST_FAILED', 'Selected symbol has incomplete location.');
   }
@@ -113,18 +117,33 @@ function buildTargetFromSearch(
   return {
     target: {
       filePath,
+      workspacePath,
       line: startLine,
       character: startCharacter,
       label: name,
-      path: path ?? `${filePath}#${startLine}`,
+      summaryPath: formatSummaryPath(filePath, startLine),
     },
     candidates,
   };
 }
 
+function locationRecordToSummaryPath(location: Record<string, unknown>): string | undefined {
+  const absolutePath = typeof location.absolutePath === 'string' ? location.absolutePath : undefined;
+  if (!absolutePath) {
+    return undefined;
+  }
+  const workspacePath = typeof location.workspacePath === 'string' ? location.workspacePath : null;
+  const startLine = typeof location.startLine === 'number' ? location.startLine : undefined;
+  const endLine = typeof location.endLine === 'number' ? location.endLine : undefined;
+  if (!startLine || startLine <= 0) {
+    return workspacePath ?? absolutePath;
+  }
+  return formatSummaryPath(absolutePath, startLine, endLine);
+}
+
 function entryFromStructuredItem(item: Record<string, unknown>, prefix?: string): SummaryEntry | undefined {
   const location = asRecord(item.location);
-  const path = location && typeof location.path === 'string' ? location.path : undefined;
+  const path = location ? locationRecordToSummaryPath(location) : undefined;
   const summary = typeof item.summary === 'string' ? item.summary : undefined;
   if (!path || !summary) {
     return undefined;
@@ -261,17 +280,15 @@ export async function runSymbolBundleTool(input: Record<string, unknown>): Promi
       }
     }
     for (const entry of incomingEntries) {
-      const path = typeof entry.path === 'string' ? entry.path : undefined;
-      const summary = typeof entry.summary === 'string' ? entry.summary : undefined;
-      if (path && summary) {
-        aggregateEntries.push({ location: path, summary: `[in] ${summary}` });
+      const summaryEntry = entryFromStructuredItem(entry, '[in]');
+      if (summaryEntry) {
+        aggregateEntries.push(summaryEntry);
       }
     }
     for (const entry of outgoingEntries) {
-      const path = typeof entry.path === 'string' ? entry.path : undefined;
-      const summary = typeof entry.summary === 'string' ? entry.summary : undefined;
-      if (path && summary) {
-        aggregateEntries.push({ location: path, summary: `[out] ${summary}` });
+      const summaryEntry = entryFromStructuredItem(entry, '[out]');
+      if (summaryEntry) {
+        aggregateEntries.push(summaryEntry);
       }
     }
 
@@ -288,12 +305,12 @@ export async function runSymbolBundleTool(input: Record<string, unknown>): Promi
       : [];
 
     const sections = [
-      renderSection('TARGET', `${target.path}\n${target.label}`),
+      renderSection('TARGET', `${target.summaryPath}\n${target.label}`),
       renderSection('CANDIDATES', candidates.length > 0
         ? candidates
           .map((candidate, index) => {
             const location = asRecord(candidate.location);
-            const path = location && typeof location.path === 'string' ? location.path : '(unknown)';
+            const path = location ? locationRecordToSummaryPath(location) ?? '(unknown)' : '(unknown)';
             const name = typeof candidate.name === 'string' ? candidate.name : '(unknown)';
             const kind = typeof candidate.kind === 'string' ? candidate.kind : 'symbol';
             const container = typeof candidate.containerName === 'string' ? candidate.containerName : '';
@@ -307,12 +324,8 @@ export async function runSymbolBundleTool(input: Record<string, unknown>): Promi
       renderStructuredEntriesSection('SYMBOL_INFO', infoEntries),
       renderStructuredEntriesSection('REFERENCES_TOP', referenceEntries),
       renderStructuredEntriesSection('IMPLEMENTATIONS_TOP', implementationEntries),
-      renderSection('CALLS_INCOMING', incomingEntries.length > 0
-        ? incomingEntries.map((entry) => `${entry.path as string}\n${entry.summary as string}`).join('\n---\n')
-        : '(none)'),
-      renderSection('CALLS_OUTGOING', outgoingEntries.length > 0
-        ? outgoingEntries.map((entry) => `${entry.path as string}\n${entry.summary as string}`).join('\n---\n')
-        : '(none)'),
+      renderStructuredEntriesSection('CALLS_INCOMING', incomingEntries),
+      renderStructuredEntriesSection('CALLS_OUTGOING', outgoingEntries),
     ];
 
     const text = renderSummaryText(
@@ -332,9 +345,21 @@ export async function runSymbolBundleTool(input: Record<string, unknown>): Promi
       sections,
     );
 
+    const targetLocation: StructuredLocation = {
+      absolutePath: target.filePath,
+      workspacePath: target.workspacePath,
+      startLine: target.line,
+      startCharacter: target.character,
+      endLine: target.line,
+      endCharacter: target.character,
+    };
+
     return successTextResult(text, {
       kind: 'symbolBundle',
-      target,
+      target: {
+        label: target.label,
+        location: targetLocation,
+      },
       counts: {
         total,
         shown,
@@ -345,14 +370,6 @@ export async function runSymbolBundleTool(input: Record<string, unknown>): Promi
       references: referencesStructured,
       implementations: implementationsStructured,
       callHierarchy: callHierarchyStructured,
-      options: {
-        includeDeclaration,
-        includeSnippet,
-        snippetMaxLines,
-        callDirection,
-        callMaxDepth,
-        callMaxBreadth,
-      },
     });
   } catch (error) {
     return errorResult(error);

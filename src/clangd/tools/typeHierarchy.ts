@@ -3,7 +3,7 @@ import { DOCUMENT_SYMBOL_METHOD, TYPE_HIERARCHY_METHOD, TYPE_HIERARCHY_RESOLVE_M
 import { ClangdToolError } from '../errors';
 import { sendRequestWithAutoStart } from '../transport';
 import { renderSection, renderSummaryText } from '../format/aiSummary';
-import { formatSummaryPath, resolveInputFilePath } from '../workspacePath';
+import { formatSummaryPath, resolveInputFilePath, resolveStructuredPath } from '../workspacePath';
 import {
   errorResult,
   readOptionalInteger,
@@ -464,7 +464,7 @@ export async function runTypeHierarchyTool(input: Record<string, unknown>): Prom
         derivedByParent: {} as Record<string, string[]>,
         sourceByClass: {} as Record<
           string,
-          { filePath: string; startLine: number; endLine: number; summaryPath: string; preview: string }
+          { absolutePath: string; workspacePath: string | null; startLine: number; endLine: number; preview: string }
         >,
         limits: {
           maxSuperDepth,
@@ -636,10 +636,9 @@ export async function runTypeHierarchyTool(input: Record<string, unknown>): Prom
       Object.entries(sourceByClass).map(([className, source]) => [
         className,
         {
-          filePath: source.filePath,
+          ...resolveStructuredPath(source.filePath),
           startLine: source.startLine,
           endLine: source.endLine,
-          summaryPath: formatSummaryPath(source.filePath, source.startLine, source.endLine),
           preview: source.preview,
         },
       ]),

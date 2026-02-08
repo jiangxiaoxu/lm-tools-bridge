@@ -6,7 +6,15 @@ import {
 } from '../methods';
 import { sendRequestWithAutoStart } from '../transport';
 import { renderSection, renderSummaryText, type SummaryEntry } from '../format/aiSummary';
-import { extractLocations, locationToSummaryPath, parseLimit, toTextDocumentPositionParams } from './aiCommon';
+import {
+  extractLocations,
+  locationToSummaryPath,
+  parseLimit,
+  readLineTextFromFile,
+  toStructuredLocation,
+  toTextDocumentPositionParams,
+  type FlatLocation,
+} from './aiCommon';
 import { ClangdToolError } from '../errors';
 import { errorResult, successTextResult } from './shared';
 
@@ -22,6 +30,12 @@ interface RawCallHierarchyItem {
 interface TraversalNode {
   item: RawCallHierarchyItem;
   depth: number;
+}
+
+interface CallHierarchyEdge {
+  location: FlatLocation;
+  summary: string;
+  preview: string;
 }
 
 function normalizeDirection(value: unknown): 'incoming' | 'outgoing' | 'both' {
@@ -79,9 +93,6 @@ export async function runCallHierarchyTool(input: Record<string, unknown>): Prom
           shown: 0,
           truncated: false,
         },
-        direction,
-        maxDepth,
-        maxBreadth,
         root: null,
         incoming: [] as Array<Record<string, unknown>>,
         outgoing: [] as Array<Record<string, unknown>>,
@@ -101,8 +112,11 @@ export async function runCallHierarchyTool(input: Record<string, unknown>): Prom
 
     const incomingEntries: SummaryEntry[] = [];
     const outgoingEntries: SummaryEntry[] = [];
+    const incomingStructuredEdges: CallHierarchyEdge[] = [];
+    const outgoingStructuredEdges: CallHierarchyEdge[] = [];
     const seenIncoming = new Set<string>();
     const seenOutgoing = new Set<string>();
+    const lineCache = new Map<string, string[] | null>();
     let truncated = false;
 
     if (direction === 'incoming' || direction === 'both') {
@@ -137,9 +151,20 @@ export async function runCallHierarchyTool(input: Record<string, unknown>): Prom
             const edgeKey = `${locationToSummaryPath(fromLocation)}=>${getItemName(current.item)}`;
             if (!seenIncoming.has(edgeKey)) {
               seenIncoming.add(edgeKey);
+              const summary = `${getItemName(fromItem)} -> ${getItemName(current.item)}`;
+              const preview = (await readLineTextFromFile(
+                fromLocation.filePath,
+                fromLocation.startLine,
+                lineCache,
+              )).trim();
               incomingEntries.push({
                 location: locationToSummaryPath(fromLocation),
-                summary: `${getItemName(fromItem)} -> ${getItemName(current.item)}`,
+                summary,
+              });
+              incomingStructuredEdges.push({
+                location: fromLocation,
+                summary,
+                preview,
               });
             }
           }
@@ -186,9 +211,20 @@ export async function runCallHierarchyTool(input: Record<string, unknown>): Prom
             const edgeKey = `${getItemName(current.item)}=>${locationToSummaryPath(calleeLocation)}`;
             if (!seenOutgoing.has(edgeKey)) {
               seenOutgoing.add(edgeKey);
+              const summary = `${getItemName(current.item)} -> ${getItemName(toItem)}`;
+              const preview = (await readLineTextFromFile(
+                calleeLocation.filePath,
+                calleeLocation.startLine,
+                lineCache,
+              )).trim();
               outgoingEntries.push({
                 location: locationToSummaryPath(calleeLocation),
-                summary: `${getItemName(current.item)} -> ${getItemName(toItem)}`,
+                summary,
+              });
+              outgoingStructuredEdges.push({
+                location: calleeLocation,
+                summary,
+                preview,
               });
             }
           }
@@ -233,22 +269,18 @@ export async function runCallHierarchyTool(input: Record<string, unknown>): Prom
     );
 
     const rootStructuredLocation = rootLocation
-      ? {
-        path: locationToSummaryPath(rootLocation),
-        filePath: rootLocation.filePath,
-        startLine: rootLocation.startLine,
-        startCharacter: rootLocation.startCharacter,
-        endLine: rootLocation.endLine,
-        endCharacter: rootLocation.endCharacter,
-      }
+      ? toStructuredLocation(
+        rootLocation,
+        (await readLineTextFromFile(rootLocation.filePath, rootLocation.startLine, lineCache)).trim(),
+      )
       : undefined;
 
-    const incomingStructured = incomingEntries.map((entry) => ({
-      path: entry.location,
+    const incomingStructured = incomingStructuredEdges.map((entry) => ({
+      location: toStructuredLocation(entry.location, entry.preview),
       summary: entry.summary,
     }));
-    const outgoingStructured = outgoingEntries.map((entry) => ({
-      path: entry.location,
+    const outgoingStructured = outgoingStructuredEdges.map((entry) => ({
+      location: toStructuredLocation(entry.location, entry.preview),
       summary: entry.summary,
     }));
 
@@ -259,9 +291,6 @@ export async function runCallHierarchyTool(input: Record<string, unknown>): Prom
         shown: counts.shown,
         truncated: counts.truncated,
       },
-      direction,
-      maxDepth,
-      maxBreadth,
       root: {
         name: getItemName(root),
         location: rootStructuredLocation,

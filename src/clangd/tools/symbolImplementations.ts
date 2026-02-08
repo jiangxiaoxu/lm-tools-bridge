@@ -2,7 +2,14 @@ import * as vscode from 'vscode';
 import { IMPLEMENTATION_METHOD } from '../methods';
 import { sendRequestWithAutoStart } from '../transport';
 import { renderSummaryText, type SummaryEntry } from '../format/aiSummary';
-import { extractLocations, locationToSummaryPath, parseLimit, readLineTextFromFile, toTextDocumentPositionParams } from './aiCommon';
+import {
+  extractLocations,
+  locationToSummaryPath,
+  parseLimit,
+  readLineTextFromFile,
+  toStructuredLocation,
+  toTextDocumentPositionParams,
+} from './aiCommon';
 import { errorResult, successTextResult } from './shared';
 
 export async function runSymbolImplementationsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
@@ -28,15 +35,9 @@ export async function runSymbolImplementationsTool(input: Record<string, unknown
         location: path,
         summary,
       });
+      const preview = lineText.trim();
       structuredEntries.push({
-        location: {
-          path,
-          filePath: location.filePath,
-          startLine: location.startLine,
-          startCharacter: location.startCharacter,
-          endLine: location.endLine,
-          endCharacter: location.endCharacter,
-        },
+        location: toStructuredLocation(location, preview),
         summary,
       });
     }

@@ -9,7 +9,7 @@ import {
   readOptionalObject,
   readOptionalPositiveInteger,
   readString,
-  successResult,
+  successTextResult,
 } from './shared';
 
 function isMethodAllowed(method: string): boolean {
@@ -31,9 +31,20 @@ export async function runLspRequestTool(input: Record<string, unknown>): Promise
     const result = await sendRequestWithAutoStart<unknown>(method, params, {
       timeoutMs,
     });
-    return successResult({
+    const normalizedResult = normalizeLspDataToOneBased(result ?? null);
+    const text = [
+      `counts total=1 shown=1 truncated=false kind=lspRequest method=${method}`,
+      '---',
+      '[METHOD]',
       method,
-      result: normalizeLspDataToOneBased(result ?? null),
+      '---',
+      '[RESULT]',
+      JSON.stringify(normalizedResult, null, 2),
+    ].join('\n');
+    return successTextResult(text, {
+      kind: 'lspRequest',
+      method,
+      result: normalizedResult,
     });
   } catch (error) {
     return errorResult(error);

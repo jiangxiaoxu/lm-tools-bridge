@@ -211,10 +211,12 @@ Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享�
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
 Invariant: workspace untrusted 时 clangd MCP 请求必须拒绝.
 Invariant: 低价值工具 `lm_clangd_memoryUsage` 和 `lm_clangd_inlayHints` 默认不暴露.
+Invariant: `lm_clangd_ast` 不再暴露,并从默认 exposed/enabled 清单移除.
 Invariant: passthrough 默认 allowlist 不包含 completion, semanticTokens, memoryUsage, inlayHints.
 Invariant: clangd AI-first 工具输入统一使用 `filePath`, 支持 `WorkspaceName/...` 与绝对路径, 拒绝 `file:///...`.
 Invariant: clangd AI-first 工具输出统一为 summary text 协议(counts 行 + `---` 分隔 + `<path>#<lineOrRange>` + summary).
 Invariant: clangd AI-first 工具同时提供等价语义的 `structuredContent`.
+Invariant: structured location 字段统一为 `absolutePath`(必有) + `workspacePath`(可空) + 1-based 坐标,不再使用 `summaryPath/path#...`.
 Invariant: `lm_clangd_symbolSearch` 默认返回完整签名,并按 `signatureHelp -> hover -> definitionLine` 回退补全.
 Invariant: clangd tool input 的 line/character 对外统一按 1-based 表达, 并在 LSP 边界自动转换.
 Invariant: `lm_clangd_typeHierarchyResolve` 不再作为独立工具暴露.

@@ -1,7 +1,6 @@
 import { getEffectiveAllowedPassthroughMethods, isClangdMcpEnabled, isClangdPassthroughEnabled } from './client';
 import type { ClangdCustomToolDefinition } from './types';
 import {
-  buildAstTool,
   buildCallHierarchyTool,
   buildLspRequestTool,
   buildStatusTool,
@@ -21,7 +20,6 @@ export function getClangdToolsSnapshot(): readonly ClangdCustomToolDefinition[] 
   const tools: ClangdCustomToolDefinition[] = [
     buildStatusTool(),
     buildSwitchSourceHeaderTool(),
-    buildAstTool(),
     buildTypeHierarchyTool(),
     buildSymbolSearchTool(),
     buildSymbolBundleTool(),

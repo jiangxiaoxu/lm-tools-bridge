@@ -17,10 +17,15 @@ Maintenance rule:
 - Added AI-first symbol tools: `lm_clangd_symbolSearch`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, and `lm_clangd_callHierarchy`.
 - Added `lm_clangd_symbolBundle` to aggregate symbol search/info/references/implementations/call-hierarchy into one AI-first call.
 - Added `structuredContent` for clangd AI-first tools so clients can use stable machine-readable payloads alongside summary text.
+- Unified clangd structured location fields to `absolutePath` (always) + `workspacePath` (nullable), with 1-based numeric coordinates and optional `preview`.
+- Removed legacy structured path fields (`summaryPath`, `location.path#...`) and dropped raw input echo fields from AI-first structured payloads.
 - Enhanced `lm_clangd_symbolSearch` to include full symbol signatures by default, using fallback chain `signatureHelp -> hover -> definitionLine`.
 - Updated `lm_clangd_symbolInfo` snippet sourcing to exclude generated files (`*.generated.h`, `*.gen.cpp`) and no longer fallback to generated locations.
+- Updated `lm_clangd_symbolInfo` to classify symbol category via document symbols and emit adaptive entries; `typeDefinition` is now included only when meaningful (for example value-like symbols).
 - Updated `lm_clangd_typeHierarchy` SOURCE text order to `type -> preview -> path`, and added `preview` to `structuredContent.sourceByClass`.
 - Updated `lm_clangd_typeHierarchy` source range strategy to rely on `textDocument/documentSymbol` only; when no matching symbol is found, output now falls back to single-line range (`endLine = startLine`).
+- Disabled `lm_clangd_ast` exposure and removed it from default exposed/enabled clangd tool list.
+- Updated `lm_clangd_status` and `lm_clangd_lspRequest` to return human-readable text content while preserving structured JSON objects in `structuredContent`.
 - Updated `lm_clangd_typeHierarchy` to return a compact summary payload (`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`) with bounded expansion controls.
 - Replaced `lm_clangd_typeHierarchy` input options `resolve/direction` with `maxSuperDepth`, `maxSubDepth`, and `maxSubBreadth`.
 - Improved `sourceByClass.startLine` for Unreal C++ types: when the previous line is `UCLASS(...)` or `USTRUCT(...)`, the macro line is reported as the start line.
@@ -35,10 +40,15 @@ Maintenance rule:
 - 新增 AI-first 符号工具: `lm_clangd_symbolSearch`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, `lm_clangd_callHierarchy`。
 - 新增 `lm_clangd_symbolBundle`,支持一次调用聚合 symbol search/info/references/implementations/call hierarchy。
 - 为 clangd AI-first 工具补充 `structuredContent`,可在摘要文本之外提供稳定可机读载荷。
+- 统一 clangd 结构化位置字段为 `absolutePath`(必有) + `workspacePath`(可空),并使用 1-based 数值坐标与可选 `preview`.
+- 移除旧结构化路径字段(`summaryPath`, `location.path#...`),并清理 AI-first 结构化载荷中的输入回显字段.
 - 增强 `lm_clangd_symbolSearch`,默认返回完整符号签名,并使用 `signatureHelp -> hover -> definitionLine` 回退链路.
 - 调整 `lm_clangd_symbolInfo` snippet 选点规则: 默认排除 generated 文件(`*.generated.h`, `*.gen.cpp`),且不再回退到 generated 位置.
+- 更新 `lm_clangd_symbolInfo`: 基于 document symbols 做符号类别判定并自适应输出条目; `typeDefinition` 仅在有意义场景(如 value-like 符号)返回.
 - 调整 `lm_clangd_typeHierarchy` 的 SOURCE 文本顺序为 `type -> preview -> path`,并在 `structuredContent.sourceByClass` 新增 `preview` 字段.
 - 调整 `lm_clangd_typeHierarchy` 区间策略为仅依赖 `textDocument/documentSymbol`; 未命中匹配符号时回退为单行区间(`endLine = startLine`),不再使用本地大括号扫描.
+- 禁用 `lm_clangd_ast` 暴露并将其从 clangd 默认 exposed/enabled 列表移除.
+- 将 `lm_clangd_status` 与 `lm_clangd_lspRequest` 的 `content` 调整为人类可读文本,同时保留 `structuredContent` 结构化对象.
 - 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`),并支持有界展开。
 - 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`, `maxSubDepth`, `maxSubBreadth`。
 - 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行。

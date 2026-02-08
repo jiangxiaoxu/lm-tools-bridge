@@ -10,7 +10,9 @@ import {
   locationToSummaryPath,
   parseLimit,
   parseStringArray,
+  readLineTextFromFile,
   resolveSymbolSignature,
+  toStructuredLocation,
   type FlatLocation,
 } from './aiCommon';
 
@@ -90,7 +92,6 @@ interface SymbolSearchCandidate {
   kind: string;
   containerName?: string;
   location: FlatLocation;
-  summaryPath: string;
 }
 
 export async function runSymbolSearchTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
@@ -138,13 +139,11 @@ export async function runSymbolSearchTool(input: Record<string, unknown>): Promi
         continue;
       }
       const containerName = typeof record.containerName === 'string' ? record.containerName : '';
-      const summaryPath = locationToSummaryPath(location);
       allCandidates.push({
         name,
         kind: kindLabel,
         containerName: containerName || undefined,
         location,
-        summaryPath,
       });
     }
 
@@ -154,26 +153,25 @@ export async function runSymbolSearchTool(input: Record<string, unknown>): Promi
     const shownStructuredEntries: Array<Record<string, unknown>> = [];
     for (const candidate of shownCandidates) {
       const signature = await resolveSymbolSignature(candidate.location, lineCache);
+      const previewText = (await readLineTextFromFile(
+        candidate.location.filePath,
+        candidate.location.startLine,
+        lineCache,
+      )).trim();
       const baseSummary = candidate.containerName
         ? `${candidate.kind} ${candidate.name} (${candidate.containerName})`
         : `${candidate.kind} ${candidate.name}`;
       const signatureText = signature.signature ?? '(none)';
+      const summaryPath = locationToSummaryPath(candidate.location);
       shownEntries.push({
-        location: candidate.summaryPath,
+        location: summaryPath,
         summary: `${baseSummary} | signature: ${signatureText}`,
       });
       shownStructuredEntries.push({
         name: candidate.name,
         kind: candidate.kind,
         containerName: candidate.containerName,
-        location: {
-          path: candidate.summaryPath,
-          filePath: candidate.location.filePath,
-          startLine: candidate.location.startLine,
-          startCharacter: candidate.location.startCharacter,
-          endLine: candidate.location.endLine,
-          endCharacter: candidate.location.endCharacter,
-        },
+        location: toStructuredLocation(candidate.location, previewText),
         signature: signature.signature,
         signatureSource: signature.source,
       });
@@ -193,8 +191,6 @@ export async function runSymbolSearchTool(input: Record<string, unknown>): Promi
     );
     return successTextResult(text, {
       kind: 'symbolSearch',
-      query,
-      matchMode,
       counts: {
         total: counts.total,
         shown: counts.shown,

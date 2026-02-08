@@ -2,7 +2,15 @@ import * as vscode from 'vscode';
 import { REFERENCES_METHOD } from '../methods';
 import { sendRequestWithAutoStart } from '../transport';
 import { renderSummaryText, type SummaryEntry } from '../format/aiSummary';
-import { extractLocations, locationToSummaryPath, parseLimit, readLineTextFromFile, renderReferenceSummary, toTextDocumentPositionParams } from './aiCommon';
+import {
+  extractLocations,
+  locationToSummaryPath,
+  parseLimit,
+  readLineTextFromFile,
+  renderReferenceSummary,
+  toStructuredLocation,
+  toTextDocumentPositionParams,
+} from './aiCommon';
 import { errorResult, successTextResult } from './shared';
 
 function parseIncludeDeclaration(value: unknown): boolean {
@@ -39,15 +47,9 @@ export async function runSymbolReferencesTool(input: Record<string, unknown>): P
         location: path,
         summary,
       });
+      const preview = lineText.trim();
       structuredEntries.push({
-        location: {
-          path,
-          filePath: location.filePath,
-          startLine: location.startLine,
-          startCharacter: location.startCharacter,
-          endLine: location.endLine,
-          endCharacter: location.endCharacter,
-        },
+        location: toStructuredLocation(location, preview),
         summary,
       });
     }
@@ -67,7 +69,6 @@ export async function runSymbolReferencesTool(input: Record<string, unknown>): P
     );
     return successTextResult(text, {
       kind: 'symbolReferences',
-      includeDeclaration,
       counts: {
         total: counts.total,
         shown: counts.shown,

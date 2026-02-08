@@ -31,7 +31,6 @@
 ### Planned MCP tools
 - `lm_clangd_status`
 - `lm_clangd_switchSourceHeader`
-- `lm_clangd_ast`
 - `lm_clangd_typeHierarchy`
 - `lm_clangd_symbolSearch`
 - `lm_clangd_symbolBundle`
@@ -96,7 +95,7 @@
 - Tasks:
 - [x] 实现 `lm_clangd_status`.
 - [x] 实现 `lm_clangd_switchSourceHeader`.
-- [x] 实现 `lm_clangd_ast`.
+- [x] 实现并后续按策略下线 `lm_clangd_ast`.
 - [x] 实现 `lm_clangd_typeHierarchy`.
 - [x] 剪裁低价值工具暴露(`lm_clangd_memoryUsage`, `lm_clangd_inlayHints`).
 - DoD:
@@ -175,6 +174,9 @@
 - [x] `lm_clangd_symbolInfo` 的 snippet 默认排除 generated 文件来源(`*.generated.h`, `*.gen.cpp`),且不回退到 generated 位置.
 - [x] `lm_clangd_typeHierarchy` 的 SOURCE 文本顺序调整为 `type -> preview -> path`,并在 `sourceByClass` 增加 `preview` 字段.
 - [x] `lm_clangd_typeHierarchy` 区间校正切换为 `documentSymbol` 唯一来源: 命中则用符号范围,未命中则回退单行(`endLine = startLine`).
+- [x] clangd structured 路径字段统一为 `absolutePath` + `workspacePath`,并移除 `summaryPath/location.path#...` 与输入回显字段.
+- [x] `lm_clangd_ast` 已从 clangd 工具暴露与默认 exposed/enabled 列表中下线.
+- [x] `lm_clangd_symbolInfo` 增加基于 documentSymbol 的符号类别自适应输出,并按需提供 `typeDefinition` 条目.
 
 ### In progress
 - [ ] 运行时链路验证(handshake + clangd 自动启动).
@@ -182,7 +184,7 @@
 ### Next
 - [ ] 在 Extension Development Host 执行 `lmToolsBridge.requestWorkspaceMCPServer`.
 - [ ] 读取 `lm-tools://schema/lm_clangd_status` 并调用 `lm_clangd_status`.
-- [ ] 在 clangd 未运行时调用 `lm_clangd_ast` 验证自动拉起.
+- [ ] 在 clangd 未运行时调用 `lm_clangd_typeHierarchy` 验证自动拉起.
 - [ ] 设置 `clangd.enable=false` 验证非侵入失败路径.
 
 ### Blocked
@@ -211,6 +213,9 @@
 - 2026-02-08: `lm_clangd_symbolInfo` snippet 选点排除 generated 文件,且不再回退到 generated. Reason: 避免 UHT 生成代码片段干扰 AI 代码理解主路径.
 - 2026-02-08: `lm_clangd_typeHierarchy` SOURCE 条目顺序改为 `type -> preview -> path`,并在结构化结果补充 `preview`. Reason: 提升 AI 对类型信息和定位预览的快速理解效率.
 - 2026-02-08: `lm_clangd_typeHierarchy` 结束行策略改为仅依赖 `textDocument/documentSymbol`; 未匹配时强制回退为单行区间. Reason: 避免本地扫描猜测导致区间偏差,优先 clangd 语义结果.
+- 2026-02-08: clangd structured 路径字段统一为 `absolutePath + workspacePath`,并移除 `summaryPath/path#...` 与输入回显字段. Reason: 提升 AI 机读稳定性并避免路径语义混淆.
+- 2026-02-08: 下线 `lm_clangd_ast` 工具暴露. Reason: 降低低价值高噪音输出,聚焦符号/关系类 AI-first 工具链路.
+- 2026-02-08: `lm_clangd_symbolInfo` 按符号类别自适应输出(`callable/valueLike/typeLike/...`),并仅在有意义场景返回 `typeDefinition`. Reason: 降低无效输出噪音并减少 AI 二次筛选成本.
 
 ## Validation Checklist
 - [x] `npm run compile` passes.

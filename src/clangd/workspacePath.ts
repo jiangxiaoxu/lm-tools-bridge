@@ -7,6 +7,11 @@ export interface ResolvedInputFilePath {
   uri: string;
 }
 
+export interface ResolvedStructuredPath {
+  absolutePath: string;
+  workspacePath: string | null;
+}
+
 function normalizeSlash(value: string): string {
   return value.replace(/\\/g, '/');
 }
@@ -91,6 +96,19 @@ export function formatSummaryPath(
   startLine: number,
   endLine?: number,
 ): string {
+  const structuredPath = resolveStructuredPath(absoluteFilePath);
+  const displayPath = structuredPath.workspacePath ?? structuredPath.absolutePath;
+
+  if (startLine <= 0) {
+    return displayPath;
+  }
+  if (endLine && endLine > 0 && endLine !== startLine) {
+    return `${displayPath}#${startLine}-${endLine}`;
+  }
+  return `${displayPath}#${startLine}`;
+}
+
+export function resolveStructuredPath(absoluteFilePath: string): ResolvedStructuredPath {
   const resolved = path.resolve(absoluteFilePath);
   const folders = vscode.workspace.workspaceFolders ?? [];
 
@@ -110,22 +128,20 @@ export function formatSummaryPath(
     }
   }
 
-  let displayPath: string;
-  if (bestMatch) {
-    const relativePath = path.relative(bestMatch.uri.fsPath, resolved);
-    const normalizedRelativePath = normalizeSlash(relativePath);
-    displayPath = normalizedRelativePath.length > 0
-      ? `${bestMatch.name}/${normalizedRelativePath}`
-      : bestMatch.name;
-  } else {
-    displayPath = normalizeSlash(resolved);
+  const absolutePath = normalizeSlash(resolved);
+  if (!bestMatch) {
+    return {
+      absolutePath,
+      workspacePath: null,
+    };
   }
 
-  if (startLine <= 0) {
-    return displayPath;
-  }
-  if (endLine && endLine > 0 && endLine !== startLine) {
-    return `${displayPath}#${startLine}-${endLine}`;
-  }
-  return `${displayPath}#${startLine}`;
+  const relativePath = path.relative(bestMatch.uri.fsPath, resolved);
+  const normalizedRelativePath = normalizeSlash(relativePath);
+  return {
+    absolutePath,
+    workspacePath: normalizedRelativePath.length > 0
+      ? `${bestMatch.name}/${normalizedRelativePath}`
+      : bestMatch.name,
+  };
 }

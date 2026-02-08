@@ -27,10 +27,15 @@ Path rendering:
 - External file: absolute path with `/` separators
 - Most AI-first tools also return `structuredContent` with equivalent semantic fields.
 
+Structured location contract (when location is present):
+- `absolutePath: string` (always present)
+- `workspacePath: string | null` (present, nullable)
+- `startLine/startCharacter/endLine/endCharacter: number` (1-based)
+- `preview?: string`
+
 ## Default-exposed clangd tools
 - `lm_clangd_status`
 - `lm_clangd_switchSourceHeader`
-- `lm_clangd_ast`
 - `lm_clangd_typeHierarchy`
 - `lm_clangd_symbolSearch`
 - `lm_clangd_symbolBundle`
@@ -57,7 +62,8 @@ Input schema:
 ```
 
 Output:
-- JSON text payload (status fields), unchanged.
+- Human-readable summary text.
+- `structuredContent` carries status fields as JSON object.
 
 ---
 
@@ -78,48 +84,9 @@ Input schema:
 
 Output:
 - AI summary text with source and paired file path.
-
----
-
-## Tool: lm_clangd_ast
-Description:
-- Query AST for a selected range.
-
-Input schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "filePath": { "type": "string" },
-    "range": {
-      "type": "object",
-      "properties": {
-        "start": {
-          "type": "object",
-          "properties": {
-            "line": { "type": "number" },
-            "character": { "type": "number" }
-          },
-          "required": ["line", "character"]
-        },
-        "end": {
-          "type": "object",
-          "properties": {
-            "line": { "type": "number" },
-            "character": { "type": "number" }
-          },
-          "required": ["line", "character"]
-        }
-      },
-      "required": ["start", "end"]
-    }
-  },
-  "required": ["filePath", "range"]
-}
-```
-
-Output:
-- AI summary text + AST JSON text section.
+- `structuredContent`:
+- `source: { absolutePath, workspacePath }`
+- `paired: { absolutePath, workspacePath } | null`
 
 ---
 
@@ -157,7 +124,7 @@ Output:
 - `path: <path>#<lineOrRange>`
 - `SOURCE` entries are separated by `---`.
 - `structuredContent.sourceByClass.<TypeName>` includes:
-- `filePath`, `startLine`, `endLine`, `summaryPath`, `preview`
+- `absolutePath`, `workspacePath`, `startLine`, `endLine`, `preview`
 
 ---
 
@@ -230,6 +197,7 @@ Output:
 - AI summary text with sections: `TARGET`, `CANDIDATES`, `SYMBOL_INFO`, `REFERENCES_TOP`, `IMPLEMENTATIONS_TOP`, `CALLS_INCOMING`, `CALLS_OUTGOING`.
 - `CANDIDATES` section includes signature text from symbol search results.
 - `structuredContent` includes `target`, `candidates`(with signature fields), `symbolInfo`, `references`, `implementations`, and `callHierarchy`.
+- `structuredContent` does not mirror raw input flags/options.
 
 ---
 
@@ -260,8 +228,11 @@ Input schema:
 
 Output:
 - AI summary text with `HOVER`, `SIGNATURE`, optional `SNIPPET` sections.
+- Entry labels are adaptive by symbol category and may include: `definition`, `typeDefinition`, `declaration`.
+- `typeDefinition` is included only when meaningful (for example value-like symbols) and omitted for callable/type symbols.
 - `SNIPPET` source excludes generated files by default: `*.generated.h`, `*.gen.cpp`.
 - `structuredContent` fields include:
+- `symbolCategory: "callable" | "valueLike" | "typeLike" | "namespaceLike" | "unknown"`
 - `snippetSource: "definition" | "declaration" | "none"`
 - `snippetFilteredGenerated: boolean`
 
@@ -375,7 +346,8 @@ Input schema:
 ```
 
 Output:
-- JSON text payload (method + result).
+- Human-readable summary text with `METHOD` and `RESULT` sections.
+- `structuredContent` contains `{ kind, method, result }`.
 
 ## Notes
 - Input/output position semantics exposed to users are 1-based.

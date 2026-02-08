@@ -88,16 +88,19 @@ Notes:
 - first line `counts ...`
 - second line `---`
 - then repeated `<path>#<lineOrRange>` + summary line entries with `---` separators
-- AI-first clangd tools also return `structuredContent` with the same semantic data for machine-stable parsing.
+- AI-first clangd tools also return `structuredContent` with machine-stable fields:
+- location fields use `absolutePath` (always) + `workspacePath` (nullable)
+- line/character fields remain numeric 1-based fields, not `path#...` strings
+- structured outputs avoid echoing raw input arguments
 - `lm_clangd_symbolSearch` now includes full symbol signature by default in both text summary and `structuredContent`.
 - `lm_clangd_symbolInfo` snippet source excludes generated files (`*.generated.h`, `*.gen.cpp`) by default.
+- `lm_clangd_symbolInfo` now uses adaptive symbol-category output and includes `typeDefinition` for value-like symbols when meaningful.
 - `lm_clangd_typeHierarchy` `SOURCE` section now emits `type -> preview -> path` to improve AI readability.
-- `lm_clangd_typeHierarchy` `structuredContent.sourceByClass` includes `preview` in addition to `filePath/startLine/endLine/summaryPath`.
+- `lm_clangd_typeHierarchy` `structuredContent.sourceByClass` includes `absolutePath/workspacePath/startLine/endLine/preview`.
 - summary path format is `WorkspaceName/...#line` for workspace files, absolute path for external files.
 - Default exposed clangd AI tools:
 - `lm_clangd_status`
 - `lm_clangd_switchSourceHeader`
-- `lm_clangd_ast`
 - `lm_clangd_typeHierarchy`
 - `lm_clangd_symbolSearch`
 - `lm_clangd_symbolBundle`
@@ -230,16 +233,19 @@ url = "http://127.0.0.1:47100/mcp"
 - 第一行 `counts ...`
 - 第二行 `---`
 - 后续按 `<path>#<lineOrRange>` + 摘要行输出,条目间用 `---` 分隔
-- clangd AI-first 工具同时返回等价语义的 `structuredContent`,便于模型稳定解析.
+- clangd AI-first 工具同时返回等价语义的 `structuredContent`,便于模型稳定解析:
+- 路径字段统一为 `absolutePath`(必有) + `workspacePath`(可空)
+- 行列字段使用 1-based 数值,不在结构化字段中拼接 `#line` 文本
+- structured 输出避免回显原始输入参数
 - `lm_clangd_symbolSearch` 默认在文本摘要和 `structuredContent` 中附带完整符号签名.
 - `lm_clangd_symbolInfo` 的 snippet 默认排除 generated 文件(`*.generated.h`, `*.gen.cpp`)来源.
+- `lm_clangd_symbolInfo` 现已按符号类别自适应输出,并在变量/字段等 value-like 符号上按需提供 `typeDefinition`.
 - `lm_clangd_typeHierarchy` 的 `SOURCE` 区块按 `type -> preview -> path` 顺序输出,更利于 AI 阅读.
-- `lm_clangd_typeHierarchy` 的 `structuredContent.sourceByClass` 在 `filePath/startLine/endLine/summaryPath` 之外新增 `preview`.
+- `lm_clangd_typeHierarchy` 的 `structuredContent.sourceByClass` 使用 `absolutePath/workspacePath/startLine/endLine/preview`.
 - 工作区内路径格式为 `WorkspaceName/...#line`,工作区外回退为绝对路径。
 - 默认暴露的 clangd AI 工具:
 - `lm_clangd_status`
 - `lm_clangd_switchSourceHeader`
-- `lm_clangd_ast`
 - `lm_clangd_typeHierarchy`
 - `lm_clangd_symbolSearch`
 - `lm_clangd_symbolBundle`

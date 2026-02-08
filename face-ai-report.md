@@ -217,6 +217,7 @@ Invariant: clangd AI-first 工具输入统一使用 `filePath`, 支持 `Workspac
 Invariant: clangd AI-first 工具输出统一为 summary text 协议(counts 行 + `---` 分隔 + `<path>#<lineOrRange>` + summary).
 Invariant: clangd AI-first 工具同时提供等价语义的 `structuredContent`.
 Invariant: structured location 字段统一为 `absolutePath`(必有) + `workspacePath`(可空) + 1-based 坐标,不再使用 `summaryPath/path#...`.
+Invariant: `lm_clangd_symbolInfo` 的 `structuredContent.entries[]` 仅使用 `location.preview` 提供行预览,不再输出重复的顶层 `line` 字段.
 Invariant: `lm_clangd_symbolSearch` 默认返回完整签名,并按 `signatureHelp -> hover -> definitionLine` 回退补全.
 Invariant: clangd tool input 的 line/character 对外统一按 1-based 表达, 并在 LSP 边界自动转换.
 Invariant: `lm_clangd_typeHierarchyResolve` 不再作为独立工具暴露.
@@ -299,6 +300,7 @@ Seed: getClangdToolsSnapshot | Use: clangd 工具暴露入口
 Seed: ensureClangdRunning | Use: clangd 按需启动入口
 Seed: sendRequestWithAutoStart | Use: clangd 请求统一入口
 Seed: resolveInputFilePath | Use: clangd filePath 输入解析入口
+Seed: toStructuredLocation | Use: clangd 结构化位置对象规范化入口
 Seed: formatSummaryPath | Use: clangd 摘要路径渲染入口
 Seed: lm_clangd_status | Use: clangd 可用性诊断
 Seed: lm_clangd_typeHierarchy | Use: clangd 继承链摘要

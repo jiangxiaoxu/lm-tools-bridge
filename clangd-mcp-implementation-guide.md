@@ -177,6 +177,7 @@
 - [x] clangd structured 路径字段统一为 `absolutePath` + `workspacePath`,并移除 `summaryPath/location.path#...` 与输入回显字段.
 - [x] `lm_clangd_ast` 已从 clangd 工具暴露与默认 exposed/enabled 列表中下线.
 - [x] `lm_clangd_symbolInfo` 增加基于 documentSymbol 的符号类别自适应输出,并按需提供 `typeDefinition` 条目.
+- [x] `lm_clangd_symbolInfo` 结构化条目移除冗余 `line` 字段,统一使用 `location.preview` 提供行预览.
 
 ### In progress
 - [ ] 运行时链路验证(handshake + clangd 自动启动).
@@ -216,6 +217,7 @@
 - 2026-02-08: clangd structured 路径字段统一为 `absolutePath + workspacePath`,并移除 `summaryPath/path#...` 与输入回显字段. Reason: 提升 AI 机读稳定性并避免路径语义混淆.
 - 2026-02-08: 下线 `lm_clangd_ast` 工具暴露. Reason: 降低低价值高噪音输出,聚焦符号/关系类 AI-first 工具链路.
 - 2026-02-08: `lm_clangd_symbolInfo` 按符号类别自适应输出(`callable/valueLike/typeLike/...`),并仅在有意义场景返回 `typeDefinition`. Reason: 降低无效输出噪音并减少 AI 二次筛选成本.
+- 2026-02-08: `lm_clangd_symbolInfo` structured entry 删除重复 `line` 字段,仅保留 `location.preview`. Reason: 避免重复信息并保持 structured payload 语义单一.
 
 ## Validation Checklist
 - [x] `npm run compile` passes.

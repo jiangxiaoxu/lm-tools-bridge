@@ -235,6 +235,8 @@ Output:
 - `symbolCategory: "callable" | "valueLike" | "typeLike" | "namespaceLike" | "unknown"`
 - `snippetSource: "definition" | "declaration" | "none"`
 - `snippetFilteredGenerated: boolean`
+- `entries[]` uses `{ label, location }`; `location.preview` is the canonical line preview field.
+- `entries[]` does not include a duplicated top-level `line` field.
 
 ---
 

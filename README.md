@@ -58,8 +58,17 @@ User guidance:
 ### Daily Usage
 - `Configure Exposure Tools`: choose tools that can be selected.
 - `Configure Enabled Tools`: choose active tools within exposed set.
+- `Status Menu -> Open Settings`: jump directly to this extension's settings page.
 - Built-in disabled tools are always blocked and never callable.
 - Some default tools are policy-required exposure items.
+
+### Diagnostics Tool
+- `lm_getErrors` reads diagnostics from VS Code Problems data source (`vscode.languages.getDiagnostics`).
+- Inputs: optional `filePath`, optional `severities` (`error|warning|information|hint`), optional `maxResults` (default `500`).
+- Default severities are `error` and `warning`.
+- Structured diagnostics no longer include `uri`; each diagnostic includes `preview`, `previewUnavailable`, and `previewTruncated`.
+- `preview` returns source code lines from `startLine` to `endLine`, capped at 10 lines.
+- `copilot_getErrors` is still available for compatibility, but `lm_getErrors` provides stable structured output.
 
 ### Troubleshooting
 - `workspace not set`:
@@ -122,7 +131,7 @@ Notes:
 - `lmToolsBridge.server.autoStart`
 - `lmToolsBridge.server.port`
 - `lmToolsBridge.manager.httpPort`
-- `lmToolsBridge.useWorkspaceSettings`
+- `lmToolsBridge.useWorkspaceSettings` is workspace-only. If it is written in User settings, the extension removes it automatically and shows a warning.
 - `lmToolsBridge.tools.exposedDelta`
 - `lmToolsBridge.tools.unexposedDelta`
 - `lmToolsBridge.tools.enabledDelta`
@@ -209,8 +218,17 @@ url = "http://127.0.0.1:47100/mcp"
 ### 日常使用
 - `Configure Exposure Tools`: 选择可进入候选集的工具.
 - `Configure Enabled Tools`: 在已暴露集合内选择真正启用的工具.
+- `Status Menu -> Open Settings`: 直接跳转到本扩展设置页.
 - built-in disabled 工具始终禁用,不可调用.
 - 部分默认工具属于策略要求,始终暴露.
+
+### 诊断工具
+- `lm_getErrors` 使用 VS Code Problems 同源数据(`vscode.languages.getDiagnostics`)读取诊断.
+- 输入支持: 可选 `filePath`,可选 `severities`(`error|warning|information|hint`),可选 `maxResults`(默认 `500`).
+- 默认仅返回 `error` 和 `warning`.
+- 结构化诊断结果不再包含 `uri`;每条诊断新增 `preview`,`previewUnavailable`,`previewTruncated`.
+- `preview` 返回 `startLine` 到 `endLine` 的代码预览,最多 10 行.
+- `copilot_getErrors` 仍保留用于兼容,但 `lm_getErrors` 提供稳定的结构化输出.
 
 ### 常见问题
 - `workspace not set`:
@@ -273,7 +291,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `lmToolsBridge.server.autoStart`
 - `lmToolsBridge.server.port`
 - `lmToolsBridge.manager.httpPort`
-- `lmToolsBridge.useWorkspaceSettings`
+- `lmToolsBridge.useWorkspaceSettings` 仅工作区级生效. 若写入 User settings,扩展会自动移除并提示.
 - `lmToolsBridge.tools.exposedDelta`
 - `lmToolsBridge.tools.unexposedDelta`
 - `lmToolsBridge.tools.enabledDelta`

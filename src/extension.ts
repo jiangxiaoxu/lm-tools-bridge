@@ -13,7 +13,14 @@ import {
   startManagerHeartbeat,
   stopManagerHeartbeat,
 } from './managerClient';
-import { CONFIG_SECTION, getConfigValue, setConfigurationWarningLogger } from './configuration';
+import {
+  clearUseWorkspaceSettingsFromUserSettings,
+  CONFIG_SECTION,
+  CONFIG_USE_WORKSPACE_SETTINGS,
+  getConfigValue,
+  setConfigurationWarningLogger,
+  USE_WORKSPACE_SETTINGS_USER_SCOPE_WARNING,
+} from './configuration';
 import {
   buildToolInputSchema,
   configureEnabledTools,
@@ -46,6 +53,7 @@ const PORT_MAX_VALUE = 65535;
 const LEGACY_ENABLED_TOOLS_KEY = 'tools.enabled';
 const LEGACY_BLACKLIST_KEY = 'tools.blacklist';
 const LEGACY_BLACKLIST_PATTERNS_KEY = 'tools.blacklistPatterns';
+const WORKSPACE_ONLY_SETTING_REMOVED_MESSAGE = 'lmToolsBridge.useWorkspaceSettings is workspace-only and has been removed from User settings.';
 
 interface ServerConfig {
   autoStart: boolean;
@@ -78,6 +86,7 @@ let lastServerStatus: ServerStatusState | undefined;
 let lastOwnerWorkspacePath: string | undefined;
 let lastStatusLogMessage: string | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
+let enforcingWorkspaceOnlySetting = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -89,6 +98,7 @@ export function activate(context: vscode.ExtensionContext): void {
     warn: logWarn,
     error: logError,
   });
+  void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
   void normalizeToolSelectionState();
   initManagerClient({
@@ -131,6 +141,9 @@ export function activate(context: vscode.ExtensionContext): void {
       || event.affectsConfiguration(`${CONFIG_SECTION}.tools.disabledDelta`)
     ) {
       void normalizeToolSelectionState();
+    }
+    if (event.affectsConfiguration(`${CONFIG_SECTION}.${CONFIG_USE_WORKSPACE_SETTINGS}`)) {
+      void enforceWorkspaceOnlyUseWorkspaceSettings();
     }
     void reconcileServerState(outputChannel);
   });
@@ -234,6 +247,23 @@ async function cleanupLegacyToolSelectionSettings(): Promise<void> {
   }
   if (updates.length > 0) {
     await Promise.all(updates);
+  }
+}
+
+async function enforceWorkspaceOnlyUseWorkspaceSettings(): Promise<void> {
+  if (enforcingWorkspaceOnlySetting) {
+    return;
+  }
+  enforcingWorkspaceOnlySetting = true;
+  try {
+    const removed = await clearUseWorkspaceSettingsFromUserSettings();
+    if (!removed) {
+      return;
+    }
+    logWarn(USE_WORKSPACE_SETTINGS_USER_SCOPE_WARNING);
+    void vscode.window.showWarningMessage(WORKSPACE_ONLY_SETTING_REMOVED_MESSAGE);
+  } finally {
+    enforcingWorkspaceOnlySetting = false;
   }
 }
 
@@ -686,7 +716,7 @@ function updateStatusBar(info: ServerStatusInfo): void {
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & { action?: 'configureExposure' | 'configureEnabled' | 'dump' | 'help' | 'restartManager' }> = [
+  const items: Array<vscode.QuickPickItem & { action?: 'configureExposure' | 'configureEnabled' | 'dump' | 'help' | 'restartManager' | 'openSettings' }> = [
     {
       label: '$(settings-gear) Configure Exposure Tools',
       description: 'Choose tools available for MCP enablement',
@@ -706,6 +736,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       label: '$(sync) Restart Manager',
       description: 'Restart the manager process',
       action: 'restartManager',
+    },
+    {
+      label: '$(settings) Open Settings',
+      description: 'Open settings for this extension',
+      action: 'openSettings',
     },
     { label: 'Help', kind: vscode.QuickPickItemKind.Separator },
     {
@@ -745,6 +780,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 
   if (selection.action === 'restartManager') {
     await restartManagerFromMenu();
+    return;
+  }
+
+  if (selection.action === 'openSettings') {
+    await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:jiangxiaoxu.lm-tools-bridge');
   }
 }
 

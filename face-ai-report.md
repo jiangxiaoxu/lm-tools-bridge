@@ -18,7 +18,7 @@ Output: MCP server listening, status bar Running, Manager heartbeat running
 
 Flow: MCP tool 调用
 Entry: HTTP POST /mcp
-Path: handleMcpHttpRequest -> invokeExposedTool -> lm.invokeTool -> buildToolResult
+Path: handleMcpHttpRequest -> invokeExposedTool -> (custom tool invoke or lm.invokeTool) -> buildToolResult
 Output: content.text(仅来自 LanguageModelTextPart) 或 structuredContent(优先来自 LanguageModelDataPart JSON object,支持 application/json; charset=... 与 *+json)
 
 Flow: Manager handshake 与转发
@@ -30,6 +30,11 @@ Flow: 自定义搜索工具
 Entry: lm_findFiles / lm_findTextInFiles
 Path: executeFindFilesSearch / executeFindTextInFilesSearch -> ripgrep
 Output: 文件路径或匹配列表
+
+Flow: 自定义诊断工具
+Entry: lm_getErrors
+Path: runGetErrorsTool -> vscode.languages.getDiagnostics -> normalize/filter/cap -> buildToolResult
+Output: 稳定 structuredContent(source/scope/severities/capped/totalDiagnostics/files, files 无 uri, diagnostics 含 preview/previewUnavailable/previewTruncated) + 可读摘要文本
 
 Flow: clangd MCP 工具调用
 Entry: lm_clangd_* tools
@@ -96,6 +101,12 @@ Entry: lm_findFiles / lm_findTextInFiles
 Path: executeFindFilesSearch / executeFindTextInFilesSearch
 Files: src/searchTools.ts
 Log: "Results capped"
+
+Task: 诊断结构化输出
+Entry: lm_getErrors
+Path: runGetErrorsTool -> vscode.languages.getDiagnostics -> normalize/filter/preview/cap
+Files: src/tooling.ts, src/clangd/workspacePath.ts
+Log: "filePath must be a string when provided.", "Tool not found or disabled"
 
 Task: 变更输出格式
 Entry: tools.responseFormat
@@ -207,6 +218,12 @@ Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
 Invariant: responseFormat 控制 content 与 structuredContent 的存在.
 Invariant: 转发 LM tool 结果时,content.text 仅来自 LanguageModelTextPart; LanguageModelDataPart(JSON mime,含 application/json; charset=... 与 *+json) 的 JSON object 优先作为 structuredContent; 无可用 JSON object 时 structuredContent 回退为 blocks 包装.
 Invariant: 未启用或被禁用的工具返回 MethodNotFound.
+Invariant: `lm_getErrors` 仅使用 VS Code diagnostics 数据源(`vscode.languages.getDiagnostics`),不依赖 `copilot_getErrors`.
+Invariant: `lm_getErrors` 默认 severity 过滤为 `error` + `warning`,并支持通过 `severities` 覆盖.
+Invariant: `lm_getErrors` 支持 `{}` 全局查询和 `{ filePath }` 单文件查询,全局模式包含 workspace 外诊断.
+Invariant: `lm_getErrors` 输出坐标统一为 1-based,并将 `code` 规范为 string|null,`tags` 规范为 string[]; files[] 不包含 `uri`.
+Invariant: `lm_getErrors` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
+Invariant: `lm_getErrors` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
 Invariant: `lmToolsBridge.clangd.enabled=false` 时不暴露任何 lm_clangd_* 工具.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
@@ -235,6 +252,22 @@ Code: invokeExposedTool
 Case: tool input 非 object
 Result: error payload + inputSchema
 Code: invokeExposedTool
+
+Case: lm_getErrors filePath 非法
+Result: error payload(由 invokeExposedTool 统一包装)
+Code: runGetErrorsTool -> resolveInputFilePath
+
+Case: lm_getErrors 结果超出 maxResults
+Result: structuredContent.capped=true
+Code: runGetErrorsTool -> applyLmGetErrorsLimit
+
+Case: lm_getErrors 预览不可读
+Result: preview="" + previewUnavailable=true
+Code: runGetErrorsTool -> readRangePreviewFromFile
+
+Case: lm_getErrors 预览跨行过长
+Result: previewTruncated=true(最多 10 行)
+Code: runGetErrorsTool -> computePreviewEndLine
 
 Case: workspace 无匹配
 Result: ERROR_NO_MATCH
@@ -291,6 +324,7 @@ Seed: showToolConfigPanel | Use: 分组树形配置页入口
 Seed: buildGroupedToolSections | Use: 来源分组与组状态计算
 Seed: invokeExposedTool | Use: MCP tool 调用入口
 Seed: buildToolResult | Use: 输出格式组装
+Seed: runGetErrorsTool | Use: Problems 诊断结构化输出入口
 Seed: applySchemaDefaults | Use: schema defaults 注入
 Seed: applyInputDefaultsToToolInput | Use: 输入 defaults 注入
 Seed: lmToolsBridge.requestWorkspaceMCPServer | Use: Manager handshake
@@ -301,6 +335,7 @@ Seed: getClangdToolsSnapshot | Use: clangd 工具暴露入口
 Seed: ensureClangdRunning | Use: clangd 按需启动入口
 Seed: sendRequestWithAutoStart | Use: clangd 请求统一入口
 Seed: resolveInputFilePath | Use: clangd filePath 输入解析入口
+Seed: resolveStructuredPath | Use: 诊断路径映射到 workspacePath
 Seed: toStructuredLocation | Use: clangd 结构化位置对象规范化入口
 Seed: formatSummaryPath | Use: clangd 摘要路径渲染入口
 Seed: lm_clangd_status | Use: clangd 可用性诊断
@@ -312,6 +347,7 @@ Seed: lm_clangd_symbolReferences | Use: clangd 引用关系摘要
 Seed: lm_clangd_symbolImplementations | Use: clangd 实现点摘要
 Seed: lm_clangd_callHierarchy | Use: clangd 调用关系摘要
 Seed: lm_clangd_lspRequest | Use: clangd 受限透传调用
+Seed: lm_getErrors | Use: VS Code diagnostics 查询
 
 ## 默认与内置列表的映射
 Default enabled source: DEFAULT_ENABLED_TOOL_NAMES in src/tooling.ts

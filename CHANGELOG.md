@@ -28,6 +28,9 @@ Maintenance rule:
 - Updated `lm_clangd_status` and `lm_clangd_lspRequest` to return human-readable text content while preserving structured JSON objects in `structuredContent`.
 - Updated LM tool forwarding output mapping: `LanguageModelDataPart` JSON object is now passed through as `structuredContent`, while `LanguageModelTextPart` is used for `content.text` to avoid duplicate wrapping.
 - Refined LM forwarding mapping: `content.text` now only forwards `LanguageModelTextPart`, and JSON `LanguageModelDataPart` mime detection now accepts `application/json; charset=...` and `*+json` variants for `structuredContent`.
+- Enforced `lmToolsBridge.useWorkspaceSettings` as workspace-only at runtime by auto-removing User-scope values and showing a warning.
+- Added `Open Settings` action to the status menu for direct navigation to extension settings.
+- Added a new custom diagnostics tool `lm_getErrors` backed by `vscode.languages.getDiagnostics`, with stable structured output (`source/scope/severities/capped/totalDiagnostics/files`), optional `filePath` filter, severity/maxResults controls, no `uri` field in file entries, and per-diagnostic source preview (`startLine..endLine`, capped at 10 lines with availability/truncation flags).
 - Updated `lm_clangd_typeHierarchy` to return a compact summary payload (`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`) with bounded expansion controls.
 - Replaced `lm_clangd_typeHierarchy` input options `resolve/direction` with `maxSuperDepth`, `maxSubDepth`, and `maxSubBreadth`.
 - Improved `sourceByClass.startLine` for Unreal C++ types: when the previous line is `UCLASS(...)` or `USTRUCT(...)`, the macro line is reported as the start line.
@@ -53,6 +56,9 @@ Maintenance rule:
 - 将 `lm_clangd_status` 与 `lm_clangd_lspRequest` 的 `content` 调整为人类可读文本,同时保留 `structuredContent` 结构化对象.
 - 调整 LM tool 转发输出映射: `LanguageModelDataPart` 的 JSON object 直通 `structuredContent`,`LanguageModelTextPart` 仅作为 `content.text`,避免重复包装.
 - 细化 LM tool 转发映射: `content.text` 仅透传 `LanguageModelTextPart`,并增强 `LanguageModelDataPart` 的 JSON mime 识别(`application/json; charset=...` 与 `*+json` 变体)以稳定透传 `structuredContent`.
+- 在运行时将 `lmToolsBridge.useWorkspaceSettings` 强制为仅工作区级: 若出现在 User 级会自动移除并提示.
+- 在状态菜单新增 `Open Settings` 操作,可直接跳转到扩展设置页.
+- 新增自定义诊断工具 `lm_getErrors`,基于 `vscode.languages.getDiagnostics` 输出稳定结构化结果(`source/scope/severities/capped/totalDiagnostics/files`),并支持 `filePath` 过滤与 severity/maxResults 控制; 文件项不再包含 `uri`,且每条诊断附带 `startLine..endLine` 代码预览(最多 10 行,带可用性/截断标记).
 - 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`),并支持有界展开。
 - 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`, `maxSubDepth`, `maxSubBreadth`。
 - 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行。

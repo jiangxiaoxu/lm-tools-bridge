@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { TextDecoder } from 'node:util';
+import * as path from 'node:path';
 import * as z from 'zod';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
 import { getClangdToolsSnapshot } from './clangd';
+import { resolveInputFilePath, resolveStructuredPath } from './clangd/workspacePath';
 import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
 import { showToolConfigPanel, type ToolConfigPanelResult } from './toolConfigPanel';
 import {
@@ -38,6 +40,13 @@ const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
+const LM_GET_ERRORS_TOOL_NAME = 'lm_getErrors';
+const LM_GET_ERRORS_DEFAULT_MAX_RESULTS = 500;
+const LM_GET_ERRORS_MIN_MAX_RESULTS = 1;
+const LM_GET_ERRORS_PREVIEW_MAX_LINES = 10;
+const LM_GET_ERRORS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
+type LmGetErrorsSeverity = typeof LM_GET_ERRORS_ALLOWED_SEVERITIES[number];
+const LM_GET_ERRORS_DEFAULT_SEVERITIES: readonly LmGetErrorsSeverity[] = ['error', 'warning'];
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
@@ -54,6 +63,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_clangd_symbolImplementations',
   'lm_clangd_callHierarchy',
   'lm_clangd_lspRequest',
+  'lm_getErrors',
   'copilot_getErrors',
   'copilot_readProjectStructure',
 ];
@@ -205,6 +215,67 @@ const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   },
   required: ['query', 'isRegexp'],
 };
+
+const LM_GET_ERRORS_DESCRIPTION = [
+  'Read diagnostics from VS Code Problems data source using vscode.languages.getDiagnostics.',
+  'Use this tool for stable machine-readable diagnostics instead of prompt-tsx output.',
+  'By default it returns only error and warning diagnostics.',
+  'Optional filePath filters diagnostics to a single file. Supports WorkspaceName/... and absolute paths.',
+].join('\n');
+
+const LM_GET_ERRORS_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    filePath: {
+      type: 'string',
+      description: 'Optional file path filter. Supports WorkspaceName/... and absolute paths.',
+    },
+    severities: {
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: [...LM_GET_ERRORS_ALLOWED_SEVERITIES],
+      },
+      description: 'Optional severity filter. Allowed values: error, warning, information, hint. Defaults to error+warning.',
+    },
+    maxResults: {
+      type: 'number',
+      description: 'Maximum diagnostics to return across all files. Defaults to 500, minimum is 1.',
+      default: LM_GET_ERRORS_DEFAULT_MAX_RESULTS,
+      minimum: LM_GET_ERRORS_MIN_MAX_RESULTS,
+    },
+  },
+};
+
+interface LmGetErrorsNormalizedDiagnostic {
+  severity: LmGetErrorsSeverity;
+  message: string;
+  source: string | null;
+  code: string | null;
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  tags: string[];
+  preview: string;
+  previewUnavailable: boolean;
+  previewTruncated: boolean;
+}
+
+interface LmGetErrorsFileResult {
+  absolutePath: string;
+  workspacePath: string | null;
+  diagnostics: LmGetErrorsNormalizedDiagnostic[];
+}
+
+interface LmGetErrorsPayload {
+  source: 'vscode.languages.getDiagnostics';
+  scope: 'workspace+external' | 'single-file';
+  severities: LmGetErrorsSeverity[];
+  capped: boolean;
+  totalDiagnostics: number;
+  files: LmGetErrorsFileResult[];
+}
 
 const schemaDefaultOverrideWarnings = new Set<string>();
 
@@ -1713,6 +1784,17 @@ function buildFindFilesToolDefinition(): CustomToolDefinition {
   };
 }
 
+function buildGetErrorsToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_GET_ERRORS_TOOL_NAME,
+    description: LM_GET_ERRORS_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_GET_ERRORS_SCHEMA,
+    isCustom: true,
+    invoke: runGetErrorsTool,
+  };
+}
+
 async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   try {
     const payload = await executeFindTextInFilesSearch(input);
@@ -1741,6 +1823,420 @@ async function runFindFilesTool(input: Record<string, unknown>): Promise<vscode.
       content: [new vscode.LanguageModelTextPart(message)],
     };
   }
+}
+
+async function runGetErrorsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const getDiagnostics = (
+    vscode.languages as { getDiagnostics?: typeof vscode.languages.getDiagnostics }
+  ).getDiagnostics;
+  if (typeof getDiagnostics !== 'function') {
+    throw new Error('vscode.languages.getDiagnostics is not available in this VS Code version.');
+  }
+
+  const filePathValue = input.filePath;
+  if (filePathValue !== undefined && typeof filePathValue !== 'string') {
+    throw new Error('filePath must be a string when provided.');
+  }
+  const requestedFilePath = typeof filePathValue === 'string' ? filePathValue.trim() : undefined;
+  if (requestedFilePath !== undefined && requestedFilePath.length === 0) {
+    throw new Error('filePath must be a non-empty string when provided.');
+  }
+
+  const severities = parseLmGetErrorsSeverities(input.severities);
+  const severitySet = new Set<LmGetErrorsSeverity>(severities);
+  const maxResults = parseLmGetErrorsMaxResults(input.maxResults);
+  const diagnosticsByUri: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> = requestedFilePath
+    ? getDiagnosticsForSingleFile(getDiagnostics, requestedFilePath)
+    : getDiagnostics();
+  const scope: LmGetErrorsPayload['scope'] = requestedFilePath ? 'single-file' : 'workspace+external';
+
+  const files = await collectLmGetErrorsFiles(diagnosticsByUri, severitySet);
+  const totalDiagnostics = files.reduce((count, file) => count + file.diagnostics.length, 0);
+  const limited = applyLmGetErrorsLimit(files, maxResults);
+  const payload: LmGetErrorsPayload = {
+    source: 'vscode.languages.getDiagnostics',
+    scope,
+    severities,
+    capped: limited.capped,
+    totalDiagnostics,
+    files: limited.files,
+  };
+  const summaryText = formatLmGetErrorsSummary(payload, limited.returnedDiagnostics);
+  return {
+    content: [
+      new vscode.LanguageModelTextPart(summaryText),
+      vscode.LanguageModelDataPart.json(payload),
+    ],
+  };
+}
+
+function getDiagnosticsForSingleFile(
+  getDiagnostics: typeof vscode.languages.getDiagnostics,
+  filePath: string,
+): ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> {
+  const resolved = resolveInputFilePath(filePath);
+  const uri = vscode.Uri.file(resolved.absoluteFilePath);
+  return [[uri, getDiagnostics(uri)]];
+}
+
+async function collectLmGetErrorsFiles(
+  entries: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]>,
+  severities: ReadonlySet<LmGetErrorsSeverity>,
+): Promise<LmGetErrorsFileResult[]> {
+  const files: LmGetErrorsFileResult[] = [];
+  const lineCache = new Map<string, string[] | null>();
+  for (const [uri, diagnostics] of entries) {
+    const filePath = resolveLmGetErrorsFilePath(uri);
+    const normalizedDiagnostics: LmGetErrorsNormalizedDiagnostic[] = [];
+    for (const diagnostic of diagnostics) {
+      const normalized = await normalizeDiagnosticForLmGetErrors(
+        diagnostic,
+        filePath.readableFilePath,
+        lineCache,
+      );
+      if (!severities.has(normalized.severity)) {
+        continue;
+      }
+      normalizedDiagnostics.push(normalized);
+    }
+    normalizedDiagnostics.sort(compareLmGetErrorsDiagnostics);
+    if (normalizedDiagnostics.length === 0) {
+      continue;
+    }
+    files.push({
+      absolutePath: filePath.absolutePath,
+      workspacePath: filePath.workspacePath,
+      diagnostics: normalizedDiagnostics,
+    });
+  }
+  files.sort((left, right) => {
+    const absolutePathCompare = left.absolutePath.localeCompare(right.absolutePath);
+    if (absolutePathCompare !== 0) {
+      return absolutePathCompare;
+    }
+    return (left.workspacePath ?? '').localeCompare(right.workspacePath ?? '');
+  });
+  return files;
+}
+
+function resolveLmGetErrorsFilePath(uri: vscode.Uri): {
+  absolutePath: string;
+  workspacePath: string | null;
+  readableFilePath: string | null;
+} {
+  const fsPath = uri.fsPath.trim();
+  if (uri.scheme === 'file' && fsPath.length > 0) {
+    const absolutePath = normalizeLmGetErrorsPath(path.resolve(fsPath));
+    const resolved = resolveStructuredPath(absolutePath);
+    return {
+      absolutePath: resolved.absolutePath,
+      workspacePath: resolved.workspacePath,
+      readableFilePath: path.resolve(fsPath),
+    };
+  }
+  if (fsPath.length > 0 && (path.isAbsolute(fsPath) || startsWithWindowsAbsolutePath(fsPath))) {
+    return {
+      absolutePath: normalizeLmGetErrorsPath(path.resolve(fsPath)),
+      workspacePath: null,
+      readableFilePath: path.resolve(fsPath),
+    };
+  }
+  return {
+    absolutePath: uri.toString(),
+    workspacePath: null,
+    readableFilePath: null,
+  };
+}
+
+function normalizeLmGetErrorsPath(value: string): string {
+  return value.replace(/\\/g, '/');
+}
+
+async function normalizeDiagnosticForLmGetErrors(
+  diagnostic: vscode.Diagnostic,
+  readableFilePath: string | null,
+  lineCache: Map<string, string[] | null>,
+): Promise<LmGetErrorsNormalizedDiagnostic> {
+  const startLine = diagnostic.range.start.line + 1;
+  const startCharacter = diagnostic.range.start.character + 1;
+  const endLine = diagnostic.range.end.line + 1;
+  const endCharacter = diagnostic.range.end.character + 1;
+  const previewInfo = await readRangePreviewFromFile(
+    readableFilePath,
+    startLine,
+    endLine,
+    lineCache,
+  );
+  return {
+    severity: mapDiagnosticSeverityToLmGetErrors(diagnostic.severity),
+    message: sanitizeLmGetErrorsMessage(diagnostic.message),
+    source: typeof diagnostic.source === 'string' && diagnostic.source.length > 0
+      ? diagnostic.source
+      : null,
+    code: normalizeLmGetErrorsDiagnosticCode(diagnostic.code),
+    startLine,
+    startCharacter,
+    endLine,
+    endCharacter,
+    tags: normalizeLmGetErrorsTags(diagnostic.tags),
+    preview: previewInfo.preview,
+    previewUnavailable: previewInfo.previewUnavailable,
+    previewTruncated: previewInfo.previewTruncated,
+  };
+}
+
+function normalizePreviewRange(startLine: number, endLine: number): { startLine: number; endLine: number } {
+  const normalizedStart = Number.isFinite(startLine) ? Math.max(1, Math.floor(startLine)) : 1;
+  const normalizedEndRaw = Number.isFinite(endLine) ? Math.max(1, Math.floor(endLine)) : normalizedStart;
+  const normalizedEnd = Math.max(normalizedStart, normalizedEndRaw);
+  return {
+    startLine: normalizedStart,
+    endLine: normalizedEnd,
+  };
+}
+
+function computePreviewEndLine(
+  startLine: number,
+  endLine: number,
+  maxLines: number,
+): { effectiveEndLine: number; truncated: boolean } {
+  const safeMaxLines = Math.max(1, Math.floor(maxLines));
+  const maxEndLine = startLine + safeMaxLines - 1;
+  if (endLine > maxEndLine) {
+    return {
+      effectiveEndLine: maxEndLine,
+      truncated: true,
+    };
+  }
+  return {
+    effectiveEndLine: endLine,
+    truncated: false,
+  };
+}
+
+async function readRangePreviewFromFile(
+  readableFilePath: string | null,
+  startLine: number,
+  endLine: number,
+  lineCache: Map<string, string[] | null>,
+): Promise<{ preview: string; previewUnavailable: boolean; previewTruncated: boolean }> {
+  if (!readableFilePath) {
+    return {
+      preview: '',
+      previewUnavailable: true,
+      previewTruncated: false,
+    };
+  }
+  const lines = await getLmGetErrorsFileLines(readableFilePath, lineCache);
+  if (!lines || lines.length === 0) {
+    return {
+      preview: '',
+      previewUnavailable: true,
+      previewTruncated: false,
+    };
+  }
+  const normalizedRange = normalizePreviewRange(startLine, endLine);
+  const safeStart = Math.min(normalizedRange.startLine, lines.length);
+  const safeEnd = Math.min(Math.max(normalizedRange.endLine, safeStart), lines.length);
+  const endWithCap = computePreviewEndLine(safeStart, safeEnd, LM_GET_ERRORS_PREVIEW_MAX_LINES);
+  const previewLines: string[] = [];
+  for (let line = safeStart; line <= endWithCap.effectiveEndLine; line += 1) {
+    previewLines.push(lines[line - 1] ?? '');
+  }
+  return {
+    preview: previewLines.join('\n').trimEnd(),
+    previewUnavailable: false,
+    previewTruncated: endWithCap.truncated,
+  };
+}
+
+async function getLmGetErrorsFileLines(
+  filePath: string,
+  cache: Map<string, string[] | null>,
+): Promise<string[] | null> {
+  if (!cache.has(filePath)) {
+    try {
+      const uri = vscode.Uri.file(filePath);
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const text = new TextDecoder('utf-8').decode(bytes);
+      cache.set(filePath, text.split(/\r?\n/u));
+    } catch {
+      cache.set(filePath, null);
+    }
+  }
+  return cache.get(filePath) ?? null;
+}
+
+function mapDiagnosticSeverityToLmGetErrors(severity: vscode.DiagnosticSeverity): LmGetErrorsSeverity {
+  if (severity === vscode.DiagnosticSeverity.Error) {
+    return 'error';
+  }
+  if (severity === vscode.DiagnosticSeverity.Warning) {
+    return 'warning';
+  }
+  if (severity === vscode.DiagnosticSeverity.Hint) {
+    return 'hint';
+  }
+  return 'information';
+}
+
+function sanitizeLmGetErrorsMessage(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim();
+}
+
+function normalizeLmGetErrorsDiagnosticCode(code: vscode.Diagnostic['code']): string | null {
+  if (typeof code === 'string') {
+    return code;
+  }
+  if (typeof code === 'number') {
+    return String(code);
+  }
+  if (code && typeof code === 'object') {
+    const value = (code as { value?: unknown }).value;
+    if (typeof value === 'string' || typeof value === 'number') {
+      return String(value);
+    }
+  }
+  return null;
+}
+
+function normalizeLmGetErrorsTags(tags: readonly vscode.DiagnosticTag[] | undefined): string[] {
+  if (!tags || tags.length === 0) {
+    return [];
+  }
+  const values = new Set<string>();
+  for (const tag of tags) {
+    if (tag === vscode.DiagnosticTag.Unnecessary) {
+      values.add('unnecessary');
+      continue;
+    }
+    if (tag === vscode.DiagnosticTag.Deprecated) {
+      values.add('deprecated');
+      continue;
+    }
+    values.add(String(tag));
+  }
+  return [...values];
+}
+
+function compareLmGetErrorsDiagnostics(
+  left: LmGetErrorsNormalizedDiagnostic,
+  right: LmGetErrorsNormalizedDiagnostic,
+): number {
+  if (left.startLine !== right.startLine) {
+    return left.startLine - right.startLine;
+  }
+  if (left.startCharacter !== right.startCharacter) {
+    return left.startCharacter - right.startCharacter;
+  }
+  if (left.endLine !== right.endLine) {
+    return left.endLine - right.endLine;
+  }
+  if (left.endCharacter !== right.endCharacter) {
+    return left.endCharacter - right.endCharacter;
+  }
+  return left.message.localeCompare(right.message);
+}
+
+function parseLmGetErrorsSeverities(input: unknown): LmGetErrorsSeverity[] {
+  if (!Array.isArray(input)) {
+    return [...LM_GET_ERRORS_DEFAULT_SEVERITIES];
+  }
+  const values: LmGetErrorsSeverity[] = [];
+  const seen = new Set<LmGetErrorsSeverity>();
+  for (const item of input) {
+    if (typeof item !== 'string') {
+      continue;
+    }
+    const normalized = item.trim().toLowerCase();
+    if (!isLmGetErrorsSeverity(normalized)) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    values.push(normalized);
+  }
+  if (values.length === 0) {
+    return [...LM_GET_ERRORS_DEFAULT_SEVERITIES];
+  }
+  return values;
+}
+
+function isLmGetErrorsSeverity(value: string): value is LmGetErrorsSeverity {
+  return (LM_GET_ERRORS_ALLOWED_SEVERITIES as readonly string[]).includes(value);
+}
+
+function parseLmGetErrorsMaxResults(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return LM_GET_ERRORS_DEFAULT_MAX_RESULTS;
+  }
+  const rounded = Math.floor(value);
+  if (rounded < LM_GET_ERRORS_MIN_MAX_RESULTS) {
+    return LM_GET_ERRORS_DEFAULT_MAX_RESULTS;
+  }
+  return rounded;
+}
+
+function applyLmGetErrorsLimit(
+  files: readonly LmGetErrorsFileResult[],
+  maxResults: number,
+): { files: LmGetErrorsFileResult[]; returnedDiagnostics: number; capped: boolean } {
+  const limitedFiles: LmGetErrorsFileResult[] = [];
+  let remaining = maxResults;
+  let returnedDiagnostics = 0;
+  for (const file of files) {
+    if (remaining <= 0) {
+      break;
+    }
+    const diagnostics = file.diagnostics.slice(0, remaining);
+    if (diagnostics.length === 0) {
+      continue;
+    }
+    limitedFiles.push({
+      absolutePath: file.absolutePath,
+      workspacePath: file.workspacePath,
+      diagnostics,
+    });
+    returnedDiagnostics += diagnostics.length;
+    remaining -= diagnostics.length;
+  }
+  const totalDiagnostics = files.reduce((count, file) => count + file.diagnostics.length, 0);
+  return {
+    files: limitedFiles,
+    returnedDiagnostics,
+    capped: totalDiagnostics > returnedDiagnostics,
+  };
+}
+
+function formatLmGetErrorsSummary(payload: LmGetErrorsPayload, returnedDiagnostics: number): string {
+  const lines: string[] = [
+    'Diagnostics summary',
+    `source: ${payload.source}`,
+    `scope: ${payload.scope}`,
+    `severities: ${payload.severities.join(', ')}`,
+    `files: ${payload.files.length}`,
+    `diagnostics: ${returnedDiagnostics}/${payload.totalDiagnostics}${payload.capped ? ' (capped)' : ''}`,
+  ];
+  if (payload.totalDiagnostics === 0) {
+    lines.push('No diagnostics found.');
+    return lines.join('\n');
+  }
+  for (const file of payload.files) {
+    lines.push('---');
+    lines.push(`file: ${file.workspacePath ?? file.absolutePath}`);
+    for (const diagnostic of file.diagnostics) {
+      const codePart = diagnostic.code ? ` code=${diagnostic.code}` : '';
+      const sourcePart = diagnostic.source ? ` source=${diagnostic.source}` : '';
+      const previewUnavailablePart = diagnostic.previewUnavailable ? ' preview unavailable' : '';
+      const previewTruncatedPart = diagnostic.previewTruncated ? ' preview truncated' : '';
+      lines.push(
+        `[${diagnostic.severity}] ${diagnostic.startLine}:${diagnostic.startCharacter}-${diagnostic.endLine}:${diagnostic.endCharacter}${sourcePart}${codePart}${previewUnavailablePart}${previewTruncatedPart} ${diagnostic.message}`,
+      );
+    }
+  }
+  return lines.join('\n');
 }
 
 function toolResultToStructuredBlocks(
@@ -2017,6 +2513,7 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
   return [
     buildFindFilesToolDefinition(),
     buildFindTextInFilesToolDefinition(),
+    buildGetErrorsToolDefinition(),
     ...getClangdToolsSnapshot(),
   ];
 }

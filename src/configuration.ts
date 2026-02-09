@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 export const CONFIG_SECTION = 'lmToolsBridge';
 export const CONFIG_USE_WORKSPACE_SETTINGS = 'useWorkspaceSettings';
+export const USE_WORKSPACE_SETTINGS_USER_SCOPE_WARNING = 'lmToolsBridge.useWorkspaceSettings is set in User settings but is only honored in Workspace settings.';
 
 let workspaceSettingWarningEmitted = false;
 let warnLogger: ((message: string) => void) | undefined;
@@ -24,9 +25,19 @@ export function isWorkspaceSettingsEnabled(resource?: vscode.Uri): boolean {
   if (!workspaceSettingWarningEmitted && inspection?.globalValue === true) {
     workspaceSettingWarningEmitted = true;
     const logger = warnLogger ?? console.warn;
-    logger('lmToolsBridge.useWorkspaceSettings is set in User settings but is only honored in Workspace settings.');
+    logger(USE_WORKSPACE_SETTINGS_USER_SCOPE_WARNING);
   }
   return false;
+}
+
+export async function clearUseWorkspaceSettingsFromUserSettings(resource?: vscode.Uri): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const inspection = config.inspect<boolean>(CONFIG_USE_WORKSPACE_SETTINGS);
+  if (!inspection || inspection.globalValue === undefined) {
+    return false;
+  }
+  await config.update(CONFIG_USE_WORKSPACE_SETTINGS, undefined, vscode.ConfigurationTarget.Global);
+  return true;
 }
 
 export async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.ConfigurationTarget> {

@@ -19,7 +19,7 @@ Output: MCP server listening, status bar Running, Manager heartbeat running
 Flow: MCP tool 调用
 Entry: HTTP POST /mcp
 Path: handleMcpHttpRequest -> invokeExposedTool -> lm.invokeTool -> buildToolResult
-Output: content.text(优先来自 LanguageModelTextPart) 或 structuredContent(优先来自 LanguageModelDataPart application/json object)
+Output: content.text(仅来自 LanguageModelTextPart) 或 structuredContent(优先来自 LanguageModelDataPart JSON object,支持 application/json; charset=... 与 *+json)
 
 Flow: Manager handshake 与转发
 Entry: lmToolsBridge.requestWorkspaceMCPServer
@@ -205,7 +205,7 @@ Invariant: Exposure UI 中“全只读分组”不显示组级复选框, 避免�
 Invariant: tool input 必须是 object, 否则返回 error payload.
 Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
 Invariant: responseFormat 控制 content 与 structuredContent 的存在.
-Invariant: 转发 LM tool 结果时,LanguageModelDataPart(`application/json`) 的 JSON object 优先作为 structuredContent,LanguageModelTextPart 作为 content.text; 无可用 JSON object 时 structuredContent 回退为 blocks 包装.
+Invariant: 转发 LM tool 结果时,content.text 仅来自 LanguageModelTextPart; LanguageModelDataPart(JSON mime,含 application/json; charset=... 与 *+json) 的 JSON object 优先作为 structuredContent; 无可用 JSON object 时 structuredContent 回退为 blocks 包装.
 Invariant: 未启用或被禁用的工具返回 MethodNotFound.
 Invariant: `lmToolsBridge.clangd.enabled=false` 时不暴露任何 lm_clangd_* 工具.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.

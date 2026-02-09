@@ -1561,10 +1561,7 @@ function serializedTextPartsToText(parts: readonly Record<string, unknown>[]): s
       segments.push(part.text);
     }
   }
-  if (segments.length > 0) {
-    return joinPromptTsxTextParts(segments);
-  }
-  return serializedToolResultToText(parts);
+  return joinPromptTsxTextParts(segments);
 }
 
 function tryParseJsonObject(text: string): Record<string, unknown> | undefined {
@@ -1580,11 +1577,31 @@ function tryParseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
+function normalizeMimeType(mimeType: string): string {
+  const separatorIndex = mimeType.indexOf(';');
+  const rawType = separatorIndex === -1 ? mimeType : mimeType.slice(0, separatorIndex);
+  return rawType.trim().toLowerCase();
+}
+
+function isJsonMimeType(mimeType: unknown): boolean {
+  if (typeof mimeType !== 'string') {
+    return false;
+  }
+  const normalized = normalizeMimeType(mimeType);
+  if (normalized.endsWith('+json')) {
+    return true;
+  }
+  return normalized === 'application/json'
+    || normalized === 'application/x-json'
+    || normalized === 'text/json'
+    || normalized === 'text/x-json';
+}
+
 function extractStructuredContentFromDataParts(
   parts: readonly Record<string, unknown>[],
 ): Record<string, unknown> | undefined {
   for (const part of parts) {
-    if (part.type !== 'data' || part.mimeType !== 'application/json' || typeof part.text !== 'string') {
+    if (part.type !== 'data' || !isJsonMimeType(part.mimeType) || typeof part.text !== 'string') {
       continue;
     }
     const parsed = tryParseJsonObject(part.text);
@@ -1599,15 +1616,15 @@ function resolveStructuredToolResultPayload(
   result: vscode.LanguageModelToolResult,
   serialized: readonly Record<string, unknown>[],
 ): Record<string, unknown> {
+  const structuredFromData = extractStructuredContentFromDataParts(serialized);
+  if (structuredFromData) {
+    return structuredFromData;
+  }
   const structuredFromTool = (
     result as vscode.LanguageModelToolResult & { structuredContent?: unknown }
   ).structuredContent;
   if (isPlainObject(structuredFromTool)) {
     return structuredFromTool as Record<string, unknown>;
-  }
-  const structuredFromData = extractStructuredContentFromDataParts(serialized);
-  if (structuredFromData) {
-    return structuredFromData;
   }
   return { blocks: toolResultToStructuredBlocks(serialized) };
 }
@@ -1798,7 +1815,7 @@ function toolResultContentToText(content: readonly unknown[]): string {
 }
 
 function decodeTextData(part: vscode.LanguageModelDataPart): string | undefined {
-  if (part.mimeType.startsWith('text/') || part.mimeType === 'application/json') {
+  if (part.mimeType.startsWith('text/') || isJsonMimeType(part.mimeType)) {
     return new TextDecoder('utf-8').decode(part.data);
   }
 

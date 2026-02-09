@@ -76,7 +76,8 @@ User guidance:
 
 ### Tool Output Mapping
 - LM tool `LanguageModelTextPart` is used as `content.text`.
-- LM tool `LanguageModelDataPart` with `application/json` is parsed as JSON object and used as `structuredContent` when possible.
+- `content.text` is forwarded from `LanguageModelTextPart` only, without falling back to `LanguageModelDataPart`.
+- LM tool `LanguageModelDataPart` with JSON mime type (`application/json`, `application/json; charset=utf-8`, or `*+json`) is parsed as JSON object and used as `structuredContent` when possible.
 - If no JSON object is available for `structuredContent`, bridge falls back to `{ blocks: [...] }`.
 
 ### Clangd Tools (Optional)
@@ -226,7 +227,8 @@ url = "http://127.0.0.1:47100/mcp"
 
 ### 工具输出映射
 - LM 工具的 `LanguageModelTextPart` 作为 `content.text`.
-- LM 工具的 `LanguageModelDataPart`(`application/json`) 会在可解析为 JSON object 时映射为 `structuredContent`.
+- `content.text` 只透传 `LanguageModelTextPart`,不会回退读取 `LanguageModelDataPart`.
+- LM 工具的 `LanguageModelDataPart` 在 JSON mime type(`application/json`,`application/json; charset=utf-8` 或 `*+json`) 且可解析为 JSON object 时映射为 `structuredContent`.
 - 当没有可用 JSON object 作为 `structuredContent` 时,bridge 回退为 `{ blocks: [...] }`.
 
 ### Clangd 工具(可选)

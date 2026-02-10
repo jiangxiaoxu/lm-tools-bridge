@@ -27,15 +27,19 @@ This README covers the current Manager-based version only.
 1. Configure MCP URL to `http://127.0.0.1:47100/mcp` (or custom manager port).
 2. Send `initialize`, keep the returned `Mcp-Session-Id` header.
 3. Call `lmToolsBridge.requestWorkspaceMCPServer` with `cwd`.
-4. Read `callTool` and `bridgedTools` from handshake `discovery`; read `lm-tools://schema/{name}` when schema is needed.
-5. Use `lmToolsBridge.callTool` or standard `tools/call`.
-6. If session header is lost/expired (`Missing Mcp-Session-Id` or `Unknown Mcp-Session-Id`), re-initialize and handshake again.
+4. Read `callTool`, `bridgedTools`, and `resourceTemplates` from handshake `discovery`.
+5. Compose tool/schema URIs with templates and tool `name` (`lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
+6. Use `lmToolsBridge.callTool` or standard `tools/call`.
+7. If session header is lost/expired, call `lmToolsBridge.requestWorkspaceMCPServer` again; manager can auto-recover a new session for handshake calls and returns a fresh `Mcp-Session-Id` header.
 
 ### Handshake Discovery Payload
 - A successful handshake includes `discovery` with:
 - `callTool`: dedicated manager bridge tool descriptor (`lmToolsBridge.callTool`) with inline `inputSchema`
-- `bridgedTools`: workspace MCP tools only (`name`, `description`, `toolUri`, `schemaUri`; `description` includes a simple `Input: { ... }` hint when schema is available)
-- `partial` and `errors`: indicates partial discovery and tool-list fetch failures
+- `bridgedTools`: workspace MCP tools only (`name`, `description`; `description` includes a simple `Input: { ... }` hint when schema is available)
+- `resourceTemplates`: URI templates for composition (`lm-tools://tool/{name}`, `lm-tools://schema/{name}`)
+- `partial` and `issues`: `partial` is raised by `error`-level issues (for example `tools/list` failures); `warning` issues report non-blocking degradations such as schema-read failures
+- `issues` entry shape: `{ level: "error" | "warning", category, code, message, toolName?, details? }`
+- Input hints in discovery are schema-resource based (`lm-tools://schema/{name}`), and schema-read failures are reported in `issues` with `level: "warning"`.
 
 Example config:
 
@@ -74,6 +78,8 @@ User guidance:
 ### Troubleshooting
 - `workspace not set`:
   - Run `lmToolsBridge.requestWorkspaceMCPServer` with `cwd` first.
+- stale or missing `Mcp-Session-Id`:
+  - `lmToolsBridge.requestWorkspaceMCPServer` can auto-recover by issuing a new session header; if the client still caches old headers, re-initialize once.
 - `workspace not matched`:
   - Check `cwd` points inside the target workspace folder.
 - `resolved MCP server is offline`:

@@ -59,26 +59,35 @@ type ResolveResult = {
   errorKind?: ResolveErrorKind;
 };
 
-type DiscoveryErrorSource = 'tools/list';
+type DiscoveryIssueLevel = 'error' | 'warning';
+type DiscoveryIssueCategory = 'tools/list' | 'schema';
 
 interface HandshakeDiscoveryTool {
   name: string;
   description: string;
-  toolUri: string;
-  schemaUri: string;
   inputSchema?: Record<string, unknown>;
 }
 
-interface HandshakeDiscoveryError {
-  source: DiscoveryErrorSource;
+interface HandshakeDiscoveryResourceTemplate {
+  name: string;
+  uriTemplate: string;
+}
+
+interface HandshakeDiscoveryIssue {
+  level: DiscoveryIssueLevel;
+  category: DiscoveryIssueCategory;
+  code: string;
   message: string;
+  toolName?: string;
+  details?: string;
 }
 
 interface HandshakeDiscoveryPayload {
   callTool: HandshakeDiscoveryTool;
   bridgedTools: HandshakeDiscoveryTool[];
+  resourceTemplates: HandshakeDiscoveryResourceTemplate[];
   partial: boolean;
-  errors: HandshakeDiscoveryError[];
+  issues: HandshakeDiscoveryIssue[];
 }
 
 const TTL_MS = 1500;
@@ -111,6 +120,12 @@ const instances = new Map<string, InstanceRecord>();
 const reservedPorts = new Map<string, { port: number; reservedAt: number }>();
 const sessions = new Map<string, SessionState>();
 let lastNonEmptyAt = Date.now();
+let managerInternalRequestCounter = 0;
+
+function nextManagerRequestId(prefix: string): string {
+  managerInternalRequestCounter += 1;
+  return `${prefix}-${managerInternalRequestCounter}`;
+}
 
 function getLogPath(): string | undefined {
   return process.env[LOG_ENV];
@@ -511,12 +526,86 @@ function respondJsonRpcError(
   res.end(JSON.stringify({ jsonrpc: '2.0', id: id ?? null, error: { code, message } }));
 }
 
-function respondToolCall(res: http.ServerResponse, id: unknown, payload: unknown): void {
+function formatWorkspaceHandshakeSummary(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return JSON.stringify(payload);
+  }
+  const record = payload as Record<string, unknown>;
+  const target = (record.target && typeof record.target === 'object' && !Array.isArray(record.target))
+    ? record.target as Record<string, unknown>
+    : undefined;
+  const discovery = (record.discovery && typeof record.discovery === 'object' && !Array.isArray(record.discovery))
+    ? record.discovery as Record<string, unknown>
+    : undefined;
+  const discoveryIssues = Array.isArray(discovery?.issues) ? discovery.issues : [];
+  const workspaceFolders = Array.isArray(target?.workspaceFolders) ? target.workspaceFolders : [];
+  const bridgedTools = Array.isArray(discovery?.bridgedTools) ? discovery.bridgedTools : [];
+  const bridgedToolNames = bridgedTools
+    .map((tool) => {
+      if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
+        return '';
+      }
+      const name = (tool as { name?: unknown }).name;
+      return typeof name === 'string' ? name.trim() : '';
+    })
+    .filter((name) => name.length > 0);
+  const lines: string[] = [
+    'Workspace handshake summary',
+    `ok: ${record.ok === true ? 'true' : 'false'}`,
+    `cwd: ${typeof record.cwd === 'string' ? record.cwd : 'n/a'}`,
+    `target: ${String(target?.host ?? 'n/a')}:${String(target?.port ?? 'n/a')}`,
+    `workspaceFolders: ${workspaceFolders.length}`,
+    `online: ${record.online === true ? 'true' : record.online === false ? 'false' : 'n/a'}`,
+    `discovery.partial: ${discovery?.partial === true ? 'true' : 'false'}`,
+    `bridgedTools: ${bridgedTools.length}`,
+  ];
+  lines.push('tools:');
+  if (bridgedToolNames.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const toolName of bridgedToolNames) {
+      lines.push(`  - ${toolName}`);
+    }
+  }
+  if (discoveryIssues.length === 0) {
+    lines.push('Issues: none');
+  } else {
+    lines.push('Issues:');
+    for (const issue of discoveryIssues) {
+      if (!issue || typeof issue !== 'object') {
+        continue;
+      }
+      const issueRecord = issue as {
+        level?: unknown;
+        category?: unknown;
+        code?: unknown;
+        message?: unknown;
+        toolName?: unknown;
+        details?: unknown;
+      };
+      const level = typeof issueRecord.level === 'string' ? issueRecord.level : 'unknown';
+      const category = typeof issueRecord.category === 'string' ? issueRecord.category : 'unknown';
+      const code = typeof issueRecord.code === 'string' ? issueRecord.code : 'UNKNOWN';
+      const message = typeof issueRecord.message === 'string' ? issueRecord.message : '';
+      const toolName = typeof issueRecord.toolName === 'string' ? issueRecord.toolName.trim() : '';
+      const details = typeof issueRecord.details === 'string' ? issueRecord.details.trim() : '';
+      const toolSuffix = toolName.length > 0 ? `[${toolName}]` : '';
+      lines.push(`- [${level}][${category}][${code}]${toolSuffix} ${message}`);
+      if (details.length > 0) {
+        lines.push(`  details: ${details}`);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+function respondToolCall(res: http.ServerResponse, id: unknown, payload: unknown, textOverride?: string): void {
+  const text = textOverride ?? JSON.stringify(payload);
   respondJsonRpcResult(res, id, {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(payload),
+        text,
       },
     ],
     structuredContent: payload,
@@ -528,9 +617,11 @@ function respondToolCallWithNotifications(
   res: http.ServerResponse,
   id: unknown,
   payload: unknown,
+  textOverride?: string,
 ): void {
+  const text = textOverride ?? JSON.stringify(payload);
   if (!isSseRequest(req)) {
-    respondToolCall(res, id, payload);
+    respondToolCall(res, id, payload, text);
     return;
   }
   const resultMessage = {
@@ -540,7 +631,7 @@ function respondToolCallWithNotifications(
       content: [
         {
           type: 'text',
-          text: JSON.stringify(payload),
+          text,
         },
       ],
       structuredContent: payload,
@@ -705,7 +796,7 @@ function buildSimpleInputHint(inputSchema: unknown): string | undefined {
   const propertyEntries = Object.entries(properties)
     .filter(([name]) => name.trim().length > 0);
   if (propertyEntries.length === 0) {
-    return 'Input: {}.';
+    return undefined;
   }
   const required = new Set(
     Array.isArray(record.required)
@@ -718,6 +809,20 @@ function buildSimpleInputHint(inputSchema: unknown): string | undefined {
     return `${name}${optionalMarker}: ${typeLabel}`;
   });
   return `Input: { ${parts.join(', ')} }.`;
+}
+
+function enrichDiscoveryToolWithSchema(entry: unknown, inputSchema: unknown): unknown {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return entry;
+  }
+  if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+    return entry;
+  }
+  const record = entry as Record<string, unknown>;
+  return {
+    ...record,
+    inputSchema,
+  };
 }
 
 function withSimpleInputHint(descriptionValue: unknown, inputSchema: unknown): string {
@@ -749,8 +854,6 @@ function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryTool | unde
   const normalized: HandshakeDiscoveryTool = {
     name,
     description,
-    toolUri: `lm-tools://tool/${name}`,
-    schemaUri: `lm-tools://schema/${name}`,
   };
   if (name === DIRECT_TOOL_CALL_NAME
     && record.inputSchema
@@ -780,6 +883,19 @@ function mergeHandshakeDiscoveryTools(
 
 function isBridgeDiscoveryToolName(name: string): boolean {
   return name !== REQUEST_WORKSPACE_METHOD && name !== DIRECT_TOOL_CALL_NAME;
+}
+
+function buildHandshakeUriTemplates(): HandshakeDiscoveryResourceTemplate[] {
+  return [
+    {
+      name: 'Tool URI template',
+      uriTemplate: 'lm-tools://tool/{name}',
+    },
+    {
+      name: 'Schema URI template',
+      uriTemplate: 'lm-tools://schema/{name}',
+    },
+  ];
 }
 
 function mergeResourceTemplates(
@@ -892,12 +1008,121 @@ function getRemoteResultObject(data: unknown): { result?: Record<string, unknown
   return { result: record.result as Record<string, unknown> };
 }
 
+async function readToolSchemaFromResource(
+  target: ManagerMatch,
+  toolName: string,
+): Promise<{ inputSchema?: Record<string, unknown>; issue?: HandshakeDiscoveryIssue }> {
+  const response = await requestTargetJson(target, {
+    jsonrpc: '2.0',
+    id: nextManagerRequestId('mgr-discovery-resource-read'),
+    method: 'resources/read',
+    params: {
+      uri: `lm-tools://schema/${toolName}`,
+    },
+  });
+  if (!response.ok) {
+    return {
+      issue: {
+        level: 'warning',
+        category: 'schema',
+        code: 'SCHEMA_READ_REQUEST_FAILED',
+        toolName,
+        message: 'Failed to fetch schema resource for tool.',
+      },
+    };
+  }
+  const parsed = getRemoteResultObject(response.data);
+  if (parsed.errorMessage) {
+    return {
+      issue: {
+        level: 'warning',
+        category: 'schema',
+        code: 'SCHEMA_READ_RPC_ERROR',
+        toolName,
+        message: 'Workspace MCP server returned an error while reading schema resource.',
+        details: parsed.errorMessage,
+      },
+    };
+  }
+  const contents = Array.isArray(parsed.result?.contents) ? parsed.result.contents : undefined;
+  if (!contents || contents.length === 0) {
+    return {
+      issue: {
+        level: 'warning',
+        category: 'schema',
+        code: 'SCHEMA_CONTENT_MISSING',
+        toolName,
+        message: 'Schema resource did not include readable contents.',
+      },
+    };
+  }
+  const first = contents[0];
+  if (!first || typeof first !== 'object') {
+    return {
+      issue: {
+        level: 'warning',
+        category: 'schema',
+        code: 'SCHEMA_CONTENT_INVALID',
+        toolName,
+        message: 'Schema resource content format is invalid.',
+      },
+    };
+  }
+  const text = (first as { text?: unknown }).text;
+  if (typeof text !== 'string') {
+    return {
+      issue: {
+        level: 'warning',
+        category: 'schema',
+        code: 'SCHEMA_TEXT_MISSING',
+        toolName,
+        message: 'Schema resource text payload is missing.',
+      },
+    };
+  }
+  try {
+    const payload = JSON.parse(text) as unknown;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return {
+        issue: {
+          level: 'warning',
+          category: 'schema',
+          code: 'SCHEMA_JSON_INVALID',
+          toolName,
+          message: 'Schema resource JSON payload is invalid.',
+        },
+      };
+    }
+    const inputSchema = (payload as { inputSchema?: unknown }).inputSchema;
+    if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+      return {
+        issue: {
+          level: 'warning',
+          category: 'schema',
+          code: 'SCHEMA_INPUT_MISSING',
+          toolName,
+          message: 'Schema resource does not define a valid inputSchema object.',
+        },
+      };
+    }
+    return { inputSchema: inputSchema as Record<string, unknown> };
+  } catch {
+    return {
+      issue: {
+        level: 'warning',
+        category: 'schema',
+        code: 'SCHEMA_JSON_PARSE_FAILED',
+        toolName,
+        message: 'Failed to parse schema resource JSON.',
+      },
+    };
+  }
+}
+
 async function buildHandshakeDiscovery(target: ManagerMatch): Promise<HandshakeDiscoveryPayload> {
   const callTool = toHandshakeDiscoveryTool(getDirectToolCallDefinition()) ?? {
     name: DIRECT_TOOL_CALL_NAME,
     description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
-    toolUri: `lm-tools://tool/${DIRECT_TOOL_CALL_NAME}`,
-    schemaUri: `lm-tools://schema/${DIRECT_TOOL_CALL_NAME}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -908,27 +1133,31 @@ async function buildHandshakeDiscovery(target: ManagerMatch): Promise<HandshakeD
     },
   };
 
-  const errors: HandshakeDiscoveryError[] = [];
+  const issues: HandshakeDiscoveryIssue[] = [];
   let bridgedTools: HandshakeDiscoveryTool[] = [];
 
   const toolsResponse = await requestTargetJson(target, {
     jsonrpc: '2.0',
-    id: null,
+    id: nextManagerRequestId('mgr-discovery-tools-list'),
     method: 'tools/list',
     params: {},
   });
 
   if (!toolsResponse.ok) {
-    errors.push({
-      source: 'tools/list',
+    issues.push({
+      level: 'error',
+      category: 'tools/list',
+      code: 'TOOLS_LIST_FETCH_FAILED',
       message: 'Failed to fetch tools/list from workspace MCP server.',
     });
   } else {
     const parsed = getRemoteResultObject(toolsResponse.data);
     const remoteTools = Array.isArray(parsed.result?.tools) ? parsed.result.tools : undefined;
     if (!remoteTools) {
-      errors.push({
-        source: 'tools/list',
+      issues.push({
+        level: 'error',
+        category: 'tools/list',
+        code: 'TOOLS_LIST_INVALID_RESULT',
         message: parsed.errorMessage ?? 'Invalid tools/list response from workspace MCP server.',
       });
     } else {
@@ -941,15 +1170,45 @@ async function buildHandshakeDiscovery(target: ManagerMatch): Promise<HandshakeD
           : '';
         return isBridgeDiscoveryToolName(name);
       });
-      bridgedTools = mergeHandshakeDiscoveryTools(bridgedTools, filteredRemoteTools);
+      const enrichedTools: unknown[] = [];
+      await Promise.all(filteredRemoteTools.map(async (entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return;
+        }
+        const name = typeof (entry as { name?: unknown }).name === 'string'
+          ? ((entry as { name: string }).name)
+          : '';
+        if (!name) {
+          return;
+        }
+        try {
+          const schemaReadResult = await readToolSchemaFromResource(target, name);
+          if (schemaReadResult.issue) {
+            issues.push(schemaReadResult.issue);
+          }
+          enrichedTools.push(enrichDiscoveryToolWithSchema(entry, schemaReadResult.inputSchema));
+        } catch {
+          issues.push({
+            level: 'warning',
+            category: 'schema',
+            code: 'SCHEMA_READ_UNEXPECTED_ERROR',
+            toolName: name,
+            message: 'Unexpected error while reading schema resource.',
+          });
+          enrichedTools.push(entry);
+        }
+      }));
+      bridgedTools = mergeHandshakeDiscoveryTools(bridgedTools, enrichedTools);
     }
   }
 
+  const hasErrorIssue = issues.some((issue) => issue.level === 'error');
   return {
     callTool,
     bridgedTools,
-    partial: errors.length > 0,
-    errors,
+    resourceTemplates: buildHandshakeUriTemplates(),
+    partial: hasErrorIssue,
+    issues,
   };
 }
 
@@ -974,8 +1233,30 @@ function getSession(sessionId: string): SessionState | undefined {
   return sessions.get(sessionId);
 }
 
+function createAndRegisterSession(): SessionState {
+  let sessionId = generateSessionId();
+  while (sessions.has(sessionId)) {
+    sessionId = generateSessionId();
+  }
+  const session = createSessionState(sessionId);
+  sessions.set(sessionId, session);
+  touchSession(session);
+  return session;
+}
+
 function touchSession(session: SessionState): void {
   session.lastSeen = Date.now();
+}
+
+function isWorkspaceHandshakeRpcMessage(rpcMessage: { method?: string; params?: Record<string, unknown> }): boolean {
+  if (rpcMessage.method === REQUEST_WORKSPACE_METHOD) {
+    return true;
+  }
+  if (rpcMessage.method !== 'tools/call') {
+    return false;
+  }
+  const name = rpcMessage.params?.name;
+  return typeof name === 'string' && name === REQUEST_WORKSPACE_METHOD;
 }
 
 async function buildStatusPayload(session: SessionState): Promise<{
@@ -1367,7 +1648,8 @@ async function handleSessionMessage(
           + ':' + String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.port ?? '')
         : ':';
       appendLog(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
-      respondToolCallWithNotifications(req, res, message.id ?? null, result.payload);
+      const summaryText = formatWorkspaceHandshakeSummary(result.payload);
+      respondToolCallWithNotifications(req, res, message.id ?? null, result.payload, summaryText);
       return;
     }
     if (name === DIRECT_TOOL_CALL_NAME) {
@@ -1715,13 +1997,7 @@ async function handleMcpHttpRequest(
   const rpcMessage = message as { id?: unknown; method?: string; params?: Record<string, unknown> };
   appendLog(`[rpc] method=${String(rpcMessage.method ?? '')} id=${String(rpcMessage.id ?? '')} hasParams=${String(Boolean(rpcMessage.params))}`);
   if (rpcMessage.method === 'initialize') {
-    let sessionId = generateSessionId();
-    while (sessions.has(sessionId)) {
-      sessionId = generateSessionId();
-    }
-    const session = createSessionState(sessionId);
-    sessions.set(sessionId, session);
-    touchSession(session);
+    const session = createAndRegisterSession();
     respondJsonRpcResult(
       res,
       rpcMessage.id ?? null,
@@ -1747,7 +2023,7 @@ async function handleMcpHttpRequest(
           },
         },
       },
-      { 'Mcp-Session-Id': sessionId },
+      { 'Mcp-Session-Id': session.sessionId },
     );
     return;
   }
@@ -1761,20 +2037,26 @@ async function handleMcpHttpRequest(
     return;
   }
   const sessionId = getSessionIdFromRequest(req);
-  if (!sessionId) {
-    respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Missing Mcp-Session-Id.');
-    return;
-  }
-  const session = getSession(sessionId);
+  let session = sessionId ? getSession(sessionId) : undefined;
   if (!session) {
-    respondJsonRpcError(
-      res,
-      400,
-      rpcMessage.id ?? null,
-      -32600,
-      'Unknown Mcp-Session-Id. Call lmToolsBridge.requestWorkspaceMCPServer to re-bind.',
-    );
-    return;
+    if (isWorkspaceHandshakeRpcMessage(rpcMessage)) {
+      const recoveredSession = createAndRegisterSession();
+      session = recoveredSession;
+      res.setHeader('Mcp-Session-Id', recoveredSession.sessionId);
+      appendLog(`[session.recover] created=${recoveredSession.sessionId} reason=${sessionId ? 'unknown' : 'missing'}`);
+    } else if (!sessionId) {
+      respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Missing Mcp-Session-Id.');
+      return;
+    } else {
+      respondJsonRpcError(
+        res,
+        400,
+        rpcMessage.id ?? null,
+        -32600,
+        'Unknown Mcp-Session-Id. Call lmToolsBridge.requestWorkspaceMCPServer to re-bind.',
+      );
+      return;
+    }
   }
   touchSession(session);
   await handleSessionMessage(session, rpcMessage, req, res);

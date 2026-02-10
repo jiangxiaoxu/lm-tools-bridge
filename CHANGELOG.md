@@ -11,11 +11,24 @@ Maintenance rule:
 ### English
 
 #### Changed
-- Handshake response now uses a compact discovery payload (`callTool`, `bridgedTools`, `partial`, `errors`) to reduce extra list calls after `lmToolsBridge.requestWorkspaceMCPServer`.
+- Standardized custom search/diagnostics output for `lm_findTextInFiles`, `lm_findFiles`, and `lm_getDiagnostics`: `structuredContent` is now always a JSON object, while `content.text` is a human-readable summary.
+- Updated find summaries to remove `showing: x/y` truncation and use block-style entries (`---`, `// path:line`, preview on next line for text matches; full path list for file matches).
+- Updated `lm_findFiles` summary path lines to output raw file paths (without `//` prefix) while keeping `---` separators.
+- Fixed handshake discovery `tools/list` fetch format by using a valid internal JSON-RPC request id (instead of `id: null`), so `discovery.bridgedTools` can be populated when workspace tools are available.
+- Updated `lmToolsBridge.requestWorkspaceMCPServer` tool-call text output to a human-readable multi-line summary while keeping `structuredContent` as the full JSON payload.
+- Breaking change: removed per-tool `toolUri`/`schemaUri` from handshake discovery tool entries and added discovery-level `resourceTemplates` (`lm-tools://tool/{name}`, `lm-tools://schema/{name}`) for client-side URI composition.
+- Improved handshake discovery input hints: manager now reads `lm-tools://schema/{name}` for bridged tools to derive real `Input: {...}` signatures and no longer emits misleading `Input: {}` fallback.
+- Discovery diagnostics are now unified under `discovery.issues` with hierarchical entries (`level`, `category`, `code`, `message`, optional `toolName/details`) for both errors and warnings.
+- Schema-read misses during discovery are now reported as `warning` issues (instead of silent degradation) while preserving non-blocking fallback behavior.
+- Updated `requestWorkspaceMCPServer` human-readable text summary to include an indented bridged tool name list under `tools:` while keeping `structuredContent` unchanged.
+- Marked `copilot_getErrors` and `copilot_readProjectStructure` as built-in disabled (never exposed/enabled).
+- Handshake response now uses a compact discovery payload (`callTool`, `bridgedTools`, `resourceTemplates`, `partial`, `issues`) to reduce extra list calls after `lmToolsBridge.requestWorkspaceMCPServer`.
+- `discovery.partial` is now driven by `error`-level issues only; `warning` issues do not mark discovery as partial.
 - `discovery.callTool` is a dedicated manager bridge descriptor with inline `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` is excluded from discovery tool items.
 - `discovery.bridgedTools[].description` appends a simple `Input: { ... }` hint when tool schema metadata is available.
-- `discovery` no longer returns `resources` or `resourceTemplates`; clients should use standard MCP list/read APIs when resource discovery is needed.
+- `discovery` no longer returns `resources`; it now returns handshake-level `resourceTemplates` for URI composition.
 - Updated defaults for clangd tools: they are exposed by default but not enabled by default.
+- Improved manager session resilience for handshake calls: when `Mcp-Session-Id` is missing or stale, `lmToolsBridge.requestWorkspaceMCPServer` now auto-recovers with a new session header instead of failing early with HTTP 400 transport errors.
 - Breaking change: clangd AI-first tools now use `filePath` input instead of `uri`.
 - Added workspace-aware path parsing for `filePath`: `WorkspaceName/...` and absolute paths are accepted, `file:///...` is rejected.
 - Switched `lm_clangd_typeHierarchy` output to AI summary text (`counts + --- + sections + entries`) and removed file coordinate JSON payload fields.
@@ -44,11 +57,24 @@ Maintenance rule:
 ### 中文
 
 #### 变更
-- 握手响应 discovery 改为精简结构(`callTool`, `bridgedTools`, `partial`, `errors`),减少 `lmToolsBridge.requestWorkspaceMCPServer` 之后的额外 list 调用.
+- 统一 `lm_findTextInFiles`、`lm_findFiles`、`lm_getDiagnostics` 的输出: `structuredContent` 固定为 JSON 对象,`content.text` 固定为人类可读摘要文本.
+- 调整 find 摘要文本: 移除 `showing: x/y` 截断提示并改为分块格式(`---`、`// path:line`、预览另起一行),文件搜索改为输出完整路径列表.
+- 调整 `lm_findFiles` 摘要路径行格式: 保留 `---` 分隔符,但路径行不再带 `//` 前缀.
+- 修复握手 discovery 拉取 `tools/list` 的请求格式: 内部 JSON-RPC 请求改为有效 id(不再使用 `id: null`),在工作区工具可用时 `discovery.bridgedTools` 可正常填充.
+- 调整 `lmToolsBridge.requestWorkspaceMCPServer` 的 tools/call 文本输出为人类可读多行摘要,同时保持 `structuredContent` 为完整 JSON 载荷.
+- Breaking change: 从握手 discovery 的每工具条目中移除 `toolUri`/`schemaUri`,并新增 discovery 级 `resourceTemplates`(`lm-tools://tool/{name}`, `lm-tools://schema/{name}`)供客户端拼装 URI.
+- 优化握手 discovery 的输入提示: manager 会读取 bridged tool 的 `lm-tools://schema/{name}` 推导真实 `Input: {...}` 签名,并移除误导性的 `Input: {}` 回退提示.
+- discovery 诊断统一为 `discovery.issues` 分层结构(`level`、`category`、`code`、`message`、可选 `toolName/details`),同时承载 error 与 warning.
+- discovery 中 schema 读取失败改为显式 `warning` issue(不再静默),并保持非阻断回退.
+- 调整 `requestWorkspaceMCPServer` 的人类可读摘要文本: 在 `tools:` 下新增缩进的 bridged tool 名称列表,同时保持 `structuredContent` 不变.
+- 将 `copilot_getErrors` 与 `copilot_readProjectStructure` 设为 built-in disabled(永不暴露/启用).
+- 握手响应 discovery 改为精简结构(`callTool`, `bridgedTools`, `resourceTemplates`, `partial`, `issues`),减少 `lmToolsBridge.requestWorkspaceMCPServer` 之后的额外 list 调用.
+- `discovery.partial` 现在仅由 `error` 级 issue 决定; `warning` 不会触发 partial.
 - `discovery.callTool` 作为独立 manager 桥接工具返回并内联 `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` 不再出现在 discovery 工具项中.
 - `discovery.bridgedTools[].description` 在可用 schema 元数据时会追加简化 `Input: { ... }` 提示.
-- `discovery` 不再返回 `resources` 与 `resourceTemplates`; 如需资源发现请使用标准 MCP list/read API.
+- `discovery` 不再返回 `resources`; 现在返回握手级 `resourceTemplates` 用于 URI 拼装.
 - 调整 clangd 工具默认策略: 默认暴露,但不默认启用.
+- 提升握手场景的会话健壮性: 当 `Mcp-Session-Id` 缺失或过期时,`lmToolsBridge.requestWorkspaceMCPServer` 现在会自动恢复新会话并返回新 session header,避免早期 HTTP 400 传输错误.
 - Breaking change: clangd AI-first 工具输入从 `uri` 改为 `filePath`。
 - 新增工作区感知 `filePath` 解析: 接受 `WorkspaceName/...` 和绝对路径,拒绝 `file:///...`。
 - `lm_clangd_typeHierarchy` 输出切换为 AI 摘要文本(`counts + --- + sections + entries`),不再返回文件坐标 JSON 字段。

@@ -67,8 +67,6 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_findFiles',
   'lm_findTextInFiles',
   'lm_getDiagnostics',
-  'copilot_getErrors',
-  'copilot_readProjectStructure',
 ];
 const DEFAULT_EXPOSED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_TOOL_NAMES,
@@ -98,6 +96,8 @@ const BUILTIN_DISABLED_TOOL_NAMES = [
   'copilot_fetchWebPage',
   'copilot_openSimpleBrowser',
   'copilot_editFiles',
+  'copilot_getErrors',
+  'copilot_readProjectStructure',
   'copilot_getProjectSetupInfo',
   'copilot_getDocInfo',
   'copilot_askQuestions',
@@ -299,6 +299,11 @@ interface CustomToolInformation {
 
 interface CustomToolDefinition extends CustomToolInformation {
   invoke: (input: Record<string, unknown>) => Promise<unknown>;
+}
+
+interface CustomToolInvokePayload {
+  structuredContent: unknown;
+  summaryText?: string;
 }
 
 export type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
@@ -1706,6 +1711,28 @@ function resolveStructuredToolResultPayload(
   return { blocks: toolResultToStructuredBlocks(serialized) };
 }
 
+function isLanguageModelToolResult(value: unknown): value is vscode.LanguageModelToolResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as { content?: unknown };
+  return Array.isArray(record.content);
+}
+
+function isCustomToolInvokePayload(value: unknown): value is CustomToolInvokePayload {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as { structuredContent?: unknown; summaryText?: unknown };
+  if (!isPlainObject(record.structuredContent)) {
+    return false;
+  }
+  if (record.summaryText !== undefined && typeof record.summaryText !== 'string') {
+    return false;
+  }
+  return true;
+}
+
 function normalizeFindTextInFilesText(text: string): string {
   const matchRegex = /<match\s+path="([^"]+)"\s+line="?(\d+)"?\s*>\s*([\s\S]*?)<\/match>/gi;
   const summaryRegex = /(\d{1,5})\s+matches?\b[^\r\n]*?\bmaxResults\s+capped\s+at\s+(\d{1,5})\b/i;
@@ -1801,37 +1828,23 @@ function buildGetDiagnosticsToolDefinition(): CustomToolDefinition {
   };
 }
 
-async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
-  try {
-    const payload = await executeFindTextInFilesSearch(input);
-    const text = safePrettyStringify(payload);
-    return {
-      content: [new vscode.LanguageModelTextPart(text)],
-    };
-  } catch (error) {
-    const message = String(error);
-    return {
-      content: [new vscode.LanguageModelTextPart(message)],
-    };
-  }
+async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<CustomToolInvokePayload> {
+  const payload = await executeFindTextInFilesSearch(input);
+  return {
+    structuredContent: payload,
+    summaryText: formatFindTextInFilesSummary(payload),
+  };
 }
 
-async function runFindFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
-  try {
-    const payload = await executeFindFilesSearch(input);
-    const text = safePrettyStringify(payload);
-    return {
-      content: [new vscode.LanguageModelTextPart(text)],
-    };
-  } catch (error) {
-    const message = String(error);
-    return {
-      content: [new vscode.LanguageModelTextPart(message)],
-    };
-  }
+async function runFindFilesTool(input: Record<string, unknown>): Promise<CustomToolInvokePayload> {
+  const payload = await executeFindFilesSearch(input);
+  return {
+    structuredContent: payload,
+    summaryText: formatFindFilesSummary(payload),
+  };
 }
 
-async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<CustomToolInvokePayload> {
   const getDiagnostics = (
     vscode.languages as { getDiagnostics?: typeof vscode.languages.getDiagnostics }
   ).getDiagnostics;
@@ -1869,11 +1882,58 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
   };
   const summaryText = formatLmGetDiagnosticsSummary(payload, limited.returnedDiagnostics);
   return {
-    content: [
-      new vscode.LanguageModelTextPart(summaryText),
-      vscode.LanguageModelDataPart.json(payload),
-    ],
+    structuredContent: payload,
+    summaryText,
   };
+}
+
+function formatFindTextInFilesSummary(payload: Record<string, unknown>): string {
+  const uniqueMatches = typeof payload.uniqueMatches === 'number' ? payload.uniqueMatches : 0;
+  const totalMatches = typeof payload.totalMatches === 'number' ? payload.totalMatches : 0;
+  const capped = payload.capped === true;
+  const matches = Array.isArray(payload.matches) ? payload.matches : [];
+  const lines: string[] = [
+    'Find text in files summary',
+    `uniqueMatches: ${uniqueMatches}`,
+    `totalMatches: ${totalMatches}${capped ? ' (capped)' : ''}`,
+  ];
+  if (matches.length === 0) {
+    lines.push('No matches found.');
+    return lines.join('\n');
+  }
+  for (const entry of matches) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const record = entry as { path?: unknown; line?: unknown; preview?: unknown };
+    const matchPath = typeof record.path === 'string' ? record.path : '<unknown>';
+    const line = typeof record.line === 'number' ? record.line : 0;
+    const preview = typeof record.preview === 'string' ? record.preview.trimEnd() : '';
+    lines.push('---');
+    lines.push(`// ${matchPath}:${line}`);
+    lines.push(preview);
+  }
+  return lines.join('\n');
+}
+
+function formatFindFilesSummary(payload: Record<string, unknown>): string {
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  const count = typeof payload.count === 'number' ? payload.count : files.length;
+  const lines: string[] = [
+    'Find files summary',
+    `count: ${count}`,
+  ];
+  if (files.length === 0) {
+    lines.push('No files found.');
+    return lines.join('\n');
+  }
+  for (const file of files) {
+    if (typeof file === 'string') {
+      lines.push('---');
+      lines.push(file);
+    }
+  }
+  return lines.join('\n');
 }
 
 function getDiagnosticsForSingleFile(
@@ -2667,10 +2727,22 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     let structuredOutput: Record<string, unknown> | undefined;
     if (isCustomTool(tool)) {
       const result = await tool.invoke(normalizedInput);
-      const languageToolResult = result as vscode.LanguageModelToolResult;
-      const serialized = serializeToolResult(languageToolResult);
-      outputText = serializedTextPartsToText(serialized);
-      structuredOutput = resolveStructuredToolResultPayload(languageToolResult, serialized);
+      if (isLanguageModelToolResult(result)) {
+        const serialized = serializeToolResult(result);
+        outputText = serializedTextPartsToText(serialized);
+        structuredOutput = resolveStructuredToolResultPayload(result, serialized);
+      } else if (isCustomToolInvokePayload(result)) {
+        structuredOutput = result.structuredContent as Record<string, unknown>;
+        outputText = (result.summaryText && result.summaryText.trim().length > 0)
+          ? result.summaryText
+          : safePrettyStringify(result.structuredContent);
+      } else if (isPlainObject(result)) {
+        structuredOutput = result;
+        outputText = safePrettyStringify(result);
+      } else {
+        structuredOutput = { value: result };
+        outputText = payloadToText(result);
+      }
       debugOutputText = outputText;
       debugStructuredOutput = structuredOutput;
       return buildToolResult(structuredOutput, false, outputText, structuredOutput);

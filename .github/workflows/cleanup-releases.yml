@@ -1,8 +1,6 @@
 name: Cleanup old releases
 
 on:
-  schedule:
-    - cron: "0 4 * * 6,0"
   workflow_dispatch:
 
 permissions:
@@ -12,55 +10,8 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete old releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          KEEP_BETA: "2"
-          KEEP_RELEASE: "2"
-          LIST_LIMIT: "200"
+      - name: Deprecated workflow notice
         run: |
-          set -euo pipefail
-
-          releases_json=$(gh api "repos/$GH_REPO/releases?per_page=$LIST_LIMIT" --jq '[.[] | {tagName: .tag_name, createdAt: .created_at, isDraft: .draft}]')
-          if [ "$releases_json" = "[]" ]; then
-            echo "No releases found."
-            exit 0
-          fi
-
-          mapfile -t beta_tags < <(
-            printf '%s\n' "$releases_json" \
-              | jq -r '[.[] | select(.tagName | contains("-beta"))] | sort_by(.createdAt) | reverse | .[].tagName'
-          )
-          mapfile -t release_tags < <(
-            printf '%s\n' "$releases_json" \
-              | jq -r '[.[] | select(.tagName | contains("-release"))] | sort_by(.createdAt) | reverse | .[].tagName'
-          )
-
-          delete_old() {
-            local keep="$1"
-            shift
-            local tags=("$@")
-            if [ "${#tags[@]}" -le "$keep" ]; then
-              echo "Nothing to delete (keep=$keep)."
-              return 0
-            fi
-            for tag in "${tags[@]:$keep}"; do
-              echo "Deleting release $tag"
-              if gh release delete "$tag" -y --cleanup-tag; then
-                echo "Release and tag deleted: $tag"
-                continue
-              fi
-              echo "Release missing or cleanup failed: $tag"
-              encoded_tag=$(printf '%s' "$tag" | jq -sRr @uri)
-              echo "Cleaning tag $tag (encoded: $encoded_tag)"
-              if gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$encoded_tag"; then
-                echo "Tag cleaned: $tag"
-              else
-                echo "Tag missing or already deleted: $tag"
-              fi
-            done
-          }
-
-          delete_old "$KEEP_BETA" "${beta_tags[@]}"
-          delete_old "$KEEP_RELEASE" "${release_tags[@]}"
+          echo "This workflow is deprecated and intentionally disabled."
+          echo "Release publication now uses fixed tags: release and pre-release."
+          exit 0

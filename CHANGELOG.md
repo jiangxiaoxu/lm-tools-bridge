@@ -11,6 +11,7 @@ Maintenance rule:
 ### English
 
 #### Changed
+- Updated defaults for clangd tools: they are exposed by default but not enabled by default.
 - Breaking change: clangd AI-first tools now use `filePath` input instead of `uri`.
 - Added workspace-aware path parsing for `filePath`: `WorkspaceName/...` and absolute paths are accepted, `file:///...` is rejected.
 - Switched `lm_clangd_typeHierarchy` output to AI summary text (`counts + --- + sections + entries`) and removed file coordinate JSON payload fields.
@@ -39,6 +40,7 @@ Maintenance rule:
 ### 中文
 
 #### 变更
+- 调整 clangd 工具默认策略: 默认暴露,但不默认启用.
 - Breaking change: clangd AI-first 工具输入从 `uri` 改为 `filePath`。
 - 新增工作区感知 `filePath` 解析: 接受 `WorkspaceName/...` 和绝对路径,拒绝 `file:///...`。
 - `lm_clangd_typeHierarchy` 输出切换为 AI 摘要文本(`counts + --- + sections + entries`),不再返回文件坐标 JSON 字段。
@@ -63,6 +65,22 @@ Maintenance rule:
 - 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`, `maxSubDepth`, `maxSubBreadth`。
 - 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行。
 - 移除 `lm_clangd_typeHierarchyResolve` 的 clangd 工具暴露及其独立实现入口。
+
+## [1.0.67] - 2026-02-10
+
+### English
+
+#### Changed
+- Breaking change: renamed custom diagnostics tool from `lm_getErrors` to `lm_getDiagnostics`.
+- No compatibility alias is provided; callers and local settings must migrate to `lm_getDiagnostics` manually.
+- Kept tool behavior and payload schema unchanged (`filePath`/`severities`/`maxResults` input and diagnostics summary + structured payload output).
+
+### 中文
+
+#### 变更
+- Breaking change: 自定义诊断工具由 `lm_getErrors` 更名为 `lm_getDiagnostics`。
+- 不提供兼容 alias; 外部调用和本地配置需手动迁移到 `lm_getDiagnostics`。
+- 保持工具行为和输出结构不变(输入仍为 `filePath`/`severities`/`maxResults`,输出仍为诊断摘要与结构化载荷)。
 
 ## [1.0.61] - 2026-02-07
 

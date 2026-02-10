@@ -40,19 +40,14 @@ const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
-const LM_GET_ERRORS_TOOL_NAME = 'lm_getErrors';
-const LM_GET_ERRORS_DEFAULT_MAX_RESULTS = 500;
-const LM_GET_ERRORS_MIN_MAX_RESULTS = 1;
-const LM_GET_ERRORS_PREVIEW_MAX_LINES = 10;
-const LM_GET_ERRORS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
-type LmGetErrorsSeverity = typeof LM_GET_ERRORS_ALLOWED_SEVERITIES[number];
-const LM_GET_ERRORS_DEFAULT_SEVERITIES: readonly LmGetErrorsSeverity[] = ['error', 'warning'];
-const DEFAULT_ENABLED_TOOL_NAMES = [
-  'copilot_searchCodebase',
-  'copilot_searchWorkspaceSymbols',
-  'copilot_listCodeUsages',
-  'lm_findFiles',
-  'lm_findTextInFiles',
+const LM_GET_DIAGNOSTICS_TOOL_NAME = 'lm_getDiagnostics';
+const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 500;
+const LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS = 1;
+const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
+const LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
+type LmGetDiagnosticsSeverity = typeof LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES[number];
+const LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES: readonly LmGetDiagnosticsSeverity[] = ['error', 'warning'];
+const DEFAULT_CLANGD_EXPOSED_TOOL_NAMES = [
   'lm_clangd_status',
   'lm_clangd_switchSourceHeader',
   'lm_clangd_typeHierarchy',
@@ -63,11 +58,22 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_clangd_symbolImplementations',
   'lm_clangd_callHierarchy',
   'lm_clangd_lspRequest',
-  'lm_getErrors',
+];
+
+const DEFAULT_ENABLED_TOOL_NAMES = [
+  'copilot_searchCodebase',
+  'copilot_searchWorkspaceSymbols',
+  'copilot_listCodeUsages',
+  'lm_findFiles',
+  'lm_findTextInFiles',
+  'lm_getDiagnostics',
   'copilot_getErrors',
   'copilot_readProjectStructure',
 ];
-const DEFAULT_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
+const DEFAULT_EXPOSED_TOOL_NAMES = [
+  ...DEFAULT_ENABLED_TOOL_NAMES,
+  ...DEFAULT_CLANGD_EXPOSED_TOOL_NAMES,
+];
 const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
 const BUILTIN_DISABLED_TOOL_NAMES = [
   'copilot_applyPatch',
@@ -216,14 +222,14 @@ const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   required: ['query', 'isRegexp'],
 };
 
-const LM_GET_ERRORS_DESCRIPTION = [
+const LM_GET_DIAGNOSTICS_DESCRIPTION = [
   'Read diagnostics from VS Code Problems data source using vscode.languages.getDiagnostics.',
   'Use this tool for stable machine-readable diagnostics instead of prompt-tsx output.',
   'By default it returns only error and warning diagnostics.',
   'Optional filePath filters diagnostics to a single file. Supports WorkspaceName/... and absolute paths.',
 ].join('\n');
 
-const LM_GET_ERRORS_SCHEMA: Record<string, unknown> = {
+const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     filePath: {
@@ -234,21 +240,21 @@ const LM_GET_ERRORS_SCHEMA: Record<string, unknown> = {
       type: 'array',
       items: {
         type: 'string',
-        enum: [...LM_GET_ERRORS_ALLOWED_SEVERITIES],
+        enum: [...LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES],
       },
       description: 'Optional severity filter. Allowed values: error, warning, information, hint. Defaults to error+warning.',
     },
     maxResults: {
       type: 'number',
       description: 'Maximum diagnostics to return across all files. Defaults to 500, minimum is 1.',
-      default: LM_GET_ERRORS_DEFAULT_MAX_RESULTS,
-      minimum: LM_GET_ERRORS_MIN_MAX_RESULTS,
+      default: LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS,
+      minimum: LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS,
     },
   },
 };
 
-interface LmGetErrorsNormalizedDiagnostic {
-  severity: LmGetErrorsSeverity;
+interface LmGetDiagnosticsNormalizedDiagnostic {
+  severity: LmGetDiagnosticsSeverity;
   message: string;
   source: string | null;
   code: string | null;
@@ -262,19 +268,19 @@ interface LmGetErrorsNormalizedDiagnostic {
   previewTruncated: boolean;
 }
 
-interface LmGetErrorsFileResult {
+interface LmGetDiagnosticsFileResult {
   absolutePath: string;
   workspacePath: string | null;
-  diagnostics: LmGetErrorsNormalizedDiagnostic[];
+  diagnostics: LmGetDiagnosticsNormalizedDiagnostic[];
 }
 
-interface LmGetErrorsPayload {
+interface LmGetDiagnosticsPayload {
   source: 'vscode.languages.getDiagnostics';
   scope: 'workspace+external' | 'single-file';
-  severities: LmGetErrorsSeverity[];
+  severities: LmGetDiagnosticsSeverity[];
   capped: boolean;
   totalDiagnostics: number;
-  files: LmGetErrorsFileResult[];
+  files: LmGetDiagnosticsFileResult[];
 }
 
 const schemaDefaultOverrideWarnings = new Set<string>();
@@ -1784,14 +1790,14 @@ function buildFindFilesToolDefinition(): CustomToolDefinition {
   };
 }
 
-function buildGetErrorsToolDefinition(): CustomToolDefinition {
+function buildGetDiagnosticsToolDefinition(): CustomToolDefinition {
   return {
-    name: LM_GET_ERRORS_TOOL_NAME,
-    description: LM_GET_ERRORS_DESCRIPTION,
+    name: LM_GET_DIAGNOSTICS_TOOL_NAME,
+    description: LM_GET_DIAGNOSTICS_DESCRIPTION,
     tags: [],
-    inputSchema: LM_GET_ERRORS_SCHEMA,
+    inputSchema: LM_GET_DIAGNOSTICS_SCHEMA,
     isCustom: true,
-    invoke: runGetErrorsTool,
+    invoke: runGetDiagnosticsTool,
   };
 }
 
@@ -1825,7 +1831,7 @@ async function runFindFilesTool(input: Record<string, unknown>): Promise<vscode.
   }
 }
 
-async function runGetErrorsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const getDiagnostics = (
     vscode.languages as { getDiagnostics?: typeof vscode.languages.getDiagnostics }
   ).getDiagnostics;
@@ -1842,18 +1848,18 @@ async function runGetErrorsTool(input: Record<string, unknown>): Promise<vscode.
     throw new Error('filePath must be a non-empty string when provided.');
   }
 
-  const severities = parseLmGetErrorsSeverities(input.severities);
-  const severitySet = new Set<LmGetErrorsSeverity>(severities);
-  const maxResults = parseLmGetErrorsMaxResults(input.maxResults);
+  const severities = parseLmGetDiagnosticsSeverities(input.severities);
+  const severitySet = new Set<LmGetDiagnosticsSeverity>(severities);
+  const maxResults = parseLmGetDiagnosticsMaxResults(input.maxResults);
   const diagnosticsByUri: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> = requestedFilePath
     ? getDiagnosticsForSingleFile(getDiagnostics, requestedFilePath)
     : getDiagnostics();
-  const scope: LmGetErrorsPayload['scope'] = requestedFilePath ? 'single-file' : 'workspace+external';
+  const scope: LmGetDiagnosticsPayload['scope'] = requestedFilePath ? 'single-file' : 'workspace+external';
 
-  const files = await collectLmGetErrorsFiles(diagnosticsByUri, severitySet);
+  const files = await collectLmGetDiagnosticsFiles(diagnosticsByUri, severitySet);
   const totalDiagnostics = files.reduce((count, file) => count + file.diagnostics.length, 0);
-  const limited = applyLmGetErrorsLimit(files, maxResults);
-  const payload: LmGetErrorsPayload = {
+  const limited = applyLmGetDiagnosticsLimit(files, maxResults);
+  const payload: LmGetDiagnosticsPayload = {
     source: 'vscode.languages.getDiagnostics',
     scope,
     severities,
@@ -1861,7 +1867,7 @@ async function runGetErrorsTool(input: Record<string, unknown>): Promise<vscode.
     totalDiagnostics,
     files: limited.files,
   };
-  const summaryText = formatLmGetErrorsSummary(payload, limited.returnedDiagnostics);
+  const summaryText = formatLmGetDiagnosticsSummary(payload, limited.returnedDiagnostics);
   return {
     content: [
       new vscode.LanguageModelTextPart(summaryText),
@@ -1879,17 +1885,17 @@ function getDiagnosticsForSingleFile(
   return [[uri, getDiagnostics(uri)]];
 }
 
-async function collectLmGetErrorsFiles(
+async function collectLmGetDiagnosticsFiles(
   entries: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]>,
-  severities: ReadonlySet<LmGetErrorsSeverity>,
-): Promise<LmGetErrorsFileResult[]> {
-  const files: LmGetErrorsFileResult[] = [];
+  severities: ReadonlySet<LmGetDiagnosticsSeverity>,
+): Promise<LmGetDiagnosticsFileResult[]> {
+  const files: LmGetDiagnosticsFileResult[] = [];
   const lineCache = new Map<string, string[] | null>();
   for (const [uri, diagnostics] of entries) {
-    const filePath = resolveLmGetErrorsFilePath(uri);
-    const normalizedDiagnostics: LmGetErrorsNormalizedDiagnostic[] = [];
+    const filePath = resolveLmGetDiagnosticsFilePath(uri);
+    const normalizedDiagnostics: LmGetDiagnosticsNormalizedDiagnostic[] = [];
     for (const diagnostic of diagnostics) {
-      const normalized = await normalizeDiagnosticForLmGetErrors(
+      const normalized = await normalizeDiagnosticForLmGetDiagnostics(
         diagnostic,
         filePath.readableFilePath,
         lineCache,
@@ -1899,7 +1905,7 @@ async function collectLmGetErrorsFiles(
       }
       normalizedDiagnostics.push(normalized);
     }
-    normalizedDiagnostics.sort(compareLmGetErrorsDiagnostics);
+    normalizedDiagnostics.sort(compareLmGetDiagnostics);
     if (normalizedDiagnostics.length === 0) {
       continue;
     }
@@ -1919,14 +1925,14 @@ async function collectLmGetErrorsFiles(
   return files;
 }
 
-function resolveLmGetErrorsFilePath(uri: vscode.Uri): {
+function resolveLmGetDiagnosticsFilePath(uri: vscode.Uri): {
   absolutePath: string;
   workspacePath: string | null;
   readableFilePath: string | null;
 } {
   const fsPath = uri.fsPath.trim();
   if (uri.scheme === 'file' && fsPath.length > 0) {
-    const absolutePath = normalizeLmGetErrorsPath(path.resolve(fsPath));
+    const absolutePath = normalizeLmGetDiagnosticsPath(path.resolve(fsPath));
     const resolved = resolveStructuredPath(absolutePath);
     return {
       absolutePath: resolved.absolutePath,
@@ -1936,7 +1942,7 @@ function resolveLmGetErrorsFilePath(uri: vscode.Uri): {
   }
   if (fsPath.length > 0 && (path.isAbsolute(fsPath) || startsWithWindowsAbsolutePath(fsPath))) {
     return {
-      absolutePath: normalizeLmGetErrorsPath(path.resolve(fsPath)),
+      absolutePath: normalizeLmGetDiagnosticsPath(path.resolve(fsPath)),
       workspacePath: null,
       readableFilePath: path.resolve(fsPath),
     };
@@ -1948,15 +1954,15 @@ function resolveLmGetErrorsFilePath(uri: vscode.Uri): {
   };
 }
 
-function normalizeLmGetErrorsPath(value: string): string {
+function normalizeLmGetDiagnosticsPath(value: string): string {
   return value.replace(/\\/g, '/');
 }
 
-async function normalizeDiagnosticForLmGetErrors(
+async function normalizeDiagnosticForLmGetDiagnostics(
   diagnostic: vscode.Diagnostic,
   readableFilePath: string | null,
   lineCache: Map<string, string[] | null>,
-): Promise<LmGetErrorsNormalizedDiagnostic> {
+): Promise<LmGetDiagnosticsNormalizedDiagnostic> {
   const startLine = diagnostic.range.start.line + 1;
   const startCharacter = diagnostic.range.start.character + 1;
   const endLine = diagnostic.range.end.line + 1;
@@ -1968,17 +1974,17 @@ async function normalizeDiagnosticForLmGetErrors(
     lineCache,
   );
   return {
-    severity: mapDiagnosticSeverityToLmGetErrors(diagnostic.severity),
-    message: sanitizeLmGetErrorsMessage(diagnostic.message),
+    severity: mapDiagnosticSeverityToLmGetDiagnostics(diagnostic.severity),
+    message: sanitizeLmGetDiagnosticsMessage(diagnostic.message),
     source: typeof diagnostic.source === 'string' && diagnostic.source.length > 0
       ? diagnostic.source
       : null,
-    code: normalizeLmGetErrorsDiagnosticCode(diagnostic.code),
+    code: normalizeLmGetDiagnosticsDiagnosticCode(diagnostic.code),
     startLine,
     startCharacter,
     endLine,
     endCharacter,
-    tags: normalizeLmGetErrorsTags(diagnostic.tags),
+    tags: normalizeLmGetDiagnosticsTags(diagnostic.tags),
     preview: previewInfo.preview,
     previewUnavailable: previewInfo.previewUnavailable,
     previewTruncated: previewInfo.previewTruncated,
@@ -2027,7 +2033,7 @@ async function readRangePreviewFromFile(
       previewTruncated: false,
     };
   }
-  const lines = await getLmGetErrorsFileLines(readableFilePath, lineCache);
+  const lines = await getLmGetDiagnosticsFileLines(readableFilePath, lineCache);
   if (!lines || lines.length === 0) {
     return {
       preview: '',
@@ -2038,7 +2044,7 @@ async function readRangePreviewFromFile(
   const normalizedRange = normalizePreviewRange(startLine, endLine);
   const safeStart = Math.min(normalizedRange.startLine, lines.length);
   const safeEnd = Math.min(Math.max(normalizedRange.endLine, safeStart), lines.length);
-  const endWithCap = computePreviewEndLine(safeStart, safeEnd, LM_GET_ERRORS_PREVIEW_MAX_LINES);
+  const endWithCap = computePreviewEndLine(safeStart, safeEnd, LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES);
   const previewLines: string[] = [];
   for (let line = safeStart; line <= endWithCap.effectiveEndLine; line += 1) {
     previewLines.push(lines[line - 1] ?? '');
@@ -2050,7 +2056,7 @@ async function readRangePreviewFromFile(
   };
 }
 
-async function getLmGetErrorsFileLines(
+async function getLmGetDiagnosticsFileLines(
   filePath: string,
   cache: Map<string, string[] | null>,
 ): Promise<string[] | null> {
@@ -2067,7 +2073,7 @@ async function getLmGetErrorsFileLines(
   return cache.get(filePath) ?? null;
 }
 
-function mapDiagnosticSeverityToLmGetErrors(severity: vscode.DiagnosticSeverity): LmGetErrorsSeverity {
+function mapDiagnosticSeverityToLmGetDiagnostics(severity: vscode.DiagnosticSeverity): LmGetDiagnosticsSeverity {
   if (severity === vscode.DiagnosticSeverity.Error) {
     return 'error';
   }
@@ -2080,11 +2086,11 @@ function mapDiagnosticSeverityToLmGetErrors(severity: vscode.DiagnosticSeverity)
   return 'information';
 }
 
-function sanitizeLmGetErrorsMessage(value: string): string {
+function sanitizeLmGetDiagnosticsMessage(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
 }
 
-function normalizeLmGetErrorsDiagnosticCode(code: vscode.Diagnostic['code']): string | null {
+function normalizeLmGetDiagnosticsDiagnosticCode(code: vscode.Diagnostic['code']): string | null {
   if (typeof code === 'string') {
     return code;
   }
@@ -2100,7 +2106,7 @@ function normalizeLmGetErrorsDiagnosticCode(code: vscode.Diagnostic['code']): st
   return null;
 }
 
-function normalizeLmGetErrorsTags(tags: readonly vscode.DiagnosticTag[] | undefined): string[] {
+function normalizeLmGetDiagnosticsTags(tags: readonly vscode.DiagnosticTag[] | undefined): string[] {
   if (!tags || tags.length === 0) {
     return [];
   }
@@ -2119,9 +2125,9 @@ function normalizeLmGetErrorsTags(tags: readonly vscode.DiagnosticTag[] | undefi
   return [...values];
 }
 
-function compareLmGetErrorsDiagnostics(
-  left: LmGetErrorsNormalizedDiagnostic,
-  right: LmGetErrorsNormalizedDiagnostic,
+function compareLmGetDiagnostics(
+  left: LmGetDiagnosticsNormalizedDiagnostic,
+  right: LmGetDiagnosticsNormalizedDiagnostic,
 ): number {
   if (left.startLine !== right.startLine) {
     return left.startLine - right.startLine;
@@ -2138,18 +2144,18 @@ function compareLmGetErrorsDiagnostics(
   return left.message.localeCompare(right.message);
 }
 
-function parseLmGetErrorsSeverities(input: unknown): LmGetErrorsSeverity[] {
+function parseLmGetDiagnosticsSeverities(input: unknown): LmGetDiagnosticsSeverity[] {
   if (!Array.isArray(input)) {
-    return [...LM_GET_ERRORS_DEFAULT_SEVERITIES];
+    return [...LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES];
   }
-  const values: LmGetErrorsSeverity[] = [];
-  const seen = new Set<LmGetErrorsSeverity>();
+  const values: LmGetDiagnosticsSeverity[] = [];
+  const seen = new Set<LmGetDiagnosticsSeverity>();
   for (const item of input) {
     if (typeof item !== 'string') {
       continue;
     }
     const normalized = item.trim().toLowerCase();
-    if (!isLmGetErrorsSeverity(normalized)) {
+    if (!isLmGetDiagnosticsSeverity(normalized)) {
       continue;
     }
     if (seen.has(normalized)) {
@@ -2159,31 +2165,31 @@ function parseLmGetErrorsSeverities(input: unknown): LmGetErrorsSeverity[] {
     values.push(normalized);
   }
   if (values.length === 0) {
-    return [...LM_GET_ERRORS_DEFAULT_SEVERITIES];
+    return [...LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES];
   }
   return values;
 }
 
-function isLmGetErrorsSeverity(value: string): value is LmGetErrorsSeverity {
-  return (LM_GET_ERRORS_ALLOWED_SEVERITIES as readonly string[]).includes(value);
+function isLmGetDiagnosticsSeverity(value: string): value is LmGetDiagnosticsSeverity {
+  return (LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES as readonly string[]).includes(value);
 }
 
-function parseLmGetErrorsMaxResults(value: unknown): number {
+function parseLmGetDiagnosticsMaxResults(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return LM_GET_ERRORS_DEFAULT_MAX_RESULTS;
+    return LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS;
   }
   const rounded = Math.floor(value);
-  if (rounded < LM_GET_ERRORS_MIN_MAX_RESULTS) {
-    return LM_GET_ERRORS_DEFAULT_MAX_RESULTS;
+  if (rounded < LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS) {
+    return LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS;
   }
   return rounded;
 }
 
-function applyLmGetErrorsLimit(
-  files: readonly LmGetErrorsFileResult[],
+function applyLmGetDiagnosticsLimit(
+  files: readonly LmGetDiagnosticsFileResult[],
   maxResults: number,
-): { files: LmGetErrorsFileResult[]; returnedDiagnostics: number; capped: boolean } {
-  const limitedFiles: LmGetErrorsFileResult[] = [];
+): { files: LmGetDiagnosticsFileResult[]; returnedDiagnostics: number; capped: boolean } {
+  const limitedFiles: LmGetDiagnosticsFileResult[] = [];
   let remaining = maxResults;
   let returnedDiagnostics = 0;
   for (const file of files) {
@@ -2210,7 +2216,7 @@ function applyLmGetErrorsLimit(
   };
 }
 
-function formatLmGetErrorsSummary(payload: LmGetErrorsPayload, returnedDiagnostics: number): string {
+function formatLmGetDiagnosticsSummary(payload: LmGetDiagnosticsPayload, returnedDiagnostics: number): string {
   const lines: string[] = [
     'Diagnostics summary',
     `source: ${payload.source}`,
@@ -2513,7 +2519,7 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
   return [
     buildFindFilesToolDefinition(),
     buildFindTextInFilesToolDefinition(),
-    buildGetErrorsToolDefinition(),
+    buildGetDiagnosticsToolDefinition(),
     ...getClangdToolsSnapshot(),
   ];
 }
@@ -2784,3 +2790,4 @@ function toolListToText(tools: readonly unknown[]): string {
 
   return entries.join('\n');
 }
+

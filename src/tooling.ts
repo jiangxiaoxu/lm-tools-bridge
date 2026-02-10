@@ -149,7 +149,7 @@ const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
   'copilot_findFiles.maxResults=200',
 ];
 
-const COPILOT_FIND_FILES_DESCRIPTION = [
+const LM_FIND_FILES_DESCRIPTION = [
   'Search for files in the workspace by glob pattern. This only returns the paths of matching files.',
   'Use this tool when you know the exact filename pattern of the files you\'re searching for.',
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
@@ -160,7 +160,7 @@ const COPILOT_FIND_FILES_DESCRIPTION = [
   '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
 ].join('\n');
 
-const COPILOT_FIND_FILES_SCHEMA: Record<string, unknown> = {
+const LM_FIND_FILES_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     query: {
@@ -179,18 +179,22 @@ const COPILOT_FIND_FILES_SCHEMA: Record<string, unknown> = {
   required: ['query'],
 };
 
-const COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION = [
+const LM_FIND_TEXT_IN_FILES_DESCRIPTION = [
   'Do a fast text search in the workspace. Use this tool when you want to search with an exact string or regex.',
   'If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.',
   'For example, use \'function|method|procedure\' to look for all of those words at once.',
   'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
+  'Glob patterns match from the root of the workspace folder. Examples:',
+  '- **/*.{js,ts} to match all js/ts files in the workspace.',
+  '- src/** to match all files under the top-level src folder.',
+  '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
   'When caseSensitive is false, smart-case is used by default (including regex searches). Set caseSensitive to true to force case-sensitive matching.',
   'Use this tool when you want to see an overview of a particular file, instead of using read_file many times to look for code within a file.',
 ].join('\n');
 
-const COPILOT_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
+const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     query: {
@@ -1792,8 +1796,8 @@ function normalizeFindTextInFilesText(text: string): string {
 }
 
 function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
-  const inputSchema = COPILOT_FIND_TEXT_IN_FILES_SCHEMA;
-  const description = COPILOT_FIND_TEXT_IN_FILES_DESCRIPTION;
+  const inputSchema = LM_FIND_TEXT_IN_FILES_SCHEMA;
+  const description = LM_FIND_TEXT_IN_FILES_DESCRIPTION;
   return {
     name: FIND_TEXT_IN_FILES_TOOL_NAME,
     description,
@@ -1805,8 +1809,8 @@ function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
 }
 
 function buildFindFilesToolDefinition(): CustomToolDefinition {
-  const inputSchema = COPILOT_FIND_FILES_SCHEMA;
-  const description = COPILOT_FIND_FILES_DESCRIPTION;
+  const inputSchema = LM_FIND_FILES_SCHEMA;
+  const description = LM_FIND_FILES_DESCRIPTION;
   return {
     name: FIND_FILES_TOOL_NAME,
     description,

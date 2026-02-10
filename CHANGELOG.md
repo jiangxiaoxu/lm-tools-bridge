@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.73] - 2026-02-10
+
+### English
+
+#### Changed
+- Added glob examples for `lm_findTextInFiles` `includePattern` usage in tool description to align with `lm_findFiles` guidance.
+- Renamed internal find-tool constants from `COPILOT_FIND_*` to `LM_FIND_*` in `src/tooling.ts` for naming consistency, with no behavior change.
+
+### 中文
+
+#### 变更
+- 在工具描述中为 `lm_findTextInFiles` 的 `includePattern` 增加 glob 示例,与 `lm_findFiles` 指引保持一致.
+- 将 `src/tooling.ts` 内部 find 工具常量由 `COPILOT_FIND_*` 重命名为 `LM_FIND_*`,统一命名且不改变行为.
+
 ## [1.0.72] - 2026-02-10
 
 ### English

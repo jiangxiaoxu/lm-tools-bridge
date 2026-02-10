@@ -11,6 +11,10 @@ Maintenance rule:
 ### English
 
 #### Changed
+- Handshake response now uses a compact discovery payload (`callTool`, `bridgedTools`, `partial`, `errors`) to reduce extra list calls after `lmToolsBridge.requestWorkspaceMCPServer`.
+- `discovery.callTool` is a dedicated manager bridge descriptor with inline `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` is excluded from discovery tool items.
+- `discovery.bridgedTools[].description` appends a simple `Input: { ... }` hint when tool schema metadata is available.
+- `discovery` no longer returns `resources` or `resourceTemplates`; clients should use standard MCP list/read APIs when resource discovery is needed.
 - Updated defaults for clangd tools: they are exposed by default but not enabled by default.
 - Breaking change: clangd AI-first tools now use `filePath` input instead of `uri`.
 - Added workspace-aware path parsing for `filePath`: `WorkspaceName/...` and absolute paths are accepted, `file:///...` is rejected.
@@ -31,7 +35,7 @@ Maintenance rule:
 - Refined LM forwarding mapping: `content.text` now only forwards `LanguageModelTextPart`, and JSON `LanguageModelDataPart` mime detection now accepts `application/json; charset=...` and `*+json` variants for `structuredContent`.
 - Enforced `lmToolsBridge.useWorkspaceSettings` as workspace-only at runtime by auto-removing User-scope values and showing a warning.
 - Added `Open Settings` action to the status menu for direct navigation to extension settings.
-- Added a new custom diagnostics tool `lm_getErrors` backed by `vscode.languages.getDiagnostics`, with stable structured output (`source/scope/severities/capped/totalDiagnostics/files`), optional `filePath` filter, severity/maxResults controls, no `uri` field in file entries, and per-diagnostic source preview (`startLine..endLine`, capped at 10 lines with availability/truncation flags).
+- Added a new custom diagnostics tool `lm_getDiagnostics` backed by `vscode.languages.getDiagnostics`, with stable structured output (`source/scope/severities/capped/totalDiagnostics/files`), optional `filePath` filter, severity/maxResults controls, no `uri` field in file entries, and per-diagnostic source preview (`startLine..endLine`, capped at 10 lines with availability/truncation flags).
 - Updated `lm_clangd_typeHierarchy` to return a compact summary payload (`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`) with bounded expansion controls.
 - Replaced `lm_clangd_typeHierarchy` input options `resolve/direction` with `maxSuperDepth`, `maxSubDepth`, and `maxSubBreadth`.
 - Improved `sourceByClass.startLine` for Unreal C++ types: when the previous line is `UCLASS(...)` or `USTRUCT(...)`, the macro line is reported as the start line.
@@ -40,6 +44,10 @@ Maintenance rule:
 ### 中文
 
 #### 变更
+- 握手响应 discovery 改为精简结构(`callTool`, `bridgedTools`, `partial`, `errors`),减少 `lmToolsBridge.requestWorkspaceMCPServer` 之后的额外 list 调用.
+- `discovery.callTool` 作为独立 manager 桥接工具返回并内联 `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` 不再出现在 discovery 工具项中.
+- `discovery.bridgedTools[].description` 在可用 schema 元数据时会追加简化 `Input: { ... }` 提示.
+- `discovery` 不再返回 `resources` 与 `resourceTemplates`; 如需资源发现请使用标准 MCP list/read API.
 - 调整 clangd 工具默认策略: 默认暴露,但不默认启用.
 - Breaking change: clangd AI-first 工具输入从 `uri` 改为 `filePath`。
 - 新增工作区感知 `filePath` 解析: 接受 `WorkspaceName/...` 和绝对路径,拒绝 `file:///...`。
@@ -60,7 +68,7 @@ Maintenance rule:
 - 细化 LM tool 转发映射: `content.text` 仅透传 `LanguageModelTextPart`,并增强 `LanguageModelDataPart` 的 JSON mime 识别(`application/json; charset=...` 与 `*+json` 变体)以稳定透传 `structuredContent`.
 - 在运行时将 `lmToolsBridge.useWorkspaceSettings` 强制为仅工作区级: 若出现在 User 级会自动移除并提示.
 - 在状态菜单新增 `Open Settings` 操作,可直接跳转到扩展设置页.
-- 新增自定义诊断工具 `lm_getErrors`,基于 `vscode.languages.getDiagnostics` 输出稳定结构化结果(`source/scope/severities/capped/totalDiagnostics/files`),并支持 `filePath` 过滤与 severity/maxResults 控制; 文件项不再包含 `uri`,且每条诊断附带 `startLine..endLine` 代码预览(最多 10 行,带可用性/截断标记).
+- 新增自定义诊断工具 `lm_getDiagnostics`,基于 `vscode.languages.getDiagnostics` 输出稳定结构化结果(`source/scope/severities/capped/totalDiagnostics/files`),并支持 `filePath` 过滤与 severity/maxResults 控制; 文件项不再包含 `uri`,且每条诊断附带 `startLine..endLine` 代码预览(最多 10 行,带可用性/截断标记).
 - 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`),并支持有界展开。
 - 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`, `maxSubDepth`, `maxSubBreadth`。
 - 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行。

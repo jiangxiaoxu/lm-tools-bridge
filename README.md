@@ -10,7 +10,7 @@ This README covers the current Manager-based version only.
 1. Start the extension server in VS Code with `LM Tools Bridge: Start Server` (or enable `lmToolsBridge.server.autoStart`).
 2. In your MCP client, connect to Manager endpoint `http://127.0.0.1:47100/mcp` (or `http://127.0.0.1:<lmToolsBridge.manager.httpPort>/mcp`).
 3. Before tool calls, run handshake `lmToolsBridge.requestWorkspaceMCPServer` with `{ "cwd": "<your project path>" }`.
-4. After handshake, call `resources/list`, read `lm-tools://schema/{name}` for first-time tools, then call tools.
+4. Use `discovery` in handshake response for `callTool` and `bridgedTools`. Use `tools/list` only as refresh fallback.
 
 ### Endpoints
 - Manager MCP endpoint (client entry): `http://127.0.0.1:47100/mcp`
@@ -27,8 +27,15 @@ This README covers the current Manager-based version only.
 1. Configure MCP URL to `http://127.0.0.1:47100/mcp` (or custom manager port).
 2. Send `initialize`, keep the returned `Mcp-Session-Id` header.
 3. Call `lmToolsBridge.requestWorkspaceMCPServer` with `cwd`.
-4. Use `lmToolsBridge.callTool` or standard `tools/call` after schema read.
-5. If session header is lost/expired (`Missing Mcp-Session-Id` or `Unknown Mcp-Session-Id`), re-initialize and handshake again.
+4. Read `callTool` and `bridgedTools` from handshake `discovery`; read `lm-tools://schema/{name}` when schema is needed.
+5. Use `lmToolsBridge.callTool` or standard `tools/call`.
+6. If session header is lost/expired (`Missing Mcp-Session-Id` or `Unknown Mcp-Session-Id`), re-initialize and handshake again.
+
+### Handshake Discovery Payload
+- A successful handshake includes `discovery` with:
+- `callTool`: dedicated manager bridge tool descriptor (`lmToolsBridge.callTool`) with inline `inputSchema`
+- `bridgedTools`: workspace MCP tools only (`name`, `description`, `toolUri`, `schemaUri`; `description` includes a simple `Input: { ... }` hint when schema is available)
+- `partial` and `errors`: indicates partial discovery and tool-list fetch failures
 
 Example config:
 

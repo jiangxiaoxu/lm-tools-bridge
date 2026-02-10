@@ -59,6 +59,28 @@ type ResolveResult = {
   errorKind?: ResolveErrorKind;
 };
 
+type DiscoveryErrorSource = 'tools/list';
+
+interface HandshakeDiscoveryTool {
+  name: string;
+  description: string;
+  toolUri: string;
+  schemaUri: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+interface HandshakeDiscoveryError {
+  source: DiscoveryErrorSource;
+  message: string;
+}
+
+interface HandshakeDiscoveryPayload {
+  callTool: HandshakeDiscoveryTool;
+  bridgedTools: HandshakeDiscoveryTool[];
+  partial: boolean;
+  errors: HandshakeDiscoveryError[];
+}
+
 const TTL_MS = 1500;
 const PRUNE_INTERVAL_MS = 500;
 const IDLE_GRACE_MS = 3000;
@@ -582,7 +604,7 @@ function getHandshakeResource(): Record<string, unknown> {
   return {
     uri: HANDSHAKE_RESOURCE_URI,
     name: 'MCP manager handshake',
-    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; on success, call resources/list and read lm-tools://schema/{name} once before the first call of that tool via lmToolsBridge.callTool.',
+    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; success includes discovery (callTool/bridgedTools). Use tools/list as refresh fallback and read lm-tools://schema/{name} before first tool call when needed.',
     mimeType: 'text/plain',
   };
 }
@@ -600,7 +622,7 @@ function getHandshakeTemplate(): Record<string, unknown> {
   return {
     name: 'MCP manager handshake',
     uriTemplate: HANDSHAKE_RESOURCE_URI,
-    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; on success, call resources/list and read lm-tools://schema/{name} once before the first call of that tool via lmToolsBridge.callTool.',
+    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; success includes discovery (callTool/bridgedTools). Use tools/list as refresh fallback and read lm-tools://schema/{name} before first tool call when needed.',
     mimeType: 'text/plain',
   };
 }
@@ -612,6 +634,152 @@ function getCallToolTemplate(): Record<string, unknown> {
     description: 'Call lmToolsBridge.callTool after handshake to invoke a tool by name.',
     mimeType: 'text/plain',
   };
+}
+
+function getRequestWorkspaceToolDefinition(): Record<string, unknown> {
+  return {
+    name: REQUEST_WORKSPACE_METHOD,
+    description: 'Resolve and bind a workspace MCP server. Input: { cwd: string }.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cwd: { type: 'string', description: 'Workspace path to resolve.' },
+      },
+      required: ['cwd'],
+    },
+  };
+}
+
+function getDirectToolCallDefinition(): Record<string, unknown> {
+  return {
+    name: DIRECT_TOOL_CALL_NAME,
+    description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Tool name to call.' },
+        arguments: { type: 'object', description: 'Tool arguments.' },
+      },
+      required: ['name'],
+    },
+  };
+}
+
+function getInputSchemaTypeLabel(schema: unknown): string {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return 'unknown';
+  }
+  const record = schema as Record<string, unknown>;
+  const type = record.type;
+  if (typeof type === 'string' && type.trim().length > 0) {
+    return type;
+  }
+  if (Array.isArray(type)) {
+    const labels = type
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+    if (labels.length > 0) {
+      return labels.join('|');
+    }
+  }
+  if (Array.isArray(record.enum) && record.enum.length > 0) {
+    return 'enum';
+  }
+  if (record.properties && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
+    return 'object';
+  }
+  if (record.items !== undefined) {
+    return 'array';
+  }
+  return 'unknown';
+}
+
+function buildSimpleInputHint(inputSchema: unknown): string | undefined {
+  if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+    return undefined;
+  }
+  const record = inputSchema as Record<string, unknown>;
+  const properties = record.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return undefined;
+  }
+  const propertyEntries = Object.entries(properties)
+    .filter(([name]) => name.trim().length > 0);
+  if (propertyEntries.length === 0) {
+    return 'Input: {}.';
+  }
+  const required = new Set(
+    Array.isArray(record.required)
+      ? record.required.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : [],
+  );
+  const parts = propertyEntries.map(([name, schema]) => {
+    const optionalMarker = required.has(name) ? '' : '?';
+    const typeLabel = getInputSchemaTypeLabel(schema);
+    return `${name}${optionalMarker}: ${typeLabel}`;
+  });
+  return `Input: { ${parts.join(', ')} }.`;
+}
+
+function withSimpleInputHint(descriptionValue: unknown, inputSchema: unknown): string {
+  const description = typeof descriptionValue === 'string' ? descriptionValue.trim() : '';
+  if (description.includes('Input: {')) {
+    return description;
+  }
+  const inputHint = buildSimpleInputHint(inputSchema);
+  if (!inputHint) {
+    return description;
+  }
+  if (!description) {
+    return inputHint;
+  }
+  const needsPeriod = description.endsWith('.') ? '' : '.';
+  return `${description}${needsPeriod} ${inputHint}`;
+}
+
+function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryTool | undefined {
+  if (!entry || typeof entry !== 'object') {
+    return undefined;
+  }
+  const record = entry as { name?: unknown; description?: unknown; inputSchema?: unknown };
+  const name = typeof record.name === 'string' ? record.name.trim() : '';
+  if (!name) {
+    return undefined;
+  }
+  const description = withSimpleInputHint(record.description, record.inputSchema);
+  const normalized: HandshakeDiscoveryTool = {
+    name,
+    description,
+    toolUri: `lm-tools://tool/${name}`,
+    schemaUri: `lm-tools://schema/${name}`,
+  };
+  if (name === DIRECT_TOOL_CALL_NAME
+    && record.inputSchema
+    && typeof record.inputSchema === 'object'
+    && !Array.isArray(record.inputSchema)) {
+    normalized.inputSchema = record.inputSchema as Record<string, unknown>;
+  }
+  return normalized;
+}
+
+function mergeHandshakeDiscoveryTools(
+  base: HandshakeDiscoveryTool[],
+  incoming: unknown[],
+): HandshakeDiscoveryTool[] {
+  const merged = [...base];
+  const seen = new Set(base.map((entry) => entry.name));
+  for (const entry of incoming) {
+    const normalized = toHandshakeDiscoveryTool(entry);
+    if (!normalized || seen.has(normalized.name)) {
+      continue;
+    }
+    seen.add(normalized.name);
+    merged.push(normalized);
+  }
+  return merged;
+}
+
+function isBridgeDiscoveryToolName(name: string): boolean {
+  return name !== REQUEST_WORKSPACE_METHOD && name !== DIRECT_TOOL_CALL_NAME;
 }
 
 function mergeResourceTemplates(
@@ -704,6 +872,85 @@ async function requestTargetJson(target: ManagerMatch, payload: unknown): Promis
     request.write(body);
     request.end();
   });
+}
+
+function getRemoteResultObject(data: unknown): { result?: Record<string, unknown>; errorMessage?: string } {
+  if (!data || typeof data !== 'object') {
+    return { errorMessage: 'Invalid JSON-RPC payload from workspace MCP server.' };
+  }
+  const record = data as { result?: unknown; error?: unknown };
+  if (record.error && typeof record.error === 'object') {
+    const errorRecord = record.error as { message?: unknown };
+    const message = typeof errorRecord.message === 'string'
+      ? errorRecord.message
+      : 'Workspace MCP server returned a JSON-RPC error.';
+    return { errorMessage: message };
+  }
+  if (!record.result || typeof record.result !== 'object' || Array.isArray(record.result)) {
+    return { errorMessage: 'Workspace MCP server returned an invalid JSON-RPC result object.' };
+  }
+  return { result: record.result as Record<string, unknown> };
+}
+
+async function buildHandshakeDiscovery(target: ManagerMatch): Promise<HandshakeDiscoveryPayload> {
+  const callTool = toHandshakeDiscoveryTool(getDirectToolCallDefinition()) ?? {
+    name: DIRECT_TOOL_CALL_NAME,
+    description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
+    toolUri: `lm-tools://tool/${DIRECT_TOOL_CALL_NAME}`,
+    schemaUri: `lm-tools://schema/${DIRECT_TOOL_CALL_NAME}`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        arguments: { type: 'object' },
+      },
+      required: ['name'],
+    },
+  };
+
+  const errors: HandshakeDiscoveryError[] = [];
+  let bridgedTools: HandshakeDiscoveryTool[] = [];
+
+  const toolsResponse = await requestTargetJson(target, {
+    jsonrpc: '2.0',
+    id: null,
+    method: 'tools/list',
+    params: {},
+  });
+
+  if (!toolsResponse.ok) {
+    errors.push({
+      source: 'tools/list',
+      message: 'Failed to fetch tools/list from workspace MCP server.',
+    });
+  } else {
+    const parsed = getRemoteResultObject(toolsResponse.data);
+    const remoteTools = Array.isArray(parsed.result?.tools) ? parsed.result.tools : undefined;
+    if (!remoteTools) {
+      errors.push({
+        source: 'tools/list',
+        message: parsed.errorMessage ?? 'Invalid tools/list response from workspace MCP server.',
+      });
+    } else {
+      const filteredRemoteTools = remoteTools.filter((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return false;
+        }
+        const name = typeof (entry as { name?: unknown }).name === 'string'
+          ? ((entry as { name: string }).name)
+          : '';
+        return isBridgeDiscoveryToolName(name);
+      });
+      bridgedTools = mergeHandshakeDiscoveryTools(bridgedTools, filteredRemoteTools);
+    }
+  }
+
+  return {
+    callTool,
+    bridgedTools,
+    partial: errors.length > 0,
+    errors,
+  };
 }
 
 async function refreshSessionTarget(session: SessionState, deadlineMs?: number): Promise<ResolveResult> {
@@ -840,6 +1087,7 @@ async function handleRequestWorkspace(
   session.workspaceMatched = true;
   session.currentTarget = matchedTarget;
   session.offlineSince = undefined;
+  const discovery = await buildHandshakeDiscovery(matchedTarget);
   return {
     payload: {
       ok: true,
@@ -853,6 +1101,7 @@ async function handleRequestWorkspace(
       },
       online: true,
       health,
+      discovery,
     },
   };
 }
@@ -930,8 +1179,9 @@ async function handleSessionMessage(
     const content = [
       'This MCP manager requires an explicit workspace handshake.',
       'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd. If the call fails, do not invoke MCP tools or resources.',
-      'After a successful handshake, call resources/list again to discover the available resources.',
-      'Before calling any tool for the first time, read lm-tools://schema/{name} to get the input schema.',
+      'A successful handshake response includes discovery data (callTool/bridgedTools).',
+      'Use tools/list as refresh fallback when discovery is partial.',
+      'Before calling any tool for the first time, read lm-tools://schema/{name} if input schema is not already known.',
       'Invoke tools via lmToolsBridge.callTool only after the tool schema has been read.',
       '',
       'Status snapshot:',
@@ -1061,29 +1311,8 @@ async function handleSessionMessage(
     return;
   }
   if (method === 'tools/list') {
-    const requestWorkspaceTool = {
-      name: REQUEST_WORKSPACE_METHOD,
-      description: 'Resolve and bind a workspace MCP server. Input: { cwd: string }.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          cwd: { type: 'string', description: 'Workspace path to resolve.' },
-        },
-        required: ['cwd'],
-      },
-    };
-    const directToolCall = {
-      name: DIRECT_TOOL_CALL_NAME,
-      description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Tool name to call.' },
-          arguments: { type: 'object', description: 'Tool arguments.' },
-        },
-        required: ['name'],
-      },
-    };
+    const requestWorkspaceTool = getRequestWorkspaceToolDefinition();
+    const directToolCall = getDirectToolCallDefinition();
     if (!session.workspaceMatched) {
       respondJsonRpcResult(res, message.id ?? null, {
         tools: [requestWorkspaceTool, directToolCall],

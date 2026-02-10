@@ -6,7 +6,31 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
-## [Unreleased]
+## [1.0.72] - 2026-02-10
+
+### English
+
+#### Changed
+- Corrected release history in `CHANGELOG.md`: removed `Unreleased` aggregation, split entries into concrete release sections (`1.0.62` to `1.0.71`), and aligned ordering in descending versions.
+
+### 中文
+
+#### 变更
+- 修正 `CHANGELOG.md` 版本历史: 移除 `Unreleased` 聚合段,将变更拆分归档到实际版本(`1.0.62` 到 `1.0.71`),并按版本降序排列.
+
+## [1.0.71] - 2026-02-10
+
+### English
+
+#### Changed
+- Stabilized `discovery.bridgedTools` ordering: tools are now sorted by name in deterministic alphabetical order (case-insensitive, with original-name tiebreaker).
+
+### 中文
+
+#### 变更
+- 稳定 `discovery.bridgedTools` 顺序: 现在按工具名做确定性字母排序(case-insensitive,同名折叠后按原始 name 作为次级比较).
+
+## [1.0.70] - 2026-02-10
 
 ### English
 
@@ -16,40 +40,143 @@ Maintenance rule:
 - Updated `lm_findFiles` summary path lines to output raw file paths (without `//` prefix) while keeping `---` separators.
 - Fixed handshake discovery `tools/list` fetch format by using a valid internal JSON-RPC request id (instead of `id: null`), so `discovery.bridgedTools` can be populated when workspace tools are available.
 - Updated `lmToolsBridge.requestWorkspaceMCPServer` tool-call text output to a human-readable multi-line summary while keeping `structuredContent` as the full JSON payload.
-- Breaking change: removed per-tool `toolUri`/`schemaUri` from handshake discovery tool entries and added discovery-level `resourceTemplates` (`lm-tools://tool/{name}`, `lm-tools://schema/{name}`) for client-side URI composition.
-- Improved handshake discovery input hints: manager now reads `lm-tools://schema/{name}` for bridged tools to derive real `Input: {...}` signatures and no longer emits misleading `Input: {}` fallback.
 - Discovery diagnostics are now unified under `discovery.issues` with hierarchical entries (`level`, `category`, `code`, `message`, optional `toolName/details`) for both errors and warnings.
 - Schema-read misses during discovery are now reported as `warning` issues (instead of silent degradation) while preserving non-blocking fallback behavior.
 - Updated `requestWorkspaceMCPServer` human-readable text summary to include an indented bridged tool name list under `tools:` while keeping `structuredContent` unchanged.
 - Marked `copilot_getErrors` and `copilot_readProjectStructure` as built-in disabled (never exposed/enabled).
 - Handshake response now uses a compact discovery payload (`callTool`, `bridgedTools`, `resourceTemplates`, `partial`, `issues`) to reduce extra list calls after `lmToolsBridge.requestWorkspaceMCPServer`.
 - `discovery.partial` is now driven by `error`-level issues only; `warning` issues do not mark discovery as partial.
-- Stabilized `discovery.bridgedTools` ordering: tools are now sorted by name in deterministic alphabetical order (case-insensitive, with original-name tiebreaker).
+- `discovery` no longer returns `resources`; it now returns handshake-level `resourceTemplates` for URI composition.
+- Improved manager session resilience for handshake calls: when `Mcp-Session-Id` is missing or stale, `lmToolsBridge.requestWorkspaceMCPServer` now auto-recovers with a new session header instead of failing early with HTTP 400 transport errors.
+
+### 中文
+
+#### 变更
+- 统一 `lm_findTextInFiles`,`lm_findFiles`,`lm_getDiagnostics` 的输出: `structuredContent` 固定为 JSON 对象,`content.text` 固定为人类可读摘要文本.
+- 调整 find 摘要文本: 移除 `showing: x/y` 截断提示并改为分块格式(`---`,`// path:line`,预览另起一行),文件搜索改为输出完整路径列表.
+- 调整 `lm_findFiles` 摘要路径行格式: 保留 `---` 分隔符,但路径行不再带 `//` 前缀.
+- 修复握手 discovery 拉取 `tools/list` 的请求格式: 内部 JSON-RPC 请求改为有效 id(不再使用 `id: null`),在工作区工具可用时 `discovery.bridgedTools` 可正常填充.
+- 调整 `lmToolsBridge.requestWorkspaceMCPServer` 的 tools/call 文本输出为人类可读多行摘要,同时保持 `structuredContent` 为完整 JSON 载荷.
+- discovery 诊断统一为 `discovery.issues` 分层结构(`level`,`category`,`code`,`message`,可选 `toolName/details`),同时承载 error 与 warning.
+- discovery 中 schema 读取失败改为显式 `warning` issue(不再静默),并保持非阻断回退.
+- 调整 `requestWorkspaceMCPServer` 的人类可读摘要文本: 在 `tools:` 下新增缩进的 bridged tool 名称列表,同时保持 `structuredContent` 不变.
+- 将 `copilot_getErrors` 与 `copilot_readProjectStructure` 设为 built-in disabled(永不暴露/启用).
+- 握手响应 discovery 改为精简结构(`callTool`,`bridgedTools`,`resourceTemplates`,`partial`,`issues`),减少 `lmToolsBridge.requestWorkspaceMCPServer` 之后的额外 list 调用.
+- `discovery.partial` 现在仅由 `error` 级 issue 决定; `warning` 不会触发 partial.
+- `discovery` 不再返回 `resources`; 现在返回握手级 `resourceTemplates` 用于 URI 拼装.
+- 提升握手场景的会话健壮性: 当 `Mcp-Session-Id` 缺失或过期时,`lmToolsBridge.requestWorkspaceMCPServer` 现在会自动恢复新会话并返回新 session header,避免早期 HTTP 400 传输错误.
+
+## [1.0.69] - 2026-02-10
+
+### English
+
+#### Changed
+- Breaking change: handshake response switched to compact discovery payload (`callTool`, `bridgedTools`, `partial`, `errors`) to reduce post-handshake discovery overhead.
 - `discovery.callTool` is a dedicated manager bridge descriptor with inline `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` is excluded from discovery tool items.
 - `discovery.bridgedTools[].description` appends a simple `Input: { ... }` hint when tool schema metadata is available.
-- `discovery` no longer returns `resources`; it now returns handshake-level `resourceTemplates` for URI composition.
+- Breaking change: `discovery` no longer returns `resources` or `resourceTemplates`; clients should use standard MCP list/read APIs when resource discovery is needed.
+
+### 中文
+
+#### 变更
+- Breaking change: 握手响应 discovery 改为精简结构(`callTool`,`bridgedTools`,`partial`,`errors`),减少握手后的发现开销.
+- `discovery.callTool` 作为独立 manager 桥接工具返回并内联 `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` 不再出现在 discovery 工具项中.
+- `discovery.bridgedTools[].description` 在可用 schema 元数据时会追加简化 `Input: { ... }` 提示.
+- Breaking change: `discovery` 不再返回 `resources` 与 `resourceTemplates`; 如需资源发现请使用标准 MCP list/read API.
+
+## [1.0.68] - 2026-02-10
+
+### English
+
+#### Changed
+- Breaking change: renamed custom diagnostics tool from `lm_getErrors` to `lm_getDiagnostics`.
+- No compatibility alias is provided; callers and local settings must migrate to `lm_getDiagnostics` manually.
+- Kept tool behavior and payload schema unchanged (`filePath`/`severities`/`maxResults` input and diagnostics summary + structured payload output).
 - Updated defaults for clangd tools: they are exposed by default but not enabled by default.
-- Improved manager session resilience for handshake calls: when `Mcp-Session-Id` is missing or stale, `lmToolsBridge.requestWorkspaceMCPServer` now auto-recovers with a new session header instead of failing early with HTTP 400 transport errors.
+
+### 中文
+
+#### 变更
+- Breaking change: 自定义诊断工具由 `lm_getErrors` 更名为 `lm_getDiagnostics`.
+- 不提供兼容 alias; 外部调用和本地配置需手动迁移到 `lm_getDiagnostics`.
+- 保持工具行为和输出结构不变(输入仍为 `filePath`/`severities`/`maxResults`,输出仍为诊断摘要与结构化载荷).
+- 调整 clangd 工具默认策略: 默认暴露,但不默认启用.
+
+## [1.0.66] - 2026-02-09
+
+### English
+
+#### Changed
+- Added a new custom diagnostics tool `lm_getErrors` backed by `vscode.languages.getDiagnostics`, with stable structured output (`source/scope/severities/capped/totalDiagnostics/files`), optional `filePath` filter, severity/maxResults controls, no `uri` field in file entries, and per-diagnostic source preview (`startLine..endLine`, capped at 10 lines with availability/truncation flags).
+- Enforced `lmToolsBridge.useWorkspaceSettings` as workspace-only at runtime by auto-removing User-scope values and showing a warning.
+- Added `Open Settings` action to the status menu for direct navigation to extension settings.
+
+### 中文
+
+#### 变更
+- 新增自定义诊断工具 `lm_getErrors`,基于 `vscode.languages.getDiagnostics` 输出稳定结构化结果(`source/scope/severities/capped/totalDiagnostics/files`),并支持 `filePath` 过滤与 severity/maxResults 控制; 文件项不再包含 `uri`,且每条诊断附带 `startLine..endLine` 代码预览(最多 10 行,带可用性/截断标记).
+- 在运行时将 `lmToolsBridge.useWorkspaceSettings` 强制为仅工作区级: 若出现在 User 级会自动移除并提示.
+- 在状态菜单新增 `Open Settings` 操作,可直接跳转到扩展设置页.
+
+## [1.0.65] - 2026-02-09
+
+### English
+
+#### Changed
+- Refined LM forwarding mapping: `content.text` now only forwards `LanguageModelTextPart`, and JSON `LanguageModelDataPart` mime detection now accepts `application/json; charset=...` and `*+json` variants for `structuredContent`.
+
+### 中文
+
+#### 变更
+- 细化 LM tool 转发映射: `content.text` 仅透传 `LanguageModelTextPart`,并增强 `LanguageModelDataPart` 的 JSON mime 识别(`application/json; charset=...` 与 `*+json` 变体)以稳定透传 `structuredContent`.
+
+## [1.0.64] - 2026-02-08
+
+### English
+
+#### Changed
+- Updated LM tool forwarding output mapping: `LanguageModelDataPart` JSON object is now passed through as `structuredContent`, while `LanguageModelTextPart` is used for `content.text` to avoid duplicate wrapping.
+
+### 中文
+
+#### 变更
+- 调整 LM tool 转发输出映射: `LanguageModelDataPart` 的 JSON object 直通 `structuredContent`,`LanguageModelTextPart` 仅作为 `content.text`,避免重复包装.
+
+## [1.0.63] - 2026-02-08
+
+### English
+
+#### Changed
+- Unified clangd structured location fields to `absolutePath` (always) + `workspacePath` (nullable), with 1-based numeric coordinates and optional `preview`.
+- Removed legacy structured path fields (`summaryPath`, `location.path#...`) and dropped raw input echo fields from AI-first structured payloads.
+- Updated `lm_clangd_symbolInfo` to classify symbol category via document symbols and emit adaptive entries; `typeDefinition` is now included only when meaningful (for example value-like symbols).
+- Disabled `lm_clangd_ast` exposure and removed it from default exposed/enabled clangd tool list.
+- Updated `lm_clangd_status` and `lm_clangd_lspRequest` to return human-readable text content while preserving structured JSON objects in `structuredContent`.
+
+### 中文
+
+#### 变更
+- 统一 clangd 结构化位置字段为 `absolutePath`(必有) + `workspacePath`(可空),并使用 1-based 数值坐标与可选 `preview`.
+- 移除旧结构化路径字段(`summaryPath`,`location.path#...`),并清理 AI-first 结构化载荷中的输入回显字段.
+- 更新 `lm_clangd_symbolInfo`: 基于 document symbols 做符号类别判定并自适应输出条目; `typeDefinition` 仅在有意义场景(如 value-like 符号)返回.
+- 禁用 `lm_clangd_ast` 暴露并将其从 clangd 默认 exposed/enabled 列表移除.
+- 将 `lm_clangd_status` 与 `lm_clangd_lspRequest` 的 `content` 调整为人类可读文本,同时保留 `structuredContent` 结构化对象.
+
+## [1.0.62] - 2026-02-08
+
+### English
+
+#### Changed
 - Breaking change: clangd AI-first tools now use `filePath` input instead of `uri`.
 - Added workspace-aware path parsing for `filePath`: `WorkspaceName/...` and absolute paths are accepted, `file:///...` is rejected.
 - Switched `lm_clangd_typeHierarchy` output to AI summary text (`counts + --- + sections + entries`) and removed file coordinate JSON payload fields.
 - Added AI-first symbol tools: `lm_clangd_symbolSearch`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, and `lm_clangd_callHierarchy`.
 - Added `lm_clangd_symbolBundle` to aggregate symbol search/info/references/implementations/call-hierarchy into one AI-first call.
 - Added `structuredContent` for clangd AI-first tools so clients can use stable machine-readable payloads alongside summary text.
-- Unified clangd structured location fields to `absolutePath` (always) + `workspacePath` (nullable), with 1-based numeric coordinates and optional `preview`.
-- Removed legacy structured path fields (`summaryPath`, `location.path#...`) and dropped raw input echo fields from AI-first structured payloads.
 - Enhanced `lm_clangd_symbolSearch` to include full symbol signatures by default, using fallback chain `signatureHelp -> hover -> definitionLine`.
 - Updated `lm_clangd_symbolInfo` snippet sourcing to exclude generated files (`*.generated.h`, `*.gen.cpp`) and no longer fallback to generated locations.
-- Updated `lm_clangd_symbolInfo` to classify symbol category via document symbols and emit adaptive entries; `typeDefinition` is now included only when meaningful (for example value-like symbols).
 - Updated `lm_clangd_typeHierarchy` SOURCE text order to `type -> preview -> path`, and added `preview` to `structuredContent.sourceByClass`.
 - Updated `lm_clangd_typeHierarchy` source range strategy to rely on `textDocument/documentSymbol` only; when no matching symbol is found, output now falls back to single-line range (`endLine = startLine`).
-- Disabled `lm_clangd_ast` exposure and removed it from default exposed/enabled clangd tool list.
-- Updated `lm_clangd_status` and `lm_clangd_lspRequest` to return human-readable text content while preserving structured JSON objects in `structuredContent`.
-- Updated LM tool forwarding output mapping: `LanguageModelDataPart` JSON object is now passed through as `structuredContent`, while `LanguageModelTextPart` is used for `content.text` to avoid duplicate wrapping.
-- Refined LM forwarding mapping: `content.text` now only forwards `LanguageModelTextPart`, and JSON `LanguageModelDataPart` mime detection now accepts `application/json; charset=...` and `*+json` variants for `structuredContent`.
-- Enforced `lmToolsBridge.useWorkspaceSettings` as workspace-only at runtime by auto-removing User-scope values and showing a warning.
-- Added `Open Settings` action to the status menu for direct navigation to extension settings.
-- Added a new custom diagnostics tool `lm_getDiagnostics` backed by `vscode.languages.getDiagnostics`, with stable structured output (`source/scope/severities/capped/totalDiagnostics/files`), optional `filePath` filter, severity/maxResults controls, no `uri` field in file entries, and per-diagnostic source preview (`startLine..endLine`, capped at 10 lines with availability/truncation flags).
 - Updated `lm_clangd_typeHierarchy` to return a compact summary payload (`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`) with bounded expansion controls.
 - Replaced `lm_clangd_typeHierarchy` input options `resolve/direction` with `maxSuperDepth`, `maxSubDepth`, and `maxSubBreadth`.
 - Improved `sourceByClass.startLine` for Unreal C++ types: when the previous line is `UCLASS(...)` or `USTRUCT(...)`, the macro line is reported as the start line.
@@ -58,65 +185,20 @@ Maintenance rule:
 ### 中文
 
 #### 变更
-- 统一 `lm_findTextInFiles`、`lm_findFiles`、`lm_getDiagnostics` 的输出: `structuredContent` 固定为 JSON 对象,`content.text` 固定为人类可读摘要文本.
-- 调整 find 摘要文本: 移除 `showing: x/y` 截断提示并改为分块格式(`---`、`// path:line`、预览另起一行),文件搜索改为输出完整路径列表.
-- 调整 `lm_findFiles` 摘要路径行格式: 保留 `---` 分隔符,但路径行不再带 `//` 前缀.
-- 修复握手 discovery 拉取 `tools/list` 的请求格式: 内部 JSON-RPC 请求改为有效 id(不再使用 `id: null`),在工作区工具可用时 `discovery.bridgedTools` 可正常填充.
-- 调整 `lmToolsBridge.requestWorkspaceMCPServer` 的 tools/call 文本输出为人类可读多行摘要,同时保持 `structuredContent` 为完整 JSON 载荷.
-- Breaking change: 从握手 discovery 的每工具条目中移除 `toolUri`/`schemaUri`,并新增 discovery 级 `resourceTemplates`(`lm-tools://tool/{name}`, `lm-tools://schema/{name}`)供客户端拼装 URI.
-- 优化握手 discovery 的输入提示: manager 会读取 bridged tool 的 `lm-tools://schema/{name}` 推导真实 `Input: {...}` 签名,并移除误导性的 `Input: {}` 回退提示.
-- discovery 诊断统一为 `discovery.issues` 分层结构(`level`、`category`、`code`、`message`、可选 `toolName/details`),同时承载 error 与 warning.
-- discovery 中 schema 读取失败改为显式 `warning` issue(不再静默),并保持非阻断回退.
-- 调整 `requestWorkspaceMCPServer` 的人类可读摘要文本: 在 `tools:` 下新增缩进的 bridged tool 名称列表,同时保持 `structuredContent` 不变.
-- 将 `copilot_getErrors` 与 `copilot_readProjectStructure` 设为 built-in disabled(永不暴露/启用).
-- 握手响应 discovery 改为精简结构(`callTool`, `bridgedTools`, `resourceTemplates`, `partial`, `issues`),减少 `lmToolsBridge.requestWorkspaceMCPServer` 之后的额外 list 调用.
-- `discovery.partial` 现在仅由 `error` 级 issue 决定; `warning` 不会触发 partial.
-- 稳定 `discovery.bridgedTools` 顺序: 现在按工具名做确定性字母排序(case-insensitive,同名折叠后按原始 name 作为次级比较).
-- `discovery.callTool` 作为独立 manager 桥接工具返回并内联 `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` 不再出现在 discovery 工具项中.
-- `discovery.bridgedTools[].description` 在可用 schema 元数据时会追加简化 `Input: { ... }` 提示.
-- `discovery` 不再返回 `resources`; 现在返回握手级 `resourceTemplates` 用于 URI 拼装.
-- 调整 clangd 工具默认策略: 默认暴露,但不默认启用.
-- 提升握手场景的会话健壮性: 当 `Mcp-Session-Id` 缺失或过期时,`lmToolsBridge.requestWorkspaceMCPServer` 现在会自动恢复新会话并返回新 session header,避免早期 HTTP 400 传输错误.
-- Breaking change: clangd AI-first 工具输入从 `uri` 改为 `filePath`。
-- 新增工作区感知 `filePath` 解析: 接受 `WorkspaceName/...` 和绝对路径,拒绝 `file:///...`。
-- `lm_clangd_typeHierarchy` 输出切换为 AI 摘要文本(`counts + --- + sections + entries`),不再返回文件坐标 JSON 字段。
-- 新增 AI-first 符号工具: `lm_clangd_symbolSearch`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, `lm_clangd_callHierarchy`。
-- 新增 `lm_clangd_symbolBundle`,支持一次调用聚合 symbol search/info/references/implementations/call hierarchy。
-- 为 clangd AI-first 工具补充 `structuredContent`,可在摘要文本之外提供稳定可机读载荷。
-- 统一 clangd 结构化位置字段为 `absolutePath`(必有) + `workspacePath`(可空),并使用 1-based 数值坐标与可选 `preview`.
-- 移除旧结构化路径字段(`summaryPath`, `location.path#...`),并清理 AI-first 结构化载荷中的输入回显字段.
+- Breaking change: clangd AI-first 工具输入从 `uri` 改为 `filePath`.
+- 新增工作区感知 `filePath` 解析: 接受 `WorkspaceName/...` 和绝对路径,拒绝 `file:///...`.
+- `lm_clangd_typeHierarchy` 输出切换为 AI 摘要文本(`counts + --- + sections + entries`),不再返回文件坐标 JSON 字段.
+- 新增 AI-first 符号工具: `lm_clangd_symbolSearch`,`lm_clangd_symbolInfo`,`lm_clangd_symbolReferences`,`lm_clangd_symbolImplementations`,`lm_clangd_callHierarchy`.
+- 新增 `lm_clangd_symbolBundle`,支持一次调用聚合 symbol search/info/references/implementations/call hierarchy.
+- 为 clangd AI-first 工具补充 `structuredContent`,可在摘要文本之外提供稳定可机读载荷.
 - 增强 `lm_clangd_symbolSearch`,默认返回完整符号签名,并使用 `signatureHelp -> hover -> definitionLine` 回退链路.
-- 调整 `lm_clangd_symbolInfo` snippet 选点规则: 默认排除 generated 文件(`*.generated.h`, `*.gen.cpp`),且不再回退到 generated 位置.
-- 更新 `lm_clangd_symbolInfo`: 基于 document symbols 做符号类别判定并自适应输出条目; `typeDefinition` 仅在有意义场景(如 value-like 符号)返回.
+- 调整 `lm_clangd_symbolInfo` snippet 选点规则: 默认排除 generated 文件(`*.generated.h`,`*.gen.cpp`),且不再回退到 generated 位置.
 - 调整 `lm_clangd_typeHierarchy` 的 SOURCE 文本顺序为 `type -> preview -> path`,并在 `structuredContent.sourceByClass` 新增 `preview` 字段.
 - 调整 `lm_clangd_typeHierarchy` 区间策略为仅依赖 `textDocument/documentSymbol`; 未命中匹配符号时回退为单行区间(`endLine = startLine`),不再使用本地大括号扫描.
-- 禁用 `lm_clangd_ast` 暴露并将其从 clangd 默认 exposed/enabled 列表移除.
-- 将 `lm_clangd_status` 与 `lm_clangd_lspRequest` 的 `content` 调整为人类可读文本,同时保留 `structuredContent` 结构化对象.
-- 调整 LM tool 转发输出映射: `LanguageModelDataPart` 的 JSON object 直通 `structuredContent`,`LanguageModelTextPart` 仅作为 `content.text`,避免重复包装.
-- 细化 LM tool 转发映射: `content.text` 仅透传 `LanguageModelTextPart`,并增强 `LanguageModelDataPart` 的 JSON mime 识别(`application/json; charset=...` 与 `*+json` 变体)以稳定透传 `structuredContent`.
-- 在运行时将 `lmToolsBridge.useWorkspaceSettings` 强制为仅工作区级: 若出现在 User 级会自动移除并提示.
-- 在状态菜单新增 `Open Settings` 操作,可直接跳转到扩展设置页.
-- 新增自定义诊断工具 `lm_getDiagnostics`,基于 `vscode.languages.getDiagnostics` 输出稳定结构化结果(`source/scope/severities/capped/totalDiagnostics/files`),并支持 `filePath` 过滤与 severity/maxResults 控制; 文件项不再包含 `uri`,且每条诊断附带 `startLine..endLine` 代码预览(最多 10 行,带可用性/截断标记).
-- 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`),并支持有界展开。
-- 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`, `maxSubDepth`, `maxSubBreadth`。
-- 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行。
-- 移除 `lm_clangd_typeHierarchyResolve` 的 clangd 工具暴露及其独立实现入口。
-
-## [1.0.67] - 2026-02-10
-
-### English
-
-#### Changed
-- Breaking change: renamed custom diagnostics tool from `lm_getErrors` to `lm_getDiagnostics`.
-- No compatibility alias is provided; callers and local settings must migrate to `lm_getDiagnostics` manually.
-- Kept tool behavior and payload schema unchanged (`filePath`/`severities`/`maxResults` input and diagnostics summary + structured payload output).
-
-### 中文
-
-#### 变更
-- Breaking change: 自定义诊断工具由 `lm_getErrors` 更名为 `lm_getDiagnostics`。
-- 不提供兼容 alias; 外部调用和本地配置需手动迁移到 `lm_getDiagnostics`。
-- 保持工具行为和输出结构不变(输入仍为 `filePath`/`severities`/`maxResults`,输出仍为诊断摘要与结构化载荷)。
+- 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`,`supers`,`derivedByParent`,`sourceByClass`,`limits`,`truncated`),并支持有界展开.
+- 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`,`maxSubDepth`,`maxSubBreadth`.
+- 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行.
+- 移除 `lm_clangd_typeHierarchyResolve` 的 clangd 工具暴露及其独立实现入口.
 
 ## [1.0.61] - 2026-02-07
 

@@ -24,6 +24,7 @@ Maintenance rule:
 - Marked `copilot_getErrors` and `copilot_readProjectStructure` as built-in disabled (never exposed/enabled).
 - Handshake response now uses a compact discovery payload (`callTool`, `bridgedTools`, `resourceTemplates`, `partial`, `issues`) to reduce extra list calls after `lmToolsBridge.requestWorkspaceMCPServer`.
 - `discovery.partial` is now driven by `error`-level issues only; `warning` issues do not mark discovery as partial.
+- Stabilized `discovery.bridgedTools` ordering: tools are now sorted by name in deterministic alphabetical order (case-insensitive, with original-name tiebreaker).
 - `discovery.callTool` is a dedicated manager bridge descriptor with inline `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` is excluded from discovery tool items.
 - `discovery.bridgedTools[].description` appends a simple `Input: { ... }` hint when tool schema metadata is available.
 - `discovery` no longer returns `resources`; it now returns handshake-level `resourceTemplates` for URI composition.
@@ -70,6 +71,7 @@ Maintenance rule:
 - 将 `copilot_getErrors` 与 `copilot_readProjectStructure` 设为 built-in disabled(永不暴露/启用).
 - 握手响应 discovery 改为精简结构(`callTool`, `bridgedTools`, `resourceTemplates`, `partial`, `issues`),减少 `lmToolsBridge.requestWorkspaceMCPServer` 之后的额外 list 调用.
 - `discovery.partial` 现在仅由 `error` 级 issue 决定; `warning` 不会触发 partial.
+- 稳定 `discovery.bridgedTools` 顺序: 现在按工具名做确定性字母排序(case-insensitive,同名折叠后按原始 name 作为次级比较).
 - `discovery.callTool` 作为独立 manager 桥接工具返回并内联 `inputSchema`; `lmToolsBridge.requestWorkspaceMCPServer` 不再出现在 discovery 工具项中.
 - `discovery.bridgedTools[].description` 在可用 schema 元数据时会追加简化 `Input: { ... }` 提示.
 - `discovery` 不再返回 `resources`; 现在返回握手级 `resourceTemplates` 用于 URI 拼装.

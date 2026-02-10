@@ -881,6 +881,26 @@ function mergeHandshakeDiscoveryTools(
   return merged;
 }
 
+function sortHandshakeDiscoveryTools(tools: HandshakeDiscoveryTool[]): HandshakeDiscoveryTool[] {
+  return [...tools].sort((left, right) => {
+    const leftFolded = left.name.toLowerCase();
+    const rightFolded = right.name.toLowerCase();
+    if (leftFolded < rightFolded) {
+      return -1;
+    }
+    if (leftFolded > rightFolded) {
+      return 1;
+    }
+    if (left.name < right.name) {
+      return -1;
+    }
+    if (left.name > right.name) {
+      return 1;
+    }
+    return 0;
+  });
+}
+
 function isBridgeDiscoveryToolName(name: string): boolean {
   return name !== REQUEST_WORKSPACE_METHOD && name !== DIRECT_TOOL_CALL_NAME;
 }
@@ -1201,6 +1221,7 @@ async function buildHandshakeDiscovery(target: ManagerMatch): Promise<HandshakeD
       bridgedTools = mergeHandshakeDiscoveryTools(bridgedTools, enrichedTools);
     }
   }
+  bridgedTools = sortHandshakeDiscoveryTools(bridgedTools);
 
   const hasErrorIssue = issues.some((issue) => issue.level === 'error');
   return {

@@ -66,6 +66,7 @@ User guidance:
 - `Configure Exposure Tools`: choose tools that can be selected.
 - `Configure Enabled Tools`: choose active tools within exposed set.
 - `Status Menu -> Open Settings`: jump directly to this extension's settings page.
+- `Status Menu -> Open Extension Page`: open this extension page in VS Code Extensions.
 - Built-in disabled tools are always blocked and never callable.
 - Some default tools are policy-required exposure items.
 
@@ -149,6 +150,7 @@ Notes:
 - `lmToolsBridge.tools.disabledDelta`
 - `lmToolsBridge.tools.groupingRules`
 - `lmToolsBridge.tools.schemaDefaults`
+- `lmToolsBridge.tools.schemaDefaults` entries use `tool.param=value`; examples are entry values, not JSON string literals.
 - `lmToolsBridge.debug`
 
 Recommendation:
@@ -240,6 +242,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `Configure Exposure Tools`: 选择可进入候选集的工具.
 - `Configure Enabled Tools`: 在已暴露集合内选择真正启用的工具.
 - `Status Menu -> Open Settings`: 直接跳转到扩展设置页.
+- `Status Menu -> Open Extension Page`: 在 VS Code Extensions 中打开本扩展页面.
 - Built-in disabled 工具始终被拦截,不可调用.
 - 部分默认工具属于策略要求,必须保持暴露.
 
@@ -323,6 +326,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `lmToolsBridge.tools.disabledDelta`
 - `lmToolsBridge.tools.groupingRules`
 - `lmToolsBridge.tools.schemaDefaults`
+- `lmToolsBridge.tools.schemaDefaults` 采用 `tool.param=value` 条目格式; 示例展示的是 entry 值,不是 JSON 字符串字面量.
 - `lmToolsBridge.debug`
 
 建议:

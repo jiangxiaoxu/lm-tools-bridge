@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.76",
+  "version": "1.0.77",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -183,7 +183,7 @@
           "items": {
             "type": "string"
           },
-          "description": "List of input defaults in the \"toolName.paramName=value\" format. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Entries not in the \"toolName.paramName=value\" format are ignored. Values accept quoted strings (double quotes), true/false, numbers, or arrays written as \"{a,b,c}\" where each element is a quoted string, number, or boolean (whitespace allowed, empty elements allowed). Unquoted strings are rejected. JSON is not accepted. Examples: \"lm_findTextInFiles.maxResults=500\"; \"tool.param=1\"; \"tool.param=\\\"MyStr\\\"\"; \"tool.param=true\"; \"tool.param={6,4}\"."
+          "description": "Input defaults in \"toolName.paramName=value\" format. If a schema defines the param and the caller omits it, this default is injected. Invalid entries are ignored. Supported values: quoted strings (double quotes), true/false, numbers, or arrays \"{a,b,c}\" (elements can be quoted strings, numbers, or booleans; whitespace and empty elements allowed). Unquoted strings and JSON are not accepted. Examples are entry values, not JSON string literals. ';' is only a separator in this description and is not required at the end of actual entries. Examples: lm_findTextInFiles.maxResults=500; tool.param=1; tool.param=\"MyStr\"; tool.param=true; tool.param={6,4}."
         },
         "lmToolsBridge.debug": {
           "type": "string",

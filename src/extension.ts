@@ -716,7 +716,7 @@ function updateStatusBar(info: ServerStatusInfo): void {
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & { action?: 'configureExposure' | 'configureEnabled' | 'dump' | 'help' | 'restartManager' | 'openSettings' }> = [
+  const items: Array<vscode.QuickPickItem & { action?: 'configureExposure' | 'configureEnabled' | 'dump' | 'help' | 'restartManager' | 'openSettings' | 'openExtensionPage' }> = [
     {
       label: '$(settings-gear) Configure Exposure Tools',
       description: 'Choose tools available for MCP enablement',
@@ -741,6 +741,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       label: '$(settings) Open Settings',
       description: 'Open settings for this extension',
       action: 'openSettings',
+    },
+    {
+      label: '$(extensions) Open Extension Page',
+      description: 'Open this extension page in VS Code',
+      action: 'openExtensionPage',
     },
     { label: 'Help', kind: vscode.QuickPickItemKind.Separator },
     {
@@ -785,6 +790,11 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 
   if (selection.action === 'openSettings') {
     await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:jiangxiaoxu.lm-tools-bridge');
+    return;
+  }
+
+  if (selection.action === 'openExtensionPage') {
+    await openExtensionPage();
   }
 }
 
@@ -857,6 +867,16 @@ async function openHelpDoc(): Promise<void> {
     return;
   }
   await vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+async function openExtensionPage(): Promise<void> {
+  const extensionId = 'jiangxiaoxu.lm-tools-bridge';
+  try {
+    await vscode.commands.executeCommand('extension.open', extensionId);
+    return;
+  } catch {
+    await vscode.commands.executeCommand('workbench.extensions.search', `@id:${extensionId}`);
+  }
 }
 
 

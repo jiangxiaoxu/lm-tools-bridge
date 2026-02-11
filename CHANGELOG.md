@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.77] - 2026-02-11
+
+### English
+
+#### Changed
+- Clarified `lmToolsBridge.tools.schemaDefaults` setting description in VS Code UI examples: examples now show entry values directly (without outer quotes and JSON-style escape sequences) to reduce confusion.
+- Added `Open Extension Page` action under the status menu so users can jump directly to this extension page in VS Code Extensions.
+
+### 中文
+
+#### 变更
+- 澄清 VS Code UI 中 `lmToolsBridge.tools.schemaDefaults` 的示例文案: 示例现在直接展示 entry 值(不再使用外层引号和 JSON 风格转义),以减少误导.
+- 在状态菜单中新增 `Open Extension Page` 操作,可直接跳转到 VS Code Extensions 中的本扩展页面.
+
 ## [1.0.76] - 2026-02-11
 
 ### English

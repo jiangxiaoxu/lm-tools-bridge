@@ -6,6 +6,42 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.76] - 2026-02-11
+
+### English
+
+#### Changed
+- Breaking change: removed legacy custom-tool compatibility payload mapping (`CustomToolInvokePayload`), and now require custom tools to return `LanguageModelToolResult` directly.
+- Built-in custom tools (`lm_find*`, `lm_getDiagnostics`, `lm_clangd_*`) now provide explicit dual-channel outputs from tool implementations: `content.text` and `structuredContent`.
+- Tightened forwarded LM tool mapping (`lm.invokeTool`): `content.text` is emitted only from upstream text parts, and `structuredContent` is emitted only for valid JSON object payloads; no cross-channel fallback copy is performed.
+- Removed structured fallback wrapper generation (`{ blocks: [...] }`) for forwarded LM tool results when no valid structured object exists.
+- Updated `lm_clangd_inlayHints` to include structured payload alongside summary text.
+
+### 中文
+
+#### 变更
+- Breaking change: 移除旧的自定义工具兼容返回形态(`CustomToolInvokePayload`),并统一要求自定义工具直接返回 `LanguageModelToolResult`.
+- 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)现在由工具实现端显式提供双通道输出:`content.text` 与 `structuredContent`.
+- 收紧上游 LM 工具转发映射(`lm.invokeTool`): `content.text` 仅在上游 text part 存在时输出,`structuredContent` 仅在上游返回合法 JSON object 时输出; 不再做跨通道回填复制.
+- 移除上游 LM 工具结果在缺失 structured object 时的结构化回退包装(`{ blocks: [...] }`).
+- 为 `lm_clangd_inlayHints` 补充 structured payload,与摘要文本同时返回.
+
+## [1.0.74] - 2026-02-11
+
+### English
+
+#### Changed
+- Breaking change: removed `lmToolsBridge.tools.responseFormat` from extension settings; output mode is no longer user-configurable.
+- MCP tool-call responses are now fixed to return both `content.text` and `structuredContent` for success and error payloads.
+- Updated docs (`README.md`, `face-ai-report.md`) to reflect the fixed dual-channel output behavior.
+
+### 中文
+
+#### 变更
+- Breaking change: 从扩展设置中移除 `lmToolsBridge.tools.responseFormat`,不再支持用户切换输出模式.
+- MCP tools/call 响应现在固定同时返回 `content.text` 与 `structuredContent`,成功与错误返回均保持双通道.
+- 同步更新文档(`README.md`,`face-ai-report.md`)以匹配固定双通道输出行为.
+
 ## [1.0.73] - 2026-02-10
 
 ### English

@@ -1,5 +1,7 @@
 # LM Tools Bridge
 
+[English](#overview) | [中文](#中文)
+
 ### Overview
 LM Tools Bridge is a VS Code extension that exposes LM tools through MCP HTTP.
 It uses a built-in Manager to route requests to the correct workspace MCP server.
@@ -91,10 +93,11 @@ User guidance:
   - Ensure the tool is both exposed and enabled.
 
 ### Tool Output Mapping
-- LM tool `LanguageModelTextPart` is used as `content.text`.
-- `content.text` is forwarded from `LanguageModelTextPart` only, without falling back to `LanguageModelDataPart`.
-- LM tool `LanguageModelDataPart` with JSON mime type (`application/json`, `application/json; charset=utf-8`, or `*+json`) is parsed as JSON object and used as `structuredContent` when possible.
-- If no JSON object is available for `structuredContent`, bridge falls back to `{ blocks: [...] }`.
+- Built-in custom tools (`lm_find*`, `lm_getDiagnostics`, `lm_clangd_*`) always return both `content.text` and `structuredContent`.
+- For forwarded LM tools (`lm.invokeTool`), output is passthrough-based:
+- `content.text` is emitted only when upstream returns `LanguageModelTextPart`.
+- `structuredContent` is emitted only when upstream returns a valid JSON object (`LanguageModelDataPart` with JSON mime, or tool-level `structuredContent` object).
+- Missing channels are kept missing. The bridge does not copy data across channels.
 
 ### Clangd Tools (Optional)
 Enable clangd MCP tools with:
@@ -146,7 +149,6 @@ Notes:
 - `lmToolsBridge.tools.disabledDelta`
 - `lmToolsBridge.tools.groupingRules`
 - `lmToolsBridge.tools.schemaDefaults`
-- `lmToolsBridge.tools.responseFormat`
 - `lmToolsBridge.debug`
 
 Recommendation:
@@ -171,4 +173,176 @@ Open Output panel and select `LM Tools Bridge`.
 See `CHANGELOG.md`.
 
 ---
+
+## 中文
+
+### 概览
+LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
+它内置 Manager,用于把请求路由到正确的 workspace MCP server.
+
+本 README 仅覆盖当前基于 Manager 的版本.
+
+### 快速开始
+1. 在 VS Code 里用 `LM Tools Bridge: Start Server` 启动服务(或开启 `lmToolsBridge.server.autoStart`).
+2. 在 MCP 客户端连接 Manager 端点 `http://127.0.0.1:47100/mcp`(或 `http://127.0.0.1:<lmToolsBridge.manager.httpPort>/mcp`).
+3. 调用工具前先执行握手 `lmToolsBridge.requestWorkspaceMCPServer`,参数为 `{ "cwd": "<你的项目路径>" }`.
+4. 使用握手响应里的 `discovery` 获取 `callTool` 和 `bridgedTools`. `tools/list` 仅作为刷新回退使用.
+
+### 端点
+- Manager MCP 端点(客户端入口): `http://127.0.0.1:47100/mcp`
+- Manager 状态端点(诊断): `http://127.0.0.1:47100/mcp/status`
+- Workspace MCP 端点(动态目标): `http://127.0.0.1:<runtime-port>/mcp`
+
+### Manager 与 Workspace MCP Server 的关系
+- Manager 是稳定的客户端 MCP 入口.
+- Workspace MCP server 由某个 VS Code 实例承载,会随实例或重启发生变化.
+- Manager 会基于 `cwd` 完成 workspace 匹配,健康检查和请求转发.
+- 为了稳定性,请让 MCP 客户端连接 Manager,不要直接连接 workspace MCP 动态端口.
+
+### 如何连接你的 MCP 客户端
+1. 将 MCP URL 配置为 `http://127.0.0.1:47100/mcp`(或自定义 manager 端口).
+2. 发送 `initialize`,并保存返回的 `Mcp-Session-Id` 响应头.
+3. 调用 `lmToolsBridge.requestWorkspaceMCPServer`,传入 `cwd`.
+4. 从握手 `discovery` 中读取 `callTool`,`bridgedTools`,`resourceTemplates`.
+5. 使用模板和工具 `name` 组装 tool/schema URI(`lm-tools://tool/{name}`,`lm-tools://schema/{name}`).
+6. 使用 `lmToolsBridge.callTool` 或标准 `tools/call`.
+7. 如果会话头丢失或过期,再次调用 `lmToolsBridge.requestWorkspaceMCPServer`. Manager 会在握手调用中自动恢复会话并返回新的 `Mcp-Session-Id`.
+
+### 握手 discovery 载荷
+- 成功握手会返回包含以下字段的 `discovery`:
+- `callTool`: 专用 manager bridge 工具描述(`lmToolsBridge.callTool`),并内联 `inputSchema`
+- `bridgedTools`: 仅 workspace MCP tools(`name`,`description`); 当 schema 可用时,`description` 会附带简化 `Input: { ... }` 提示
+- `resourceTemplates`: URI 模板(`lm-tools://tool/{name}`,`lm-tools://schema/{name}`)
+- `partial` 和 `issues`: `partial` 由 `error` 级 issue 触发(例如 `tools/list` 失败); `warning` 级 issue 用于报告非阻断退化,例如 schema 读取失败
+- `issues` 条目结构: `{ level: "error" | "warning", category, code, message, toolName?, details? }`
+- discovery 里的输入提示来自 schema resource(`lm-tools://schema/{name}`),schema 读取失败会以 `level: "warning"` 写入 `issues`.
+
+配置示例:
+
+```toml
+[mcp_servers.lm_tools_bridge]
+url = "http://127.0.0.1:47100/mcp"
+```
+
+### 端口避让机制
+- Workspace 端口偏好起点来自 `lmToolsBridge.server.port`.
+- Manager 通过 `POST /allocate` 先尝试分配一个尽量不冲突的候选端口.
+- 分配时会考虑活跃实例端口和短期保留端口,减少 VS Code 多实例冲突.
+- 扩展真正绑定 socket 时,如果出现 `EADDRINUSE`,会自动递增重试(最多 50 次).
+- 超过重试上限时,状态栏显示 `Port In Use`.
+- 即使 Manager 暂时不可用,扩展仍会执行本地递增绑定以优先保证可用性.
+
+用户建议:
+- 不要在 MCP 客户端里写死 workspace MCP runtime 端口.
+- 始终连接 Manager `/mcp`,并按 workspace 执行握手.
+
+### 日常使用
+- `Configure Exposure Tools`: 选择可进入候选集的工具.
+- `Configure Enabled Tools`: 在已暴露集合内选择真正启用的工具.
+- `Status Menu -> Open Settings`: 直接跳转到扩展设置页.
+- Built-in disabled 工具始终被拦截,不可调用.
+- 部分默认工具属于策略要求,必须保持暴露.
+
+### 诊断工具
+- `lm_getDiagnostics` 从 VS Code Problems 数据源(`vscode.languages.getDiagnostics`)读取诊断.
+- 输入: 可选 `filePath`,可选 `severities`(`error|warning|information|hint`),可选 `maxResults`(默认 `500`).
+- 默认 severity 为 `error` 和 `warning`.
+- structured diagnostics 不再包含 `uri`; 每条诊断包含 `preview`,`previewUnavailable`,`previewTruncated`.
+- `preview` 返回 `startLine` 到 `endLine` 的源码预览,最多 10 行.
+- `copilot_getErrors` 仍保留兼容,但 `lm_getDiagnostics` 提供更稳定的 structured 输出.
+
+### 故障排查
+- `workspace not set`:
+  - 先调用 `lmToolsBridge.requestWorkspaceMCPServer` 并传 `cwd`.
+- stale or missing `Mcp-Session-Id`:
+  - `lmToolsBridge.requestWorkspaceMCPServer` 可自动恢复新 session header; 如客户端仍缓存旧 header,请重新 initialize 一次.
+- `workspace not matched`:
+  - 检查 `cwd` 是否位于目标 workspace 目录内.
+- `resolved MCP server is offline`:
+  - 确认目标 VS Code 实例和扩展服务正在运行.
+  - 重新执行握手.
+- 端口变化后客户端不可用:
+  - 改连 Manager `/mcp`,不要继续使用旧 workspace runtime 端口.
+- `Tool not found or disabled`:
+  - 确认该工具同时处于 exposed 和 enabled.
+
+### 工具输出映射
+- 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)固定同时返回 `content.text` 和 `structuredContent`.
+- 对上游转发 LM tools(`lm.invokeTool`),输出按存在性透传:
+- 仅当上游返回 `LanguageModelTextPart` 时输出 `content.text`.
+- 仅当上游返回合法 JSON object(来自 JSON mime 的 `LanguageModelDataPart` 或 tool-level `structuredContent` object)时输出 `structuredContent`.
+- 缺失通道保持缺失,bridge 不会跨通道复制数据.
+
+### Clangd 工具(可选)
+通过以下设置启用 clangd MCP tools:
+- `lmToolsBridge.clangd.enabled`
+- clangd 工具默认 exposed,但默认不 enabled.
+
+说明:
+- AI-first 工具已使用 `filePath` 输入替代 `uri`.
+- `filePath` 支持:
+- workspace 前缀路径,例如 `UE5/Engine/Source/...`
+- 绝对路径,例如 `G:/UE_Folder/...` 或 `G:\\UE_Folder\\...`
+- `file:///...` URI 输入会被拒绝.
+- AI-first 输出使用摘要文本块:
+- 第一行 `counts ...`
+- 第二行 `---`
+- 后续按 `<path>#<lineOrRange>` + summary 行输出,条目之间以 `---` 分隔
+- clangd AI-first 工具也返回 `structuredContent` 机读字段:
+- 路径字段为 `absolutePath`(始终存在) + `workspacePath`(可空)
+- 行列字段保持 1-based 数值字段,不使用 `path#...` 字符串
+- structured 输出避免回显原始输入参数
+- `lm_clangd_symbolSearch` 现在默认在 text summary 与 `structuredContent` 中包含完整 symbol signature.
+- `lm_clangd_symbolInfo` 默认排除 generated 文件(`*.generated.h`, `*.gen.cpp`)的 snippet 来源.
+- `lm_clangd_symbolInfo` 现在使用自适应 symbol-category 输出,并在 value-like symbols 上按需包含 `typeDefinition`.
+- `lm_clangd_typeHierarchy` 的 `SOURCE` 区块现在按 `type -> preview -> path` 输出,更利于 AI 阅读.
+- `lm_clangd_typeHierarchy` 的 `structuredContent.sourceByClass` 包含 `absolutePath/workspacePath/startLine/endLine/preview`.
+- summary path 格式为: workspace 内文件使用 `WorkspaceName/...#line`,workspace 外文件使用绝对路径.
+- 默认暴露的 clangd AI tools:
+- `lm_clangd_status`
+- `lm_clangd_switchSourceHeader`
+- `lm_clangd_typeHierarchy`
+- `lm_clangd_symbolSearch`
+- `lm_clangd_symbolBundle`
+- `lm_clangd_symbolInfo`
+- `lm_clangd_symbolReferences`
+- `lm_clangd_symbolImplementations`
+- `lm_clangd_callHierarchy`
+- `lm_clangd_lspRequest` 由 `lmToolsBridge.clangd.enablePassthrough` 和 `lmToolsBridge.clangd.allowedMethods` 控制.
+- 当 `lmToolsBridge.clangd.autoStartOnInvoke=true` 时,首次 clangd 工具调用可自动拉起 clangd.
+- `clangd.enable` 属于 clangd 扩展设置,不是 `lmToolsBridge.*` 设置.
+
+### 关键设置
+- `lmToolsBridge.server.autoStart`
+- `lmToolsBridge.server.port`
+- `lmToolsBridge.manager.httpPort`
+- `lmToolsBridge.useWorkspaceSettings` 仅支持 workspace 级. 若写入 User settings,扩展会自动移除并给出 warning.
+- `lmToolsBridge.tools.exposedDelta`
+- `lmToolsBridge.tools.unexposedDelta`
+- `lmToolsBridge.tools.enabledDelta`
+- `lmToolsBridge.tools.disabledDelta`
+- `lmToolsBridge.tools.groupingRules`
+- `lmToolsBridge.tools.schemaDefaults`
+- `lmToolsBridge.debug`
+
+建议:
+- 如需调整连接端口,优先调整 `lmToolsBridge.manager.httpPort` 供客户端连接.
+
+### 命令
+- `lm-tools-bridge.start`
+- `lm-tools-bridge.stop`
+- `lm-tools-bridge.configureExposure`
+- `lm-tools-bridge.configureEnabled`
+- `lm-tools-bridge.statusMenu`
+- `lm-tools-bridge.openHelp`
+
+### 日志
+打开 Output 面板并选择 `LM Tools Bridge`.
+
+- `off`: 仅状态日志
+- `simple`: 工具名,输入,耗时
+- `detail`: 包含完整输出
+
+### 完整变更历史
+参见 `CHANGELOG.md`.
 

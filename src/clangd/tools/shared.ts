@@ -23,14 +23,12 @@ export function successResult(payload: unknown): vscode.LanguageModelToolResult 
 
 export function successTextResult(
   text: string,
-  structuredContent?: Record<string, unknown>,
+  structuredContent: Record<string, unknown>,
 ): vscode.LanguageModelToolResult {
   const result = {
     content: [new vscode.LanguageModelTextPart(text)],
+    structuredContent,
   };
-  if (structuredContent) {
-    (result as { structuredContent?: Record<string, unknown> }).structuredContent = structuredContent;
-  }
   return result as unknown as vscode.LanguageModelToolResult;
 }
 
@@ -47,9 +45,11 @@ export function successTextWithPayloadResult(
 
 export function errorResult(error: unknown): vscode.LanguageModelToolResult {
   const message = errorToMessage(error);
-  return {
+  const result = {
     content: [new vscode.LanguageModelTextPart(message)],
+    structuredContent: { error: message },
   };
+  return result as unknown as vscode.LanguageModelToolResult;
 }
 
 export function asObject(value: unknown, fieldName: string): Record<string, unknown> {

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.73",
+  "version": "1.0.76",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -185,16 +185,6 @@
           },
           "description": "List of input defaults in the \"toolName.paramName=value\" format. If a tool schema defines the property and the caller omits it, this value will be injected into schemas and tool invocations. Entries not in the \"toolName.paramName=value\" format are ignored. Values accept quoted strings (double quotes), true/false, numbers, or arrays written as \"{a,b,c}\" where each element is a quoted string, number, or boolean (whitespace allowed, empty elements allowed). Unquoted strings are rejected. JSON is not accepted. Examples: \"lm_findTextInFiles.maxResults=500\"; \"tool.param=1\"; \"tool.param=\\\"MyStr\\\"\"; \"tool.param=true\"; \"tool.param={6,4}\"."
         },
-        "lmToolsBridge.tools.responseFormat": {
-          "type": "string",
-          "default": "text",
-          "enum": [
-            "text",
-            "structured",
-            "both"
-          ],
-          "description": "Controls how MCP tool calls return data. \"text\" returns only content.text (human-readable). \"structured\" returns only structuredContent (machine-readable) with empty content. \"both\" returns both content.text and structuredContent. This setting applies to all tools."
-        },
         "lmToolsBridge.debug": {
           "type": "string",
           "default": "off",
@@ -203,7 +193,7 @@
             "simple",
             "detail"
           ],
-          "description": "Controls logging verbosity. \"off\" logs only plugin status. \"simple\" logs tool name/input and elapsed time. \"detail\" adds full tool outputs (including structuredContent when enabled)."
+          "description": "Controls logging verbosity. \"off\" logs only plugin status. \"simple\" logs tool name/input and elapsed time. \"detail\" adds full tool outputs, including structuredContent."
         }
       }
     }

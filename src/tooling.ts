@@ -36,7 +36,6 @@ const CONFIG_DISABLED_TOOLS = 'tools.disabledDelta';
 const CONFIG_EXPOSED_TOOLS = 'tools.exposedDelta';
 const CONFIG_UNEXPOSED_TOOLS = 'tools.unexposedDelta';
 const CONFIG_GROUPING_RULES = 'tools.groupingRules';
-const CONFIG_RESPONSE_FORMAT = 'tools.responseFormat';
 const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
@@ -290,7 +289,6 @@ interface LmGetDiagnosticsPayload {
 const schemaDefaultOverrideWarnings = new Set<string>();
 
 export type ToolDetail = 'names' | 'full';
-export type ResponseFormat = 'text' | 'structured' | 'both';
 export type DebugLevel = 'off' | 'simple' | 'detail';
 
 interface CustomToolInformation {
@@ -302,12 +300,7 @@ interface CustomToolInformation {
 }
 
 interface CustomToolDefinition extends CustomToolInformation {
-  invoke: (input: Record<string, unknown>) => Promise<unknown>;
-}
-
-interface CustomToolInvokePayload {
-  structuredContent: unknown;
-  summaryText?: string;
+  invoke: (input: Record<string, unknown>) => Promise<vscode.LanguageModelToolResult>;
 }
 
 export type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
@@ -1387,15 +1380,6 @@ function schemaAllowsArrayValue(schema: Record<string, unknown>, value: unknown)
   return value.every((entry) => schemaAllowsValue(items as Record<string, unknown>, entry) !== false);
 }
 
-function getResponseFormat(): ResponseFormat {
-  const rawValue = normalizeConfigString(getConfigValue<string>(CONFIG_RESPONSE_FORMAT, 'text'));
-  const value = rawValue ? rawValue.toLowerCase() : '';
-  if (value === 'structured' || value === 'both') {
-    return value;
-  }
-  return 'text';
-}
-
 export function getDebugLevel(): DebugLevel {
   const rawValue = normalizeConfigString(getConfigValue<string>(CONFIG_DEBUG, 'off'));
   const value = rawValue ? rawValue.toLowerCase() : '';
@@ -1640,14 +1624,17 @@ function serializedToolResultToText(parts: readonly Record<string, unknown>[]): 
   return joinPromptTsxTextParts(segments);
 }
 
-function serializedTextPartsToText(parts: readonly Record<string, unknown>[]): string {
-  const segments: string[] = [];
+function extractTextPayloadFromTextParts(parts: readonly Record<string, unknown>[]): { hasTextPart: boolean; text: string } {
+  const textParts: string[] = [];
   for (const part of parts) {
     if (part.type === 'text' && typeof part.text === 'string') {
-      segments.push(part.text);
+      textParts.push(part.text);
     }
   }
-  return joinPromptTsxTextParts(segments);
+  return {
+    hasTextPart: textParts.length > 0,
+    text: joinPromptTsxTextParts(textParts),
+  };
 }
 
 function tryParseJsonObject(text: string): Record<string, unknown> | undefined {
@@ -1701,7 +1688,7 @@ function extractStructuredContentFromDataParts(
 function resolveStructuredToolResultPayload(
   result: vscode.LanguageModelToolResult,
   serialized: readonly Record<string, unknown>[],
-): Record<string, unknown> {
+): Record<string, unknown> | undefined {
   const structuredFromData = extractStructuredContentFromDataParts(serialized);
   if (structuredFromData) {
     return structuredFromData;
@@ -1712,7 +1699,7 @@ function resolveStructuredToolResultPayload(
   if (isPlainObject(structuredFromTool)) {
     return structuredFromTool as Record<string, unknown>;
   }
-  return { blocks: toolResultToStructuredBlocks(serialized) };
+  return undefined;
 }
 
 function isLanguageModelToolResult(value: unknown): value is vscode.LanguageModelToolResult {
@@ -1721,20 +1708,6 @@ function isLanguageModelToolResult(value: unknown): value is vscode.LanguageMode
   }
   const record = value as { content?: unknown };
   return Array.isArray(record.content);
-}
-
-function isCustomToolInvokePayload(value: unknown): value is CustomToolInvokePayload {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false;
-  }
-  const record = value as { structuredContent?: unknown; summaryText?: unknown };
-  if (!isPlainObject(record.structuredContent)) {
-    return false;
-  }
-  if (record.summaryText !== undefined && typeof record.summaryText !== 'string') {
-    return false;
-  }
-  return true;
 }
 
 function normalizeFindTextInFilesText(text: string): string {
@@ -1832,23 +1805,31 @@ function buildGetDiagnosticsToolDefinition(): CustomToolDefinition {
   };
 }
 
-async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<CustomToolInvokePayload> {
+function buildCustomToolResult(
+  text: string,
+  structuredContent: unknown,
+): vscode.LanguageModelToolResult {
+  if (!isPlainObject(structuredContent)) {
+    throw new Error('Custom tool must provide structuredContent as a JSON object.');
+  }
+  const result = {
+    content: [new vscode.LanguageModelTextPart(text)],
+    structuredContent: structuredContent as Record<string, unknown>,
+  };
+  return result as unknown as vscode.LanguageModelToolResult;
+}
+
+async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeFindTextInFilesSearch(input);
-  return {
-    structuredContent: payload,
-    summaryText: formatFindTextInFilesSummary(payload),
-  };
+  return buildCustomToolResult(formatFindTextInFilesSummary(payload), payload);
 }
 
-async function runFindFilesTool(input: Record<string, unknown>): Promise<CustomToolInvokePayload> {
+async function runFindFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeFindFilesSearch(input);
-  return {
-    structuredContent: payload,
-    summaryText: formatFindFilesSummary(payload),
-  };
+  return buildCustomToolResult(formatFindFilesSummary(payload), payload);
 }
 
-async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<CustomToolInvokePayload> {
+async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const getDiagnostics = (
     vscode.languages as { getDiagnostics?: typeof vscode.languages.getDiagnostics }
   ).getDiagnostics;
@@ -1885,10 +1866,7 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<Cu
     files: limited.files,
   };
   const summaryText = formatLmGetDiagnosticsSummary(payload, limited.returnedDiagnostics);
-  return {
-    structuredContent: payload,
-    summaryText,
-  };
+  return buildCustomToolResult(summaryText, payload);
 }
 
 function formatFindTextInFilesSummary(payload: Record<string, unknown>): string {
@@ -2309,19 +2287,6 @@ function formatLmGetDiagnosticsSummary(payload: LmGetDiagnosticsPayload, returne
   return lines.join('\n');
 }
 
-function toolResultToStructuredBlocks(
-  parts: readonly Record<string, unknown>[],
-): Array<Record<string, unknown>> {
-  const blocks: Array<Record<string, unknown>> = [];
-  for (const part of parts) {
-    if (part.type === 'data' && typeof part.text !== 'string') {
-      continue;
-    }
-    blocks.push(part);
-  }
-  return blocks;
-}
-
 function serializedToolResultPartToText(part: Record<string, unknown>): string {
   if (part.type === 'text' && typeof part.text === 'string') {
     return part.text;
@@ -2666,32 +2631,8 @@ function buildToolResult(
   textOverride?: string,
   structuredOverride?: Record<string, unknown>,
 ) {
-  const responseFormat = getResponseFormat();
   const text = textOverride ?? payloadToText(payload);
-  const structuredContent = responseFormat === 'text'
-    ? undefined
-    : (structuredOverride ?? (isPlainObject(payload) ? payload : { text }));
-
-  if (responseFormat === 'structured') {
-    return {
-      content: [],
-      structuredContent,
-      ...(isError ? { isError: true } : {}),
-    };
-  }
-
-  if (responseFormat === 'both') {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text,
-        },
-      ],
-      structuredContent,
-      ...(isError ? { isError: true } : {}),
-    };
-  }
+  const structuredContent = structuredOverride ?? (isPlainObject(payload) ? payload : { text });
 
   return {
     content: [
@@ -2700,6 +2641,27 @@ function buildToolResult(
         text,
       },
     ],
+    structuredContent,
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+function buildPassthroughToolResult(
+  text: string | undefined,
+  hasTextPart: boolean,
+  structuredContent?: Record<string, unknown>,
+  isError = false,
+) {
+  return {
+    content: hasTextPart
+      ? [
+        {
+          type: 'text' as const,
+          text: text ?? '',
+        },
+      ]
+      : [],
+    ...(structuredContent !== undefined ? { structuredContent } : {}),
     ...(isError ? { isError: true } : {}),
   };
 }
@@ -2731,25 +2693,22 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     let structuredOutput: Record<string, unknown> | undefined;
     if (isCustomTool(tool)) {
       const result = await tool.invoke(normalizedInput);
-      if (isLanguageModelToolResult(result)) {
-        const serialized = serializeToolResult(result);
-        outputText = serializedTextPartsToText(serialized);
-        structuredOutput = resolveStructuredToolResultPayload(result, serialized);
-      } else if (isCustomToolInvokePayload(result)) {
-        structuredOutput = result.structuredContent as Record<string, unknown>;
-        outputText = (result.summaryText && result.summaryText.trim().length > 0)
-          ? result.summaryText
-          : safePrettyStringify(result.structuredContent);
-      } else if (isPlainObject(result)) {
-        structuredOutput = result;
-        outputText = safePrettyStringify(result);
-      } else {
-        structuredOutput = { value: result };
-        outputText = payloadToText(result);
+      if (!isLanguageModelToolResult(result)) {
+        throw new Error(`Custom tool '${tool.name}' must return LanguageModelToolResult.`);
       }
+      const serialized = serializeToolResult(result);
+      const textPayload = extractTextPayloadFromTextParts(serialized);
+      if (!textPayload.hasTextPart) {
+        throw new Error(`Custom tool '${tool.name}' must include LanguageModelTextPart.`);
+      }
+      structuredOutput = resolveStructuredToolResultPayload(result, serialized);
+      if (!structuredOutput) {
+        throw new Error(`Custom tool '${tool.name}' must include structuredContent as a JSON object.`);
+      }
+      outputText = textPayload.text;
       debugOutputText = outputText;
       debugStructuredOutput = structuredOutput;
-      return buildToolResult(structuredOutput, false, outputText, structuredOutput);
+      return buildPassthroughToolResult(outputText, true, structuredOutput);
     }
 
     const lm = getLanguageModelNamespace();
@@ -2761,14 +2720,16 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       toolInvocationToken: undefined,
     });
     const serialized = serializeToolResult(result);
-    const textFromTextParts = serializedTextPartsToText(serialized);
-    outputText = tool.name === 'copilot_findTextInFiles'
-      ? normalizeFindTextInFilesText(textFromTextParts)
-      : textFromTextParts;
+    const textPayload = extractTextPayloadFromTextParts(serialized);
+    outputText = textPayload.hasTextPart
+      ? (tool.name === 'copilot_findTextInFiles'
+        ? normalizeFindTextInFilesText(textPayload.text)
+        : textPayload.text)
+      : undefined;
     structuredOutput = resolveStructuredToolResultPayload(result, serialized);
     debugOutputText = outputText;
     debugStructuredOutput = structuredOutput;
-    return buildToolResult(structuredOutput, false, outputText, structuredOutput);
+    return buildPassthroughToolResult(outputText, textPayload.hasTextPart, structuredOutput);
   } catch (error) {
     if (error instanceof McpError) {
       throw error;
@@ -2790,9 +2751,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
         toolingLogger.info(`mcpTool call name=${toolName} error: ${String(debugError)}`);
       } else {
         toolingLogger.info(`mcpTool call name=${toolName} output: ${debugOutputText ?? ''}`);
-        if (getResponseFormat() !== 'text') {
-          toolingLogger.info(`mcpTool call name=${toolName} structured output: ${formatLogPayload(debugStructuredOutput)}`);
-        }
+        toolingLogger.info(`mcpTool call name=${toolName} structured output: ${formatLogPayload(debugStructuredOutput)}`);
       }
     }
   }

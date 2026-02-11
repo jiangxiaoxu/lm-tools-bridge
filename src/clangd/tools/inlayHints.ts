@@ -22,6 +22,7 @@ export async function runInlayHintsTool(input: Record<string, unknown>): Promise
     const hints = Array.isArray(result) ? result.length : 0;
     const startLine = range.start.line + 1;
     const endLine = range.end.line + 1;
+    const location = formatSummaryPath(resolved.absoluteFilePath, startLine, endLine !== startLine ? endLine : undefined);
     const text = renderSummaryText(
       {
         total: hints,
@@ -31,12 +32,18 @@ export async function runInlayHintsTool(input: Record<string, unknown>): Promise
       },
       [
         {
-          location: formatSummaryPath(resolved.absoluteFilePath, startLine, endLine !== startLine ? endLine : undefined),
+          location,
           summary: `hints=${hints}`,
         },
       ],
     );
-    return successTextResult(text);
+    return successTextResult(text, {
+      kind: 'inlayHints',
+      total: hints,
+      shown: hints,
+      truncated: false,
+      location,
+    });
   } catch (error) {
     return errorResult(error);
   }

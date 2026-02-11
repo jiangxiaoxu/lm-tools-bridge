@@ -18,8 +18,8 @@ Output: MCP server listening, status bar Running, Manager heartbeat running
 
 Flow: MCP tool 调用
 Entry: HTTP POST /mcp
-Path: handleMcpHttpRequest -> invokeExposedTool -> (custom tool invoke or lm.invokeTool) -> buildToolResult
-Output: content.text(仅来自 LanguageModelTextPart) 或 structuredContent(优先来自 LanguageModelDataPart JSON object,支持 application/json; charset=... 与 *+json)
+Path: handleMcpHttpRequest -> invokeExposedTool -> (custom tool invoke or lm.invokeTool) -> buildPassthroughToolResult
+Output: 自定义工具固定返回 content.text + structuredContent; 上游 lm.invokeTool 转发按存在性透传(仅在上游提供对应通道时返回)
 
 Flow: Manager handshake 与转发
 Entry: lmToolsBridge.requestWorkspaceMCPServer
@@ -32,8 +32,8 @@ Path: executeFindFilesSearch / executeFindTextInFilesSearch -> ripgrep
 Output: 文件路径或匹配列表
 
 Flow: 自定义诊断工具
-Entry: lm_getErrors
-Path: runGetErrorsTool -> vscode.languages.getDiagnostics -> normalize/filter/cap -> buildToolResult
+Entry: lm_getDiagnostics
+Path: runGetDiagnosticsTool -> vscode.languages.getDiagnostics -> normalize/filter/cap -> buildCustomToolResult
 Output: 稳定 structuredContent(source/scope/severities/capped/totalDiagnostics/files, files 无 uri, diagnostics 含 preview/previewUnavailable/previewTruncated) + 可读摘要文本
 
 Flow: clangd MCP 工具调用
@@ -103,15 +103,10 @@ Files: src/searchTools.ts
 Log: "Results capped"
 
 Task: 诊断结构化输出
-Entry: lm_getErrors
-Path: runGetErrorsTool -> vscode.languages.getDiagnostics -> normalize/filter/preview/cap
+Entry: lm_getDiagnostics
+Path: runGetDiagnosticsTool -> vscode.languages.getDiagnostics -> normalize/filter/preview/cap
 Files: src/tooling.ts, src/clangd/workspacePath.ts
 Log: "filePath must be a string when provided.", "Tool not found or disabled"
-
-Task: 变更输出格式
-Entry: tools.responseFormat
-Path: buildToolResult
-Files: src/tooling.ts
 
 Task: clangd 工具未暴露
 Entry: lmToolsBridge.clangd.enabled
@@ -172,10 +167,6 @@ Key: lmToolsBridge.tools.schemaDefaults
 Effect: Inject schema and input defaults
 Code: getSchemaDefaultOverrides, applySchemaDefaults
 
-Key: lmToolsBridge.tools.responseFormat
-Effect: Output format control
-Code: buildToolResult
-
 Key: lmToolsBridge.debug
 Effect: Log verbosity
 Code: getDebugLevel
@@ -215,15 +206,15 @@ Invariant: Exposure UI 中只读项需有明显视觉区分: `Always Exposed` �
 Invariant: Exposure UI 中“全只读分组”不显示组级复选框, 避免误导可批量编辑.
 Invariant: tool input 必须是 object, 否则返回 error payload.
 Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
-Invariant: responseFormat 控制 content 与 structuredContent 的存在.
-Invariant: 转发 LM tool 结果时,content.text 仅来自 LanguageModelTextPart; LanguageModelDataPart(JSON mime,含 application/json; charset=... 与 *+json) 的 JSON object 优先作为 structuredContent; 无可用 JSON object 时 structuredContent 回退为 blocks 包装.
+Invariant: 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)成功返回固定同时包含 content.text 与 structuredContent.
+Invariant: 转发 LM tool 结果时,content.text 仅来自 LanguageModelTextPart; structuredContent 仅在上游返回合法 JSON object 时透传; 缺失通道保持缺失,不做跨通道回填.
 Invariant: 未启用或被禁用的工具返回 MethodNotFound.
-Invariant: `lm_getErrors` 仅使用 VS Code diagnostics 数据源(`vscode.languages.getDiagnostics`),不依赖 `copilot_getErrors`.
-Invariant: `lm_getErrors` 默认 severity 过滤为 `error` + `warning`,并支持通过 `severities` 覆盖.
-Invariant: `lm_getErrors` 支持 `{}` 全局查询和 `{ filePath }` 单文件查询,全局模式包含 workspace 外诊断.
-Invariant: `lm_getErrors` 输出坐标统一为 1-based,并将 `code` 规范为 string|null,`tags` 规范为 string[]; files[] 不包含 `uri`.
-Invariant: `lm_getErrors` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
-Invariant: `lm_getErrors` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
+Invariant: `lm_getDiagnostics` 仅使用 VS Code diagnostics 数据源(`vscode.languages.getDiagnostics`),不依赖 `copilot_getErrors`.
+Invariant: `lm_getDiagnostics` 默认 severity 过滤为 `error` + `warning`,并支持通过 `severities` 覆盖.
+Invariant: `lm_getDiagnostics` 支持 `{}` 全局查询和 `{ filePath }` 单文件查询,全局模式包含 workspace 外诊断.
+Invariant: `lm_getDiagnostics` 输出坐标统一为 1-based,并将 `code` 规范为 string|null,`tags` 规范为 string[]; files[] 不包含 `uri`.
+Invariant: `lm_getDiagnostics` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
+Invariant: `lm_getDiagnostics` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
 Invariant: `lmToolsBridge.clangd.enabled=false` 时不暴露任何 lm_clangd_* 工具.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
@@ -253,21 +244,21 @@ Case: tool input 非 object
 Result: error payload + inputSchema
 Code: invokeExposedTool
 
-Case: lm_getErrors filePath 非法
+Case: lm_getDiagnostics filePath 非法
 Result: error payload(由 invokeExposedTool 统一包装)
-Code: runGetErrorsTool -> resolveInputFilePath
+Code: runGetDiagnosticsTool -> resolveInputFilePath
 
-Case: lm_getErrors 结果超出 maxResults
+Case: lm_getDiagnostics 结果超出 maxResults
 Result: structuredContent.capped=true
-Code: runGetErrorsTool -> applyLmGetErrorsLimit
+Code: runGetDiagnosticsTool -> applyLmGetDiagnosticsLimit
 
-Case: lm_getErrors 预览不可读
+Case: lm_getDiagnostics 预览不可读
 Result: preview="" + previewUnavailable=true
-Code: runGetErrorsTool -> readRangePreviewFromFile
+Code: runGetDiagnosticsTool -> readRangePreviewFromFile
 
-Case: lm_getErrors 预览跨行过长
+Case: lm_getDiagnostics 预览跨行过长
 Result: previewTruncated=true(最多 10 行)
-Code: runGetErrorsTool -> computePreviewEndLine
+Code: runGetDiagnosticsTool -> computePreviewEndLine
 
 Case: workspace 无匹配
 Result: ERROR_NO_MATCH
@@ -301,7 +292,7 @@ Example: Handshake
 
 Example: Tool call
 1. POST /mcp with tools/call name + input object
-2. Expect content.text and/or structuredContent based on tools.responseFormat
+2. For built-in custom tools, expect both content.text and structuredContent; for forwarded LM tools, expect passthrough by channel availability
 
 Example: Direct tool call
 1. Call lmToolsBridge.callTool after handshake
@@ -323,8 +314,9 @@ Seed: getToolGroupingRulesFromConfig | Use: 自定义 regex 分组规则解析�
 Seed: showToolConfigPanel | Use: 分组树形配置页入口
 Seed: buildGroupedToolSections | Use: 来源分组与组状态计算
 Seed: invokeExposedTool | Use: MCP tool 调用入口
-Seed: buildToolResult | Use: 输出格式组装
-Seed: runGetErrorsTool | Use: Problems 诊断结构化输出入口
+Seed: buildPassthroughToolResult | Use: 成功输出透传组装
+Seed: buildToolResult | Use: 本地错误输出包装
+Seed: runGetDiagnosticsTool | Use: Problems 诊断结构化输出入口
 Seed: applySchemaDefaults | Use: schema defaults 注入
 Seed: applyInputDefaultsToToolInput | Use: 输入 defaults 注入
 Seed: lmToolsBridge.requestWorkspaceMCPServer | Use: Manager handshake
@@ -347,7 +339,7 @@ Seed: lm_clangd_symbolReferences | Use: clangd 引用关系摘要
 Seed: lm_clangd_symbolImplementations | Use: clangd 实现点摘要
 Seed: lm_clangd_callHierarchy | Use: clangd 调用关系摘要
 Seed: lm_clangd_lspRequest | Use: clangd 受限透传调用
-Seed: lm_getErrors | Use: VS Code diagnostics 查询
+Seed: lm_getDiagnostics | Use: VS Code diagnostics 查询
 
 ## 默认与内置列表的映射
 Default enabled source: DEFAULT_ENABLED_TOOL_NAMES in src/tooling.ts
@@ -374,3 +366,4 @@ DataFlow:
 - 变更配置项语义或优先级
 - 调整 Manager 或 MCP 调用路径
 - 修改默认启用或默认暴露策略
+

@@ -88,6 +88,23 @@ User guidance:
 - `resolved MCP server is offline`:
   - Ensure target VS Code instance and extension server are running.
   - Re-run handshake.
+- Status bar tooltip:
+  - Hover `LM Tools Bridge` to view a compact manager ownership summary (manager online/offline, current instance match, and a capped list of other instances/workspaces).
+  - Tooltip output is line/length capped for readability and is not a full raw dump of `/mcp/status`.
+- `Restart Manager` fails:
+  - The restart flow is single-instance priority: stale locks are cleaned automatically, but valid locks owned by another VS Code instance are not forcefully preempted.
+  - If lock ownership points to another running instance, restart manager from that instance or close it, then retry.
+  - Old-manager shutdown wait timeout in restart flow is 5 seconds.
+  - Restart progress is shown on the extension status bar item with a spinner (`$(sync~spin)`), not a notification overlay.
+  - Restart result is kept briefly on success (about 1 second) and longer on failure (about 8 seconds) while notifications are still shown.
+- manager version upgrade:
+  - When `extensionVersion > managerVersion`, the extension auto-triggers manager upgrade restart without an extra click.
+  - Upgrade restart uses the same core flow as status-menu `Restart Manager`.
+  - If upgrade restart times out, a notification asks you to run `Restart Manager` manually from the status menu.
+  - Repeated auto-upgrade failure notifications are throttled to reduce popup noise.
+- manager idle auto-shutdown:
+  - Manager now waits about 10 seconds of idle grace before self-shutdown after all active instances are gone.
+  - Instance liveness TTL is 2.5 seconds to tolerate short heartbeat jitter.
 - Client stops working after port change:
   - Connect to Manager `/mcp` instead of old workspace runtime port.
 - `Tool not found or disabled`:
@@ -264,6 +281,23 @@ url = "http://127.0.0.1:47100/mcp"
 - `resolved MCP server is offline`:
   - 确认目标 VS Code 实例和扩展服务正在运行.
   - 重新执行握手.
+- 状态栏 tooltip:
+  - 鼠标悬停 `LM Tools Bridge` 可查看精简的 manager 归属摘要(manager 在线状态,当前实例是否匹配,以及限量展示的其他实例/工作区).
+  - tooltip 输出采用行数和长度限额,不会原样透传 `/mcp/status` 全量字段.
+- `Restart Manager` 失败:
+  - 重启流程采用单实例优先策略: 会自动清理陈旧锁,但不会强制抢占其他 VS Code 实例持有的有效锁.
+  - 若锁归属另一个仍在运行的实例,请在该实例执行重启或先关闭该实例后重试.
+  - 重启流程中等待旧 manager 退出的超时窗口为 5 秒.
+  - 重启进度显示在扩展状态栏项的转圈图标(`$(sync~spin)`),不再使用通知覆盖层.
+  - 重启结果在成功时仅短暂停留(约 1 秒),失败时长时间停留(约 8 秒),同时仍保留通知提示.
+- manager 版本升级:
+  - 当 `extensionVersion > managerVersion` 时,扩展会自动触发 manager 升级重启,无需额外点击确认.
+  - 升级重启与状态菜单 `Restart Manager` 使用同一核心流程.
+  - 若升级重启超时,通知会明确提示你从状态菜单手动执行 `Restart Manager`.
+  - 自动升级失败通知会节流,减少连续弹窗干扰.
+- manager 空闲自动退出:
+  - 当所有活跃实例都消失后,manager 会先等待约 10 秒空闲窗口再自退出.
+  - 实例存活 TTL 调整为 2.5 秒,用于容忍短暂 heartbeat 抖动.
 - 端口变化后客户端不可用:
   - 改连 Manager `/mcp`,不要继续使用旧 workspace runtime 端口.
 - `Tool not found or disabled`:

@@ -90,9 +90,9 @@ interface HandshakeDiscoveryPayload {
   issues: HandshakeDiscoveryIssue[];
 }
 
-const TTL_MS = 1500;
+const TTL_MS = 2500;
 const PRUNE_INTERVAL_MS = 500;
-const IDLE_GRACE_MS = 3000;
+const IDLE_GRACE_MS = 10000;
 const PORT_RESERVATION_TTL_MS = 15000;
 const MCP_HTTP_PORT_DEFAULT = 47100;
 const MCP_SESSION_TTL_MS = 5 * 60 * 60 * 1000;

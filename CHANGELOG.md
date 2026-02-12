@@ -6,19 +6,41 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
-## [1.0.77] - 2026-02-11
+## [1.0.78] - 2026-02-12
 
 ### English
 
 #### Changed
 - Clarified `lmToolsBridge.tools.schemaDefaults` setting description in VS Code UI examples: examples now show entry values directly (without outer quotes and JSON-style escape sequences) to reduce confusion.
 - Added `Open Extension Page` action under the status menu so users can jump directly to this extension page in VS Code Extensions.
+- Hardened `Restart Manager` for single-instance-priority recovery: manual restart now uses a longer lock wait window, lock owner diagnostics, and stale-lock cleanup based on `pid + age` instead of mtime-only checks.
+- Added explicit manual restart failure classification and guidance (`other_instance_lock`, `manager_shutdown_failed`, `manager_start_failed`) to avoid silent failures.
+- Status menu now logs restart summary lines (`restart-manager result=success|failed reason=...`) for faster diagnosis.
+- Status bar tooltip now includes a compact manager ownership summary sourced from internal manager pipe calls (`GET /health`, `GET /list`) with `/mcp/status` fallback, using line/length budgets to avoid oversized output.
+- Version-upgrade restart now automatically runs when `extensionVersion > managerVersion`, and uses the same core restart flow as status-menu `Restart Manager` to avoid branch divergence.
+- Added a dedicated timeout failure notification for upgrade restarts: when upgrade restart times out, users are explicitly told to run `Restart Manager` manually from the status menu.
+- Restart progress UI now uses the extension status bar item spinner (`$(sync~spin)`) for all restart sources, removing restart-time overlay progress.
+- Added asymmetric status-bar settle timing after restart completion: success stays briefly (~1 second) while failure stays longer (~8 seconds), with notifications kept.
+- Increased manager idle self-shutdown grace window from 3 seconds to 10 seconds.
+- Increased old-manager shutdown wait timeout in restart flow from 3 seconds to 5 seconds.
+- Relaxed manager instance liveness TTL from 1.5 seconds to 2.5 seconds to reduce false stale detection during heartbeat jitter.
 
 ### 中文
 
 #### 变更
 - 澄清 VS Code UI 中 `lmToolsBridge.tools.schemaDefaults` 的示例文案: 示例现在直接展示 entry 值(不再使用外层引号和 JSON 风格转义),以减少误导.
 - 在状态菜单中新增 `Open Extension Page` 操作,可直接跳转到 VS Code Extensions 中的本扩展页面.
+- 强化 `Restart Manager` 的单实例优先恢复能力: 手动重启使用更长锁等待窗口,增加锁归属诊断,并将陈旧锁判定由仅 mtime 升级为 `pid + age`.
+- 为手动重启补充明确失败分型与提示(`other_instance_lock`,`manager_shutdown_failed`,`manager_start_failed`),避免 silent fail.
+- 状态菜单重启后新增摘要日志(`restart-manager result=success|failed reason=...`),便于快速定位问题.
+- 状态栏 tooltip 新增精简 manager 归属摘要: 以内置 manager pipe(`GET /health`,`GET /list`)为主数据源,`/mcp/status` 为回退,并通过行数/长度预算避免信息过载.
+- 当 `extensionVersion > managerVersion` 时,版本升级重启改为自动触发,并与状态菜单 `Restart Manager` 统一使用同一核心重启流程,避免分支行为不一致.
+- 为升级重启增加超时专用提示: 当升级重启超时时,会明确提示用户从状态菜单手动执行 `Restart Manager`.
+- 所有重启来源(菜单重启和自动升级重启)的进度展示统一改为扩展状态栏转圈(`$(sync~spin)`),移除重启过程覆盖层进度提示.
+- 重启结束后状态栏结果停留改为非对称时长: 成功短暂停留(约 1 秒),失败长时间停留(约 8 秒),同时继续保留成功/失败通知提示.
+- 将 manager 空闲自退出窗口从 3 秒提升到 10 秒.
+- 将重启流程中等待旧 manager 退出超时从 3 秒提升到 5 秒.
+- 将 manager 实例存活 TTL 从 1.5 秒放宽到 2.5 秒,降低 heartbeat 抖动时的误判下线.
 
 ## [1.0.76] - 2026-02-11
 

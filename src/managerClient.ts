@@ -12,8 +12,10 @@ const MANAGER_HEARTBEAT_INTERVAL_MS = 1000;
 const MANAGER_REQUEST_TIMEOUT_MS = 1500;
 const MANAGER_START_TIMEOUT_MS = 3000;
 const MANAGER_LOCK_STALE_MS = 15000;
-const MANAGER_SHUTDOWN_TIMEOUT_MS = 3000;
+const MANAGER_SHUTDOWN_TIMEOUT_MS = 5000;
 const MANAGER_RESTART_LOCK_TIMEOUT_MS = 2000;
+const MANAGER_MANUAL_RESTART_LOCK_TIMEOUT_MS = 8000;
+const MANAGER_AUTO_RESTART_NOTICE_DEBOUNCE_MS = 30000;
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
 
 interface ManagerServerState {
@@ -31,6 +33,53 @@ interface ManagerHeartbeatPayload {
   lastSeen: number;
 }
 
+export type RestartFailureReason =
+  | 'other_instance_lock'
+  | 'manager_shutdown_failed'
+  | 'manager_start_failed'
+  | 'unknown';
+
+export type RestartFlowSource = 'manual_menu' | 'version_upgrade' | 'version_mismatch';
+
+export interface RestartManagerResult {
+  ok: boolean;
+  reason?: RestartFailureReason;
+  message?: string;
+  timedOut?: boolean;
+}
+
+export type ManagerRestartUiPhase = 'running' | 'success' | 'failed';
+
+export interface ManagerRestartUiEvent {
+  phase: ManagerRestartUiPhase;
+  source: RestartFlowSource;
+  reason?: RestartFailureReason;
+  message?: string;
+}
+
+export interface ManagerTooltipInstanceInfo {
+  sessionId: string;
+  pid: number;
+  host: string;
+  port: number;
+  workspaceFolders: string[];
+  workspaceFile?: string;
+}
+
+export interface ManagerTooltipStatus {
+  online: boolean;
+  source: 'pipe' | 'http-status' | 'unavailable';
+  reason?: string;
+  instances: ManagerTooltipInstanceInfo[];
+}
+
+interface ManagerLockInfo {
+  pid?: number;
+  timestamp?: number;
+  mtimeMs?: number;
+  pidAlive?: boolean;
+}
+
 export interface ManagerClientDeps {
   getExtensionContext: () => vscode.ExtensionContext | undefined;
   getServerState: () => ManagerServerState | undefined;
@@ -39,6 +88,7 @@ export interface ManagerClientDeps {
   logStatusInfo: (message: string) => void;
   logStatusWarn: (message: string) => void;
   logStatusError: (message: string) => void;
+  onManagerRestartUiEvent: (event: ManagerRestartUiEvent) => void;
 }
 
 let deps: ManagerClientDeps | undefined;
@@ -46,7 +96,9 @@ let managerHeartbeatTimer: NodeJS.Timeout | undefined;
 let managerHeartbeatInFlight = false;
 let managerStartPromise: Promise<boolean> | undefined;
 let managerReady = false;
-let managerRestartPromise: Promise<boolean> | undefined;
+let managerRestartPromise: Promise<RestartManagerResult> | undefined;
+let lastAutoRestartNoticeKey: string | undefined;
+let lastAutoRestartNoticeAt = 0;
 
 export function initManagerClient(nextDeps: ManagerClientDeps): void {
   deps = nextDeps;
@@ -185,7 +237,8 @@ export async function requestManagerPortAllocation(
 
 export async function ensureManagerRunning(): Promise<boolean> {
   if (managerRestartPromise) {
-    return managerRestartPromise;
+    const restartResult = await managerRestartPromise;
+    return restartResult.ok;
   }
   if (managerStartPromise) {
     return managerStartPromise;
@@ -209,7 +262,11 @@ async function ensureManagerRunningInternal(): Promise<boolean> {
           if (!confirmed) {
             return true;
           }
-          const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
+          const restarted = await restartManagerForVersionMismatch(
+            extensionVersion,
+            managerVersion,
+            'version_mismatch',
+          );
           return restarted;
         }
         const comparison = compareVersionStrings(extensionVersion, managerVersion);
@@ -219,12 +276,12 @@ async function ensureManagerRunningInternal(): Promise<boolean> {
           );
           return true;
         }
-        const restarted = await restartManagerForVersionMismatch(extensionVersion, managerVersion);
-        if (restarted) {
-          return true;
-        }
-        void vscode.window.showErrorMessage('Manager auto-restart failed.');
-        return false;
+        const restarted = await restartManagerForVersionMismatch(
+          extensionVersion,
+          managerVersion,
+          'version_upgrade',
+        );
+        return restarted;
       }
     }
     return true;
@@ -339,15 +396,17 @@ async function getManagerVersionFromPipe(): Promise<string | undefined> {
 async function restartManagerForVersionMismatch(
   extensionVersion: string,
   managerVersion: string,
+  source: RestartFlowSource,
 ): Promise<boolean> {
   requireDeps().logStatusInfo(
     `Manager version mismatch (manager=${managerVersion} extension=${extensionVersion}). Restarting manager.`,
   );
-  return restartManagerWithProgress({
-    reason: 'version_mismatch',
-    force: false,
+  const result = await restartManagerViaUnifiedFlow({
+    reason: source === 'version_upgrade' ? 'version_upgrade' : 'version_mismatch',
     title: 'LM Tools Bridge: Manager update detected',
+    source,
   });
+  return result.ok;
 }
 
 async function waitForManagerExit(): Promise<boolean> {
@@ -361,36 +420,100 @@ async function waitForManagerExit(): Promise<boolean> {
   return false;
 }
 
+async function restartManagerViaUnifiedFlow(options: {
+  reason: string;
+  title: string;
+  source: RestartFlowSource;
+}): Promise<RestartManagerResult> {
+  return restartManagerWithProgress({
+    reason: options.reason,
+    force: true,
+    title: options.title,
+    lockTimeoutMs: MANAGER_MANUAL_RESTART_LOCK_TIMEOUT_MS,
+    source: options.source,
+  });
+}
+
+function shouldNotifyRestartResult(source: RestartFlowSource, result: RestartManagerResult): boolean {
+  if (source === 'manual_menu') {
+    return true;
+  }
+  if (result.ok) {
+    return false;
+  }
+  const timeoutKey = isRestartTimeout(result) ? 'timeout' : 'normal';
+  const key = `${source}:${result.reason ?? 'unknown'}:${timeoutKey}:${result.message ?? ''}`;
+  const now = Date.now();
+  if (lastAutoRestartNoticeKey === key && now - lastAutoRestartNoticeAt < MANAGER_AUTO_RESTART_NOTICE_DEBOUNCE_MS) {
+    return false;
+  }
+  lastAutoRestartNoticeKey = key;
+  lastAutoRestartNoticeAt = now;
+  return true;
+}
+
+function emitManagerRestartUiEvent(event: ManagerRestartUiEvent): void {
+  requireDeps().onManagerRestartUiEvent(event);
+}
+
 async function restartManagerWithProgress(options: {
   reason: string;
   force: boolean;
   title: string;
-}): Promise<boolean> {
+  lockTimeoutMs?: number;
+  source: RestartFlowSource;
+}): Promise<RestartManagerResult> {
   if (managerRestartPromise) {
     return managerRestartPromise;
   }
-  const progressPromise = Promise.resolve(vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: options.title,
-      cancellable: false,
-    },
-    async (progress) => {
-      const result = await runManagerRestartWorkflow(options, progress);
-      return result;
-    },
-  ));
+  emitManagerRestartUiEvent({
+    phase: 'running',
+    source: options.source,
+  });
+  const progressPromise = runManagerRestartWorkflow(options);
   managerRestartPromise = progressPromise
     .then((result) => {
-      if (result) {
+      emitManagerRestartUiEvent({
+        phase: result.ok ? 'success' : 'failed',
+        source: options.source,
+        reason: result.reason,
+        message: result.message,
+      });
+      if (!shouldNotifyRestartResult(options.source, result)) {
+        if (result.ok) {
+          requireDeps().logStatusInfo(`Manager restart completed. source=${options.source}`);
+        } else {
+          requireDeps().logStatusError(`Manager restart failed. source=${options.source} reason=${result.reason ?? 'unknown'} message=${result.message ?? ''}`);
+        }
+        return result;
+      }
+      if (result.ok) {
         void vscode.window.showInformationMessage('Manager restart completed.');
+      } else {
+        void vscode.window.showErrorMessage(buildRestartFailureMessage(result, options.source));
       }
       return result;
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      void vscode.window.showErrorMessage(`Manager restart failed: ${message}`);
-      return false;
+      const result: RestartManagerResult = {
+        ok: false,
+        reason: 'unknown',
+        message,
+        timedOut: /timed out|timeout/i.test(message),
+      };
+      emitManagerRestartUiEvent({
+        phase: 'failed',
+        source: options.source,
+        reason: result.reason,
+        message: result.message,
+      });
+      if (shouldNotifyRestartResult(options.source, result)) {
+        void vscode.window.showErrorMessage(buildRestartFailureMessage(result, options.source));
+      } else {
+        requireDeps().logStatusError(`Manager restart failed. source=${options.source} reason=unknown message=${message}`);
+      }
+      return result;
     })
     .finally(() => {
       managerRestartPromise = undefined;
@@ -399,71 +522,108 @@ async function restartManagerWithProgress(options: {
 }
 
 async function runManagerRestartWorkflow(
-  options: { reason: string; force: boolean },
-  progress: vscode.Progress<{ message?: string }>,
-): Promise<boolean> {
-  progress.report({ message: 'Checking versions...' });
+  options: { reason: string; force: boolean; lockTimeoutMs?: number },
+): Promise<RestartManagerResult> {
   const extensionVersion = getExtensionVersion();
   const managerVersion = await getManagerVersionFromPipe();
   const comparableManagerVersion = isUnknownVersion(managerVersion) ? undefined : managerVersion;
   if (!options.force && extensionVersion && comparableManagerVersion) {
     const comparison = compareVersionStrings(extensionVersion, comparableManagerVersion);
     if (comparison <= 0) {
-      progress.report({ message: 'Extension version is not newer than the manager; restart canceled.' });
-      return false;
+      return {
+        ok: false,
+        reason: 'unknown',
+        message: 'Extension version is not newer than the manager; restart canceled.',
+      };
     }
   }
   if (!options.force && extensionVersion && comparableManagerVersion && managerVersion === extensionVersion) {
-    progress.report({ message: 'Already up to date; no restart needed.' });
-    return true;
+    return { ok: true };
   }
 
-  progress.report({ message: 'Waiting to acquire restart lock...' });
   const lockPath = await getManagerLockPath();
-  const acquired = await waitForManagerRestartLock(lockPath, progress);
+  const acquired = await waitForManagerRestartLock(
+    lockPath,
+    options.lockTimeoutMs ?? MANAGER_RESTART_LOCK_TIMEOUT_MS,
+  );
   if (!acquired) {
-    throw new Error('Timed out while acquiring restart lock.');
+    const lockInfo = await readManagerLockInfo(lockPath);
+    if (lockInfo) {
+      const ageBase = lockInfo.mtimeMs ?? lockInfo.timestamp;
+      const ageMs = ageBase !== undefined ? Math.max(0, Date.now() - ageBase) : undefined;
+      requireDeps().logStatusWarn(
+        `Restart lock diagnostics: pid=${String(lockInfo.pid ?? 'unknown')} alive=${String(lockInfo.pidAlive ?? 'unknown')} ageMs=${String(ageMs ?? 'unknown')}`,
+      );
+    } else {
+      requireDeps().logStatusWarn('Restart lock diagnostics: lock file not found or unreadable.');
+    }
+    if (lockInfo?.pidAlive && lockInfo.pid !== process.pid) {
+      return {
+        ok: false,
+        reason: 'other_instance_lock',
+        message: lockInfo.pid
+          ? `Another VS Code instance appears to own manager lock (pid=${lockInfo.pid}).`
+          : 'Another VS Code instance appears to own manager lock.',
+      };
+    }
+    return {
+      ok: false,
+      reason: 'manager_start_failed',
+      message: 'Timed out while acquiring restart lock.',
+      timedOut: true,
+    };
   }
   try {
     const alive = await isManagerAlive();
     const currentVersion = await getManagerVersionFromPipe();
     if (!options.force && extensionVersion && currentVersion && currentVersion === extensionVersion) {
-      progress.report({ message: 'A newer manager is already running; no restart needed.' });
-      return true;
+      return { ok: true };
     }
 
     if (alive) {
       const expectedVersion = currentVersion ?? managerVersion;
-      progress.report({ message: 'Requesting old manager shutdown...' });
       const shutdownResponse = await managerRequest('POST', '/shutdown', {
         reason: options.reason,
         ...(isUnknownVersion(expectedVersion) || !expectedVersion ? {} : { expectedVersion }),
       });
       if (!shutdownResponse.ok) {
-        throw new Error('Failed to shut down old manager.');
+        return {
+          ok: false,
+          reason: 'manager_shutdown_failed',
+          message: 'Failed to shut down old manager.',
+        };
       }
-      progress.report({ message: 'Waiting for old manager to exit...' });
       const stopped = await waitForManagerExit();
       if (!stopped) {
-        throw new Error('Old manager did not exit.');
+        return {
+          ok: false,
+          reason: 'manager_shutdown_failed',
+          message: 'Old manager did not exit.',
+        };
       }
     }
 
-    progress.report({ message: 'Starting new manager...' });
     await startManagerProcess();
     const ready = await waitForManagerReady();
     if (!ready) {
-      throw new Error('Failed to start new manager.');
+      return {
+        ok: false,
+        reason: 'manager_start_failed',
+        message: 'Timed out while starting new manager.',
+        timedOut: true,
+      };
     }
     if (!options.force && extensionVersion) {
-      progress.report({ message: 'Verifying version...' });
       const newVersion = await getManagerVersionFromPipe();
       if (newVersion && newVersion !== extensionVersion) {
-        throw new Error(`Version still mismatched: ${newVersion}`);
+        return {
+          ok: false,
+          reason: 'manager_start_failed',
+          message: `Version still mismatched: ${newVersion}`,
+        };
       }
     }
-    progress.report({ message: 'Done.' });
-    return true;
+    return { ok: true };
   } finally {
     await releaseManagerLock(lockPath);
   }
@@ -471,9 +631,9 @@ async function runManagerRestartWorkflow(
 
 async function waitForManagerRestartLock(
   lockPath: string,
-  progress: vscode.Progress<{ message?: string }>,
+  timeoutMs: number,
 ): Promise<boolean> {
-  const deadline = Date.now() + MANAGER_RESTART_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const acquired = await tryAcquireManagerLock(lockPath);
     if (acquired) {
@@ -482,7 +642,6 @@ async function waitForManagerRestartLock(
     if (await isLockStale(lockPath)) {
       await releaseManagerLock(lockPath);
     }
-    progress.report({ message: 'Waiting to acquire restart lock...' });
     await delay(200);
   }
   return false;
@@ -548,6 +707,53 @@ async function getManagerLockPath(): Promise<string> {
   return path.join(baseDir, 'manager.lock');
 }
 
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const nodeError = error as NodeJS.ErrnoException;
+    if (nodeError.code === 'EPERM') {
+      return true;
+    }
+    return false;
+  }
+}
+
+async function readManagerLockInfo(lockPath: string): Promise<ManagerLockInfo | undefined> {
+  try {
+    const [text, stats] = await Promise.all([
+      fs.promises.readFile(lockPath, 'utf8'),
+      fs.promises.stat(lockPath),
+    ]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { mtimeMs: stats.mtimeMs };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { mtimeMs: stats.mtimeMs };
+    }
+    const record = parsed as { pid?: unknown; timestamp?: unknown };
+    const pid = typeof record.pid === 'number' && Number.isInteger(record.pid) ? record.pid : undefined;
+    const timestamp = typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
+      ? record.timestamp
+      : undefined;
+    return {
+      pid,
+      timestamp,
+      mtimeMs: stats.mtimeMs,
+      pidAlive: pid !== undefined ? isPidAlive(pid) : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function tryAcquireManagerLock(lockPath: string): Promise<boolean> {
   try {
     const handle = await fs.promises.open(lockPath, 'wx');
@@ -572,12 +778,184 @@ async function releaseManagerLock(lockPath: string): Promise<void> {
 }
 
 async function isLockStale(lockPath: string): Promise<boolean> {
-  try {
-    const stats = await fs.promises.stat(lockPath);
-    return Date.now() - stats.mtimeMs > MANAGER_LOCK_STALE_MS;
-  } catch {
+  const lockInfo = await readManagerLockInfo(lockPath);
+  if (!lockInfo) {
     return false;
   }
+  if (lockInfo.pid === undefined) {
+    return true;
+  }
+  if (lockInfo.pidAlive === false) {
+    return true;
+  }
+  const ageBase = lockInfo.mtimeMs ?? lockInfo.timestamp;
+  if (ageBase === undefined) {
+    return false;
+  }
+  return Date.now() - ageBase > MANAGER_LOCK_STALE_MS;
+}
+
+function isRestartTimeout(result: RestartManagerResult): boolean {
+  if (result.timedOut) {
+    return true;
+  }
+  if (!result.message) {
+    return false;
+  }
+  return /timed out|timeout/i.test(result.message);
+}
+
+function buildRestartFailureMessage(result: RestartManagerResult, source: RestartFlowSource): string {
+  if (source === 'version_upgrade' && isRestartTimeout(result)) {
+    return 'Manager upgrade restart timed out. Please run "Restart Manager" from the status menu manually.';
+  }
+  if (result.reason === 'other_instance_lock') {
+    const detail = result.message ? ` ${result.message}` : '';
+    return `Manager restart failed: restart lock is owned by another VS Code instance.${detail} Restart manager from that instance or close it, then retry.`;
+  }
+  if (result.reason === 'manager_shutdown_failed') {
+    const detail = result.message ? ` Details: ${result.message}` : '';
+    return `Manager restart failed while stopping old manager.${detail} Retry once from status menu.`;
+  }
+  if (result.reason === 'manager_start_failed') {
+    const detail = result.message ? ` Details: ${result.message}` : '';
+    return `Manager restart failed while starting new manager.${detail} Retry once from status menu.`;
+  }
+  if (result.message) {
+    return `Manager restart failed: ${result.message}`;
+  }
+  return 'Manager restart failed.';
+}
+
+function toManagerTooltipInstances(value: unknown): ManagerTooltipInstanceInfo[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const instances: ManagerTooltipInstanceInfo[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as {
+      sessionId?: unknown;
+      pid?: unknown;
+      host?: unknown;
+      port?: unknown;
+      workspaceFolders?: unknown;
+      workspaceFile?: unknown;
+    };
+    const sessionId = typeof record.sessionId === 'string' ? record.sessionId.trim() : '';
+    const pid = typeof record.pid === 'number' && Number.isInteger(record.pid) ? record.pid : 0;
+    const host = typeof record.host === 'string' ? record.host.trim() : '';
+    const port = typeof record.port === 'number' && Number.isInteger(record.port) ? record.port : NaN;
+    if (!sessionId || !host || !Number.isInteger(port) || port <= 0 || port > 65535) {
+      continue;
+    }
+    const workspaceFolders = Array.isArray(record.workspaceFolders)
+      ? record.workspaceFolders.filter((folder): folder is string => typeof folder === 'string')
+      : [];
+    const workspaceFile = typeof record.workspaceFile === 'string' ? record.workspaceFile : undefined;
+    instances.push({
+      sessionId,
+      pid,
+      host,
+      port,
+      workspaceFolders,
+      workspaceFile,
+    });
+  }
+  return instances;
+}
+
+async function managerHttpStatusRequest(): Promise<{ ok: boolean; status?: number; data?: unknown; reason?: string }> {
+  return new Promise((resolve) => {
+    const managerHttpPort = requireDeps().getConfigValue<number>(CONFIG_MANAGER_HTTP_PORT, DEFAULT_MANAGER_HTTP_PORT);
+    const request = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: managerHttpPort,
+        path: '/mcp/status',
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.from(chunk));
+        });
+        response.on('end', () => {
+          const status = response.statusCode ?? 500;
+          if (chunks.length === 0) {
+            resolve({ ok: status >= 200 && status < 300, status, reason: 'empty_response' });
+            return;
+          }
+          try {
+            const text = Buffer.concat(chunks).toString('utf8');
+            const parsed = JSON.parse(text) as unknown;
+            resolve({ ok: status >= 200 && status < 300, status, data: parsed });
+          } catch {
+            resolve({ ok: false, status, reason: 'invalid_json' });
+          }
+        });
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      request.destroy(new Error('Timeout'));
+    }, MANAGER_REQUEST_TIMEOUT_MS);
+
+    request.on('error', () => {
+      clearTimeout(timeout);
+      resolve({ ok: false, reason: 'request_error' });
+    });
+    request.on('close', () => {
+      clearTimeout(timeout);
+    });
+    request.end();
+  });
+}
+
+export async function getManagerTooltipStatus(): Promise<ManagerTooltipStatus> {
+  const healthResponse = await managerRequest('GET', '/health');
+  if (healthResponse.ok) {
+    const listResponse = await managerRequest<{ instances?: unknown }>('GET', '/list');
+    if (!listResponse.ok) {
+      return {
+        online: true,
+        source: 'pipe',
+        reason: 'list unavailable',
+        instances: [],
+      };
+    }
+    const instances = toManagerTooltipInstances(listResponse.data?.instances);
+    return {
+      online: true,
+      source: 'pipe',
+      instances,
+    };
+  }
+
+  const fallbackResponse = await managerHttpStatusRequest();
+  if (fallbackResponse.ok && fallbackResponse.data && typeof fallbackResponse.data === 'object' && !Array.isArray(fallbackResponse.data)) {
+    const payload = fallbackResponse.data as { ok?: unknown; instanceDetails?: unknown };
+    if (payload.ok === true || payload.ok === undefined) {
+      return {
+        online: true,
+        source: 'http-status',
+        reason: 'pipe unavailable, using /mcp/status fallback',
+        instances: toManagerTooltipInstances(payload.instanceDetails),
+      };
+    }
+  }
+
+  return {
+    online: false,
+    source: 'unavailable',
+    reason: 'pipe unreachable',
+    instances: [],
+  };
 }
 
 async function managerRequest<T = unknown>(
@@ -639,10 +1017,10 @@ async function managerRequest<T = unknown>(
   });
 }
 
-export async function restartManagerFromMenu(): Promise<void> {
-  await restartManagerWithProgress({
+export async function restartManagerFromMenu(): Promise<RestartManagerResult> {
+  return restartManagerViaUnifiedFlow({
     reason: 'manual_restart',
-    force: true,
     title: 'LM Tools Bridge: Restarting manager',
+    source: 'manual_menu',
   });
 }

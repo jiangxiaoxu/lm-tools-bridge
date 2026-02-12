@@ -114,6 +114,8 @@ const BUILTIN_DISABLED_TOOL_NAMES = [
   'copilot_switchAgent',
   'copilot_toolReplay',
   'copilot_listDirectory',
+  'copilot_findFiles',
+  'copilot_findTextInFiles',
   'search_subagent',
   'runSubagent',
   'vscode_get_confirmation',
@@ -152,10 +154,8 @@ interface ResolvedToolGroupingRulesResult {
 }
 
 const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
-  'copilot_findTextInFiles.maxResults=500',
   'lm_findTextInFiles.maxResults=500',
   'lm_findFiles.maxResults=200',
-  'copilot_findFiles.maxResults=200',
 ];
 
 const LM_FIND_FILES_DESCRIPTION = [
@@ -167,6 +167,7 @@ const LM_FIND_FILES_DESCRIPTION = [
   '- **/*.{js,ts} to match all js/ts files in the workspace.',
   '- src/** to match all files under the top-level src folder.',
   '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
+  '- In multi-root workspaces, use WorkspaceName/** (for example, UE5/**) to limit search to one workspace folder.',
 ].join('\n');
 
 const LM_FIND_FILES_SCHEMA: Record<string, unknown> = {
@@ -174,7 +175,7 @@ const LM_FIND_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Search for files with names or paths matching this glob pattern.',
+      description: 'Search for files with names or paths matching this glob pattern. Supports WorkspaceName/** to scope search to a specific workspace folder in multi-root workspaces.',
     },
     maxResults: {
       type: 'number',
@@ -193,6 +194,7 @@ const LM_FIND_TEXT_IN_FILES_DESCRIPTION = [
   'If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.',
   'For example, use \'function|method|procedure\' to look for all of those words at once.',
   'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
+  'In multi-root workspaces, includePattern also supports WorkspaceName/** (for example, UE5/**) to limit search to a specific workspace folder.',
   'Glob patterns match from the root of the workspace folder. Examples:',
   '- **/*.{js,ts} to match all js/ts files in the workspace.',
   '- src/** to match all files under the top-level src folder.',
@@ -220,7 +222,7 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
     },
     includePattern: {
       type: 'string',
-      description: 'Search files matching this glob pattern. Will be applied to the relative path of files within the workspace. To search recursively inside a folder, use a proper glob pattern like "src/folder/**". Do not use | in includePattern.',
+      description: 'Search files matching this glob pattern. Will be applied to the relative path of files within the workspace. Supports WorkspaceName/** in multi-root workspaces to scope to a specific workspace folder. To search recursively inside a folder, use a proper glob pattern like "src/folder/**". Do not use | in includePattern.',
     },
     maxResults: {
       type: 'number',
@@ -1592,24 +1594,6 @@ function formatToolErrorText(payload: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
-function formatWorkspaceInfoText(payload: {
-  ownerWorkspacePath?: string;
-  workspaceFolders: Array<{ name: string; path: string }>;
-}): string {
-  const lines: string[] = [];
-  if (payload.ownerWorkspacePath) {
-    lines.push(`ownerWorkspacePath: ${payload.ownerWorkspacePath}`);
-  }
-  if (payload.workspaceFolders.length > 0) {
-    lines.push('workspaceFolders:');
-    for (const folder of payload.workspaceFolders) {
-      lines.push(`  - name: ${folder.name}`);
-      lines.push(`    path: ${folder.path}`);
-    }
-  }
-  return lines.join('\n');
-}
-
 export function listToolsPayload(tools: readonly ExposedTool[], detail: ToolDetail) {
   const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
   if (detail === 'names') {
@@ -1619,51 +1603,6 @@ export function listToolsPayload(tools: readonly ExposedTool[], detail: ToolDeta
   return {
     tools: orderedTools.map((tool) => toolInfoPayload(tool, 'full')),
   };
-}
-
-function patchFindTextInFilesSchema(schema: unknown): unknown {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    return schema;
-  }
-  const record = schema as Record<string, unknown>;
-  const properties = record.properties;
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
-    return schema;
-  }
-  const propRecord = properties as Record<string, unknown>;
-  const querySchema = propRecord.query;
-  if (!querySchema || typeof querySchema !== 'object' || Array.isArray(querySchema)) {
-    return schema;
-  }
-  const queryCopy = { ...(querySchema as Record<string, unknown>) };
-  const description = typeof queryCopy.description === 'string' ? queryCopy.description : '';
-  if (!description || description.includes('case-sensitive')) {
-    return schema;
-  }
-  queryCopy.description = `${description} If you need case-sensitive matching, use a regex pattern with an inline case-sensitivity flag.`;
-  return {
-    ...record,
-    properties: {
-      ...propRecord,
-      query: queryCopy,
-    },
-  };
-}
-
-function patchFindFilesSchema(schema: unknown): unknown {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    return schema;
-  }
-  const record = schema as Record<string, unknown>;
-  const properties = record.properties;
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
-    return schema;
-  }
-  const propRecord = properties as Record<string, unknown>;
-  if (!propRecord.query) {
-    return schema;
-  }
-  return schema;
 }
 
 export function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
@@ -1686,14 +1625,7 @@ export function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
 }
 
 export function buildToolInputSchema(tool: ExposedTool): unknown {
-  let inputSchema = applySchemaDefaults(tool.inputSchema ?? null, tool.name);
-  if (tool.name === 'copilot_findTextInFiles' || tool.name === FIND_TEXT_IN_FILES_TOOL_NAME) {
-    inputSchema = patchFindTextInFilesSchema(inputSchema);
-  }
-  if (tool.name === FIND_FILES_TOOL_NAME) {
-    inputSchema = patchFindFilesSchema(inputSchema);
-  }
-  return inputSchema;
+  return applySchemaDefaults(tool.inputSchema ?? null, tool.name);
 }
 
 function serializeToolResult(result: vscode.LanguageModelToolResult): Array<Record<string, unknown>> {
@@ -1836,64 +1768,6 @@ function isLanguageModelToolResult(value: unknown): value is vscode.LanguageMode
   }
   const record = value as { content?: unknown };
   return Array.isArray(record.content);
-}
-
-function normalizeFindTextInFilesText(text: string): string {
-  const matchRegex = /<match\s+path="([^"]+)"\s+line="?(\d+)"?\s*>\s*([\s\S]*?)<\/match>/gi;
-  const summaryRegex = /(\d{1,5})\s+matches?\b[^\r\n]*?\bmaxResults\s+capped\s+at\s+(\d{1,5})\b/i;
-
-  const matches: Array<{ key: string; raw: string }> = [];
-  const seen = new Set<string>();
-  let totalCount = 0;
-  const firstMatchIndex = text.search(/<match\b/i);
-  const prefix = firstMatchIndex === -1 ? text : text.slice(0, firstMatchIndex);
-  let summaryCount: number | null = null;
-  let summaryCap: number | null = null;
-  const summaryMatch = summaryRegex.exec(prefix);
-  if (summaryMatch) {
-    const countValue = Number(summaryMatch[1]);
-    const capValue = Number(summaryMatch[2]);
-    if (
-      !Number.isNaN(countValue)
-      && !Number.isNaN(capValue)
-      && countValue >= 0
-      && capValue >= 0
-      && countValue <= 10000
-      && capValue <= 10000
-    ) {
-      summaryCount = countValue;
-      summaryCap = capValue;
-    }
-  }
-  let match: RegExpExecArray | null;
-  while ((match = matchRegex.exec(text)) !== null) {
-    totalCount += 1;
-    const path = match[1];
-    const line = match[2];
-    const snippet = match[3]?.replace(/\r\n/g, '\n').trimEnd() ?? '';
-    const key = `${path}:${line}:${snippet}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    matches.push({ key, raw: match[0].trimStart() });
-  }
-
-  if (matches.length === 0) {
-    return text;
-  }
-
-  let capped: number | null = null;
-  if (summaryCount !== null && summaryCap !== null && summaryCount >= summaryCap) {
-    capped = summaryCap;
-  }
-
-  const lines: string[] = [];
-  if (capped !== null) {
-    lines.push('Results capped by VS Code tools, more results are available, output may be incomplete.');
-  }
-  lines.push(`Unique matches: ${matches.length}, total matches: ${totalCount}.`);
-  return [...lines, ...matches.map((item) => item.raw)].join('\n');
 }
 
 function buildFindTextInFilesToolDefinition(): CustomToolDefinition {
@@ -3193,14 +3067,6 @@ export function registerExposedTools(server: import('@modelcontextprotocol/sdk/s
   }
 }
 
-function toolSuccessResult(payload: unknown) {
-  return buildToolResult(payload, false);
-}
-
-function toolTextResult(text: string) {
-  return buildToolResult(text, false, text);
-}
-
 function toolErrorResult(message: string) {
   return buildToolResult({ error: message }, true, message);
 }
@@ -3306,15 +3172,27 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     });
     const serialized = serializeToolResult(result);
     const textPayload = extractTextPayloadFromTextParts(serialized);
-    outputText = textPayload.hasTextPart
-      ? (tool.name === 'copilot_findTextInFiles'
-        ? normalizeFindTextInFilesText(textPayload.text)
-        : textPayload.text)
-      : undefined;
+    let hasOutputTextPart = textPayload.hasTextPart;
+    outputText = hasOutputTextPart ? textPayload.text : undefined;
     structuredOutput = resolveStructuredToolResultPayload(result, serialized);
+    if (!hasOutputTextPart) {
+      const serializedText = serializedToolResultToText(serialized);
+      if (serializedText.length > 0) {
+        outputText = serializedText;
+        hasOutputTextPart = true;
+      }
+    }
+    if (!hasOutputTextPart && structuredOutput) {
+      outputText = safePrettyStringify(structuredOutput);
+      hasOutputTextPart = true;
+    }
+    if (!hasOutputTextPart) {
+      outputText = '';
+      hasOutputTextPart = true;
+    }
     debugOutputText = outputText;
     debugStructuredOutput = structuredOutput;
-    return buildPassthroughToolResult(outputText, textPayload.hasTextPart, structuredOutput);
+    return buildPassthroughToolResult(outputText, hasOutputTextPart, structuredOutput);
   } catch (error) {
     if (error instanceof McpError) {
       throw error;

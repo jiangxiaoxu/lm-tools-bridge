@@ -71,6 +71,7 @@ User guidance:
 - `Status Menu -> Open Settings`: jump directly to this extension's settings page.
 - `Status Menu -> Open Extension Page`: open this extension page in VS Code Extensions.
 - Built-in disabled tools are always blocked and never callable.
+- `copilot_findFiles` and `copilot_findTextInFiles` are built-in disabled and cannot be exposed or enabled.
 - Some default tools are policy-required exposure items.
 
 ### Diagnostics Tool
@@ -265,6 +266,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `Status Menu -> Open Settings`: 直接跳转到扩展设置页.
 - `Status Menu -> Open Extension Page`: 在 VS Code Extensions 中打开本扩展页面.
 - Built-in disabled 工具始终被拦截,不可调用.
+- `copilot_findFiles` 与 `copilot_findTextInFiles` 属于 built-in disabled,不可 exposed 或 enabled.
 - 部分默认工具属于策略要求,必须保持暴露.
 
 ### 诊断工具

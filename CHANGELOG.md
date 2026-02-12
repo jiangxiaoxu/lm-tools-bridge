@@ -18,6 +18,10 @@ Maintenance rule:
 - Debug tool summaries now include launch config scope (`workspaceFolder` or `workspace`) and workspace folder path when available.
 - Deprecated and hard-disabled all `lm_clangd_*` MCP tools in runtime registration; clangd tools can no longer be enabled by settings.
 - Removed user-facing `lmToolsBridge.clangd.*` enablement settings from extension configuration contributions.
+- Marked `copilot_findFiles` and `copilot_findTextInFiles` as built-in disabled tools; they are now always blocked from exposure/enabling/calling.
+- Removed implementation-layer `copilot_find*` special handling in `tooling.ts` (schema default overrides and `copilot_findTextInFiles` schema/text normalization branches), while keeping `lm_find*` behavior unchanged.
+- Clarified `lm_findFiles` and `lm_findTextInFiles` schema/description guidance: both now explicitly document `WorkspaceName/**` style scoping for multi-root workspace targeting.
+- Removed unused helper functions and no-op schema patch branches in `searchTools.ts` and `tooling.ts` without behavior changes.
 
 ### 中文
 
@@ -29,6 +33,10 @@ Maintenance rule:
 - debug 工具摘要新增配置作用域(`workspaceFolder` 或 `workspace`)和可用的 workspace folder 路径信息.
 - 将 `lm_clangd_*` MCP 工具标记为弃用并在运行时硬禁用,不再允许通过设置开启 clangd 工具.
 - 从扩展配置贡献中移除面向用户的 `lmToolsBridge.clangd.*` 启用类设置项.
+- 将 `copilot_findFiles` 与 `copilot_findTextInFiles` 标记为 built-in disabled 工具,并统一阻断 exposed/enabled/call.
+- 移除 `tooling.ts` 中针对 `copilot_find*` 的实现层特判(默认 schema override 与 `copilot_findTextInFiles` 的 schema/text normalize 分支),同时保持 `lm_find*` 行为不变.
+- 补充 `lm_findFiles` 与 `lm_findTextInFiles` 的 schema/description 文案: 显式说明可使用 `WorkspaceName/**` 形式在 multi-root 中限定目标工作区.
+- 删除 `searchTools.ts` 与 `tooling.ts` 中未使用 helper 与 no-op schema patch 分支,不改变运行行为.
 
 ## [1.0.79] - 2026-02-12
 

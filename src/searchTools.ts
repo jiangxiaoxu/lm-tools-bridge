@@ -118,10 +118,6 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
   };
 }
 
-function formatSearchMatchPath(uri: vscode.Uri): string {
-  return uri.fsPath;
-}
-
 function resolveRipgrepTargets(
   includePattern: unknown,
 ): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
@@ -564,40 +560,8 @@ function getSearchConfigValue<T>(key: string, folder: vscode.WorkspaceFolder, fa
   return folderConfig.get<T>(key, workspaceValue);
 }
 
-function buildFindFilesExcludePattern(folder?: vscode.WorkspaceFolder): string | undefined {
-  const searchExclude = collectExcludeGlobs(getExcludeConfig('search', folder));
-  const filesExclude = collectExcludeGlobs(getExcludeConfig('files', folder));
-  const excludePatterns = new Set<string>();
-  for (const pattern of [...searchExclude, ...filesExclude]) {
-    const normalized = normalizeGlob(pattern).replace(/^!/, '');
-    if (!normalized) {
-      continue;
-    }
-    excludePatterns.add(normalized);
-    if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
-      const withChildren = normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`;
-      excludePatterns.add(withChildren);
-    }
-  }
-  if (excludePatterns.size === 0) {
-    return undefined;
-  }
-  if (excludePatterns.size === 1) {
-    return [...excludePatterns][0];
-  }
-  return `{${[...excludePatterns].join(',')}}`;
-}
-
 function normalizeGlob(pattern: string): string {
   return pattern.replace(/\\/g, '/');
-}
-
-function normalizeFindTextInFilesIncludeEntry(entry: string): vscode.GlobPattern {
-  const parsed = parseWorkspacePrefixedIncludePattern(entry);
-  if (!parsed) {
-    return entry;
-  }
-  return new vscode.RelativePattern(parsed.workspaceFolder.uri, parsed.pattern);
 }
 
 function parseWorkspacePrefixedIncludePattern(entry: string): {

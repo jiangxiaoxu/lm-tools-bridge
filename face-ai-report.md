@@ -191,7 +191,7 @@ Invariant: Exposure UI 中“全只读分组”不显示组级复选框, 避免�
 Invariant: tool input 必须是 object, 否则返回 error payload.
 Invariant: tools.schemaDefaults 只接受 schema 内已定义字段.
 Invariant: 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)成功返回固定同时包含 content.text 与 structuredContent.
-Invariant: 转发 LM tool 结果时,content.text 仅来自 LanguageModelTextPart; structuredContent 仅在上游返回合法 JSON object 时透传; 缺失通道保持缺失,不做跨通道回填.
+Invariant: 转发 LM tool 结果时,content.text 优先来自 LanguageModelTextPart; 若缺失则按序回退到序列化文本与 structuredContent 的 JSON 文本,确保 content.text 始终存在.
 Invariant: 未启用或被禁用的工具返回 MethodNotFound.
 Invariant: `lm_getDiagnostics` 仅使用 VS Code diagnostics 数据源(`vscode.languages.getDiagnostics`),不依赖 `copilot_getErrors`.
 Invariant: `lm_getDiagnostics` 默认 severity 过滤为 `error` + `warning`,并支持通过 `severities` 覆盖.
@@ -199,6 +199,7 @@ Invariant: `lm_getDiagnostics` 支持 `{}` 全局查询和 `{ filePath }` 单文
 Invariant: `lm_getDiagnostics` 输出坐标统一为 1-based,并将 `code` 规范为 string|null,`tags` 规范为 string[]; files[] 不包含 `uri`.
 Invariant: `lm_getDiagnostics` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
 Invariant: `lm_getDiagnostics` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
+Invariant: `copilot_findFiles` 与 `copilot_findTextInFiles` 属于 built-in disabled,必须始终不可 exposed/enabled/call.
 Invariant: lm_clangd_* tools are hard-disabled and must never be exposed in tools/list.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.

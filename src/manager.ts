@@ -90,6 +90,57 @@ interface HandshakeDiscoveryPayload {
   issues: HandshakeDiscoveryIssue[];
 }
 
+interface ManagerStatusInstanceDetail {
+  sessionId: string;
+  pid: number;
+  workspaceFolders: string[];
+  workspaceFile: string | null;
+  host: string;
+  port: number;
+  lastSeen: number;
+  lastSeenLocal: string;
+  lastSeenAgeSec: number;
+  startedAt: number;
+  startedAtLocal: string;
+  uptimeSec: number;
+}
+
+interface ManagerStatusSessionTarget {
+  sessionId: string;
+  host: string;
+  port: number;
+}
+
+interface ManagerStatusSessionDetail {
+  sessionId: string;
+  resolveCwd: string;
+  workspaceSetExplicitly: boolean;
+  workspaceMatched: boolean;
+  target: ManagerStatusSessionTarget | null;
+  lastSeen: number;
+  lastSeenLocal: string;
+  lastSeenAgeSec: number;
+  offlineSince: number | null;
+  offlineSinceLocal: string | null;
+}
+
+interface ManagerStatusPayload {
+  ok: true;
+  version: string;
+  now: number;
+  nowIso: string;
+  nowLocal: string;
+  instances: number;
+  instanceDetails: ManagerStatusInstanceDetail[];
+  sessions: number;
+  sessionDetails: ManagerStatusSessionDetail[];
+  lastNonEmptyAt: number;
+  lastNonEmptyAtIso: string;
+  lastNonEmptyAtLocal: string;
+  lastNonEmptyAgeSec: number;
+  uptimeSec: number;
+}
+
 const TTL_MS = 2500;
 const PRUNE_INTERVAL_MS = 500;
 const IDLE_GRACE_MS = 10000;
@@ -496,6 +547,459 @@ function formatLocalDateTime(value: number): string {
   const minutes = pad2(date.getMinutes());
   const seconds = pad2(date.getSeconds());
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function buildManagerStatusPayload(now: number): ManagerStatusPayload {
+  const alive = getAliveRecords();
+  return {
+    ok: true,
+    version: getManagerVersion(),
+    now,
+    nowIso: new Date(now).toISOString(),
+    nowLocal: formatLocalDateTime(now),
+    instances: alive.length,
+    instanceDetails: alive.map((record) => ({
+      sessionId: record.sessionId,
+      pid: record.pid,
+      workspaceFolders: record.workspaceFolders,
+      workspaceFile: record.workspaceFile ?? null,
+      host: record.host,
+      port: record.port,
+      lastSeen: record.lastSeen,
+      lastSeenLocal: formatLocalDateTime(record.lastSeen),
+      lastSeenAgeSec: Math.floor((now - record.lastSeen) / 1000),
+      startedAt: record.startedAt,
+      startedAtLocal: formatLocalDateTime(record.startedAt),
+      uptimeSec: Math.floor((now - record.startedAt) / 1000),
+    })),
+    sessions: sessions.size,
+    sessionDetails: Array.from(sessions.values()).map((session) => ({
+      sessionId: session.sessionId,
+      resolveCwd: session.resolveCwd,
+      workspaceSetExplicitly: session.workspaceSetExplicitly,
+      workspaceMatched: session.workspaceMatched,
+      target: session.currentTarget
+        ? {
+          sessionId: session.currentTarget.sessionId,
+          host: session.currentTarget.host,
+          port: session.currentTarget.port,
+        }
+        : null,
+      lastSeen: session.lastSeen,
+      lastSeenLocal: formatLocalDateTime(session.lastSeen),
+      lastSeenAgeSec: Math.floor((now - session.lastSeen) / 1000),
+      offlineSince: session.offlineSince ?? null,
+      offlineSinceLocal: session.offlineSince ? formatLocalDateTime(session.offlineSince) : null,
+    })),
+    lastNonEmptyAt,
+    lastNonEmptyAtIso: new Date(lastNonEmptyAt).toISOString(),
+    lastNonEmptyAtLocal: formatLocalDateTime(lastNonEmptyAt),
+    lastNonEmptyAgeSec: Math.floor((now - lastNonEmptyAt) / 1000),
+    uptimeSec: Math.floor((now - STARTUP_TIME) / 1000),
+  };
+}
+
+function shouldServeHtmlStatus(
+  requestUrl: URL,
+  acceptHeader: string | string[] | undefined,
+): boolean {
+  const format = requestUrl.searchParams.get('format')?.trim().toLowerCase();
+  if (format === 'html') {
+    return true;
+  }
+  if (format === 'json') {
+    return false;
+  }
+  const accept = Array.isArray(acceptHeader) ? acceptHeader.join(',') : acceptHeader ?? '';
+  return accept.toLowerCase().includes('text/html');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderStatusHtml(payload: ManagerStatusPayload): string {
+  const initialPayloadBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+  const noScriptSummary = [
+    `Version: ${payload.version}`,
+    `Now (local): ${payload.nowLocal}`,
+    `Active instances: ${payload.instances}`,
+    `Active sessions: ${payload.sessions}`,
+    `Manager uptime (s): ${payload.uptimeSec}`,
+    `Idle marker age (s): ${payload.lastNonEmptyAgeSec}`,
+  ]
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join('');
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LM Tools Bridge Manager Status</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: #f5f7fb;
+        color: #111827;
+      }
+      main {
+        max-width: 1100px;
+        margin: 20px auto;
+        padding: 0 16px 24px;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 22px;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      button {
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        padding: 6px 10px;
+        background: #ffffff;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .muted {
+        color: #6b7280;
+        font-size: 13px;
+      }
+      .error {
+        margin: 0 0 12px;
+        color: #b91c1c;
+        font-size: 13px;
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        border-bottom: 1px solid #e5e7eb;
+        padding: 6px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f3f4f6;
+        font-weight: 600;
+      }
+      .kv-key {
+        width: 220px;
+        color: #374151;
+      }
+      noscript pre {
+        margin: 0;
+        white-space: pre-wrap;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #111827;
+          color: #f3f4f6;
+        }
+        .card {
+          background: #0f172a;
+          border-color: #334155;
+        }
+        button {
+          background: #1f2937;
+          border-color: #475569;
+          color: #f3f4f6;
+        }
+        th {
+          background: #1e293b;
+        }
+        th, td {
+          border-color: #334155;
+        }
+        .muted {
+          color: #94a3b8;
+        }
+        .kv-key {
+          color: #cbd5e1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>LM Tools Bridge Manager Status</h1>
+      <div class="toolbar">
+        <button id="refresh-button" type="button">Refresh</button>
+        <label><input id="auto-refresh" type="checkbox" /> Auto refresh (2s)</label>
+        <span id="updated-at" class="muted"></span>
+      </div>
+      <p id="error" class="error" hidden></p>
+
+      <section class="card">
+        <h2>Summary</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody id="summary-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Instances</h2>
+        <p id="instances-empty" class="muted">No active instances.</p>
+        <div class="table-wrap">
+          <table id="instances-table" hidden>
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>PID</th>
+                <th>Host:Port</th>
+                <th>Workspace</th>
+                <th>Last Seen (s)</th>
+                <th>Uptime (s)</th>
+              </tr>
+            </thead>
+            <tbody id="instances-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Sessions</h2>
+        <p id="sessions-empty" class="muted">No active sessions.</p>
+        <div class="table-wrap">
+          <table id="sessions-table" hidden>
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>Resolve CWD</th>
+                <th>Workspace Flags</th>
+                <th>Target</th>
+                <th>Last Seen (s)</th>
+                <th>Offline Since</th>
+              </tr>
+            </thead>
+            <tbody id="sessions-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <noscript>
+        <section class="card">
+          <h2>Summary (JavaScript disabled)</h2>
+          <p class="muted">Enable JavaScript to use Refresh and Auto refresh.</p>
+          <ul>${noScriptSummary}</ul>
+        </section>
+      </noscript>
+    </main>
+    <script>
+      (() => {
+        const STATUS_JSON_URL = '/mcp/status?format=json';
+        const AUTO_REFRESH_INTERVAL_MS = 2000;
+        const refreshButton = document.getElementById('refresh-button');
+        const autoRefreshCheckbox = document.getElementById('auto-refresh');
+        const updatedAt = document.getElementById('updated-at');
+        const errorBox = document.getElementById('error');
+        const summaryBody = document.getElementById('summary-body');
+        const instancesTable = document.getElementById('instances-table');
+        const instancesBody = document.getElementById('instances-body');
+        const instancesEmpty = document.getElementById('instances-empty');
+        const sessionsTable = document.getElementById('sessions-table');
+        const sessionsBody = document.getElementById('sessions-body');
+        const sessionsEmpty = document.getElementById('sessions-empty');
+        const initialPayload = JSON.parse(atob('${initialPayloadBase64}'));
+        let autoRefreshTimer;
+        let refreshInFlight = false;
+
+        function toText(value) {
+          if (value === null || value === undefined || value === '') {
+            return '-';
+          }
+          return String(value);
+        }
+
+        function appendCell(row, text, className) {
+          const cell = document.createElement('td');
+          if (className) {
+            cell.className = className;
+          }
+          cell.textContent = text;
+          row.appendChild(cell);
+        }
+
+        function renderSummary(payload) {
+          summaryBody.replaceChildren();
+          const rows = [
+            ['Version', toText(payload.version)],
+            ['Now (local)', toText(payload.nowLocal)],
+            ['Active instances', toText(payload.instances)],
+            ['Active sessions', toText(payload.sessions)],
+            ['Manager uptime (s)', toText(payload.uptimeSec)],
+            ['Idle marker age (s)', toText(payload.lastNonEmptyAgeSec)],
+          ];
+          for (const [key, value] of rows) {
+            const row = document.createElement('tr');
+            appendCell(row, key, 'kv-key');
+            appendCell(row, value);
+            summaryBody.appendChild(row);
+          }
+        }
+
+        function formatWorkspace(detail) {
+          const folders = Array.isArray(detail.workspaceFolders) ? detail.workspaceFolders : [];
+          const parts = [];
+          if (folders.length > 0) {
+            parts.push(folders.join(', '));
+          }
+          if (detail.workspaceFile) {
+            parts.push('file: ' + detail.workspaceFile);
+          }
+          if (parts.length === 0) {
+            return '-';
+          }
+          return parts.join(' | ');
+        }
+
+        function formatSessionTarget(detail) {
+          if (!detail || !detail.target) {
+            return '-';
+          }
+          return detail.target.sessionId + ' @ ' + detail.target.host + ':' + detail.target.port;
+        }
+
+        function renderInstances(payload) {
+          instancesBody.replaceChildren();
+          const details = Array.isArray(payload.instanceDetails) ? payload.instanceDetails : [];
+          if (details.length === 0) {
+            instancesTable.hidden = true;
+            instancesEmpty.hidden = false;
+            return;
+          }
+          instancesEmpty.hidden = true;
+          instancesTable.hidden = false;
+          for (const detail of details) {
+            const row = document.createElement('tr');
+            appendCell(row, toText(detail.sessionId));
+            appendCell(row, toText(detail.pid));
+            appendCell(row, toText(detail.host) + ':' + toText(detail.port));
+            appendCell(row, formatWorkspace(detail));
+            appendCell(row, toText(detail.lastSeenAgeSec));
+            appendCell(row, toText(detail.uptimeSec));
+            instancesBody.appendChild(row);
+          }
+        }
+
+        function renderSessions(payload) {
+          sessionsBody.replaceChildren();
+          const details = Array.isArray(payload.sessionDetails) ? payload.sessionDetails : [];
+          if (details.length === 0) {
+            sessionsTable.hidden = true;
+            sessionsEmpty.hidden = false;
+            return;
+          }
+          sessionsEmpty.hidden = true;
+          sessionsTable.hidden = false;
+          for (const detail of details) {
+            const row = document.createElement('tr');
+            appendCell(row, toText(detail.sessionId));
+            appendCell(row, toText(detail.resolveCwd));
+            appendCell(row, 'set=' + toText(detail.workspaceSetExplicitly) + ', matched=' + toText(detail.workspaceMatched));
+            appendCell(row, formatSessionTarget(detail));
+            appendCell(row, toText(detail.lastSeenAgeSec));
+            appendCell(row, detail.offlineSinceLocal ? detail.offlineSinceLocal : '-');
+            sessionsBody.appendChild(row);
+          }
+        }
+
+        function renderPayload(payload) {
+          renderSummary(payload);
+          renderInstances(payload);
+          renderSessions(payload);
+          updatedAt.textContent = 'Last updated: ' + toText(payload.nowLocal);
+        }
+
+        async function refreshStatus(showError) {
+          if (refreshInFlight) {
+            return;
+          }
+          refreshInFlight = true;
+          refreshButton.disabled = true;
+          try {
+            const response = await fetch(STATUS_JSON_URL, {
+              method: 'GET',
+              headers: { Accept: 'application/json' },
+              cache: 'no-store',
+            });
+            if (!response.ok) {
+              throw new Error('HTTP ' + response.status);
+            }
+            const payload = await response.json();
+            renderPayload(payload);
+            errorBox.hidden = true;
+            errorBox.textContent = '';
+          } catch (error) {
+            if (showError) {
+              errorBox.hidden = false;
+              errorBox.textContent = 'Failed to refresh status: ' + (error instanceof Error ? error.message : String(error));
+            }
+          } finally {
+            refreshButton.disabled = false;
+            refreshInFlight = false;
+          }
+        }
+
+        function setAutoRefresh(enabled) {
+          if (autoRefreshTimer !== undefined) {
+            clearInterval(autoRefreshTimer);
+            autoRefreshTimer = undefined;
+          }
+          if (enabled) {
+            autoRefreshTimer = setInterval(() => {
+              void refreshStatus(false);
+            }, AUTO_REFRESH_INTERVAL_MS);
+          }
+        }
+
+        refreshButton.addEventListener('click', () => {
+          void refreshStatus(true);
+        });
+        autoRefreshCheckbox.addEventListener('change', () => {
+          setAutoRefresh(autoRefreshCheckbox.checked);
+        });
+
+        renderPayload(initialPayload);
+      })();
+    </script>
+  </body>
+</html>`;
 }
 
 function respondJsonRpcResult(
@@ -1943,54 +2447,16 @@ async function handleMcpHttpRequest(
   }
   if ((requestUrl.pathname === '/mcp/status' || requestUrl.pathname === '/mcp/status/')
     && req.method === 'GET') {
-    const alive = getAliveRecords();
     const now = Date.now();
-    respondJson(res, 200, {
-      ok: true,
-      version: getManagerVersion(),
-      now,
-      nowIso: new Date(now).toISOString(),
-      nowLocal: formatLocalDateTime(now),
-      instances: alive.length,
-      instanceDetails: alive.map((record) => ({
-        sessionId: record.sessionId,
-        pid: record.pid,
-        workspaceFolders: record.workspaceFolders,
-        workspaceFile: record.workspaceFile ?? null,
-        host: record.host,
-        port: record.port,
-        lastSeen: record.lastSeen,
-        lastSeenLocal: formatLocalDateTime(record.lastSeen),
-        lastSeenAgeSec: Math.floor((now - record.lastSeen) / 1000),
-        startedAt: record.startedAt,
-        startedAtLocal: formatLocalDateTime(record.startedAt),
-        uptimeSec: Math.floor((now - record.startedAt) / 1000),
-      })),
-      sessions: sessions.size,
-      sessionDetails: Array.from(sessions.values()).map((session) => ({
-        sessionId: session.sessionId,
-        resolveCwd: session.resolveCwd,
-        workspaceSetExplicitly: session.workspaceSetExplicitly,
-        workspaceMatched: session.workspaceMatched,
-        target: session.currentTarget
-          ? {
-            sessionId: session.currentTarget.sessionId,
-            host: session.currentTarget.host,
-            port: session.currentTarget.port,
-          }
-          : null,
-        lastSeen: session.lastSeen,
-        lastSeenLocal: formatLocalDateTime(session.lastSeen),
-        lastSeenAgeSec: Math.floor((now - session.lastSeen) / 1000),
-        offlineSince: session.offlineSince ?? null,
-        offlineSinceLocal: session.offlineSince ? formatLocalDateTime(session.offlineSince) : null,
-      })),
-      lastNonEmptyAt,
-      lastNonEmptyAtIso: new Date(lastNonEmptyAt).toISOString(),
-      lastNonEmptyAtLocal: formatLocalDateTime(lastNonEmptyAt),
-      lastNonEmptyAgeSec: Math.floor((now - lastNonEmptyAt) / 1000),
-      uptimeSec: Math.floor((now - STARTUP_TIME) / 1000),
-    });
+    const payload = buildManagerStatusPayload(now);
+    if (shouldServeHtmlStatus(requestUrl, req.headers.accept)) {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(renderStatusHtml(payload));
+      return;
+    }
+    respondJson(res, 200, payload);
     return;
   }
   if (requestUrl.pathname !== '/mcp' && requestUrl.pathname !== '/mcp/') {

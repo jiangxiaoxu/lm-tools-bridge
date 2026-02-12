@@ -6,7 +6,7 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
-## [1.0.78] - 2026-02-12
+## [1.0.79] - 2026-02-12
 
 ### English
 
@@ -24,6 +24,7 @@ Maintenance rule:
 - Increased manager idle self-shutdown grace window from 3 seconds to 10 seconds.
 - Increased old-manager shutdown wait timeout in restart flow from 3 seconds to 5 seconds.
 - Relaxed manager instance liveness TTL from 1.5 seconds to 2.5 seconds to reduce false stale detection during heartbeat jitter.
+- Updated `/mcp/status` to support content negotiation: browser requests now get a human-readable HTML dashboard with `Refresh` and `Auto refresh (2s)`, while programmatic requests keep JSON compatibility (`?format=json`, `?format=html`).
 
 ### 中文
 
@@ -41,6 +42,7 @@ Maintenance rule:
 - 将 manager 空闲自退出窗口从 3 秒提升到 10 秒.
 - 将重启流程中等待旧 manager 退出超时从 3 秒提升到 5 秒.
 - 将 manager 实例存活 TTL 从 1.5 秒放宽到 2.5 秒,降低 heartbeat 抖动时的误判下线.
+- 更新 `/mcp/status` 为内容协商模式: 浏览器请求可获得人类可读 HTML 仪表页(含 `Refresh` 与 `Auto refresh (2s)`),程序化请求继续保持 JSON 兼容(`?format=json`,`?format=html`).
 
 ## [1.0.76] - 2026-02-11
 

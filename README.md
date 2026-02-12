@@ -18,6 +18,9 @@ This README covers the current Manager-based version only.
 - Manager MCP endpoint (client entry): `http://127.0.0.1:47100/mcp`
 - Manager status endpoint (diagnostics): `http://127.0.0.1:47100/mcp/status`
 - Workspace MCP endpoint (dynamic target): `http://127.0.0.1:<runtime-port>/mcp`
+- Status format negotiation:
+- Browser requests (`Accept: text/html`) return a human-readable status page with `Refresh` and `Auto refresh (2s)` controls.
+- Programmatic requests default to JSON; use `?format=json` to force JSON and `?format=html` to force HTML.
 
 ### Manager vs Workspace MCP Server
 - Manager is the stable client-facing MCP endpoint.
@@ -211,6 +214,9 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - Manager MCP 端点(客户端入口): `http://127.0.0.1:47100/mcp`
 - Manager 状态端点(诊断): `http://127.0.0.1:47100/mcp/status`
 - Workspace MCP 端点(动态目标): `http://127.0.0.1:<runtime-port>/mcp`
+- 状态格式协商:
+- 浏览器请求(`Accept: text/html`)会返回人类可读状态页,并提供 `Refresh` 与 `Auto refresh (2s)` 控件.
+- 程序化请求默认返回 JSON; 可使用 `?format=json` 强制 JSON,`?format=html` 强制 HTML.
 
 ### Manager 与 Workspace MCP Server 的关系
 - Manager 是稳定的客户端 MCP 入口.

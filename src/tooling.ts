@@ -50,18 +50,20 @@ const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
 const LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
 type LmGetDiagnosticsSeverity = typeof LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES[number];
 const LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES: readonly LmGetDiagnosticsSeverity[] = ['error', 'warning'];
-const DEFAULT_CLANGD_EXPOSED_TOOL_NAMES = [
-  'lm_clangd_status',
-  'lm_clangd_switchSourceHeader',
-  'lm_clangd_typeHierarchy',
-  'lm_clangd_symbolSearch',
-  'lm_clangd_symbolBundle',
-  'lm_clangd_symbolInfo',
-  'lm_clangd_symbolReferences',
-  'lm_clangd_symbolImplementations',
-  'lm_clangd_callHierarchy',
-  'lm_clangd_lspRequest',
-];
+// Deprecated clangd default exposed list (kept for reference only):
+// const DEFAULT_CLANGD_EXPOSED_TOOL_NAMES = [
+//   'lm_clangd_status',
+//   'lm_clangd_switchSourceHeader',
+//   'lm_clangd_typeHierarchy',
+//   'lm_clangd_symbolSearch',
+//   'lm_clangd_symbolBundle',
+//   'lm_clangd_symbolInfo',
+//   'lm_clangd_symbolReferences',
+//   'lm_clangd_symbolImplementations',
+//   'lm_clangd_callHierarchy',
+//   'lm_clangd_lspRequest',
+// ];
+const DEFAULT_CLANGD_EXPOSED_TOOL_NAMES: readonly string[] = [];
 
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',

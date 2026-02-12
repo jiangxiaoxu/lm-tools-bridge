@@ -38,8 +38,8 @@ Output: 稳定 structuredContent(source/scope/severities/capped/totalDiagnostics
 
 Flow: clangd MCP 工具调用
 Entry: lm_clangd_* tools
-Path: getClangdToolsSnapshot -> sendRequestWithAutoStart -> ensureClangdRunning -> clangd.activate(按需) -> languageClient.sendRequest
-Output: AI-first 摘要文本输出(counts + section + entries)或明确错误
+Path: getClangdToolsSnapshot -> []
+Output: clangd tools 已弃用并硬禁用, 不注册到 tools/list
 
 Flow: Tool 暴露计算
 Entry: tools/list or tools/call
@@ -109,8 +109,8 @@ Files: src/tooling.ts, src/clangd/workspacePath.ts
 Log: "filePath must be a string when provided.", "Tool not found or disabled"
 
 Task: clangd 工具未暴露
-Entry: lmToolsBridge.clangd.enabled
-Path: isClangdMcpEnabled -> getClangdToolsSnapshot -> getCustomToolsSnapshot
+Entry: lm_clangd_* tools
+Path: getClangdToolsSnapshot -> getCustomToolsSnapshot
 Files: src/clangd/index.ts, src/tooling.ts
 Log: "Tool not found or disabled"
 
@@ -171,25 +171,9 @@ Key: lmToolsBridge.debug
 Effect: Log verbosity
 Code: getDebugLevel
 
-Key: lmToolsBridge.clangd.enabled
-Effect: Gate all lm_clangd_* tools
-Code: getClangdToolsSnapshot
-
-Key: lmToolsBridge.clangd.autoStartOnInvoke
-Effect: Auto trigger clangd.activate when client missing
-Code: ensureClangdRunning, startClangdAndWait
-
-Key: lmToolsBridge.clangd.enablePassthrough
-Effect: Enable/disable lm_clangd_lspRequest exposure
-Code: getClangdToolsSnapshot
-
-Key: lmToolsBridge.clangd.requestTimeoutMs
-Effect: Timeout for clangd MCP requests
-Code: sendRequestWithAutoStart, sendWithTimeout
-
-Key: lmToolsBridge.clangd.allowedMethods
-Effect: Allowlist for lm_clangd_lspRequest
-Code: getEffectiveAllowedPassthroughMethods
+Key: lmToolsBridge.clangd.*
+Effect: Removed from configuration contributions; clangd MCP tools are hard-disabled.
+Code: getClangdToolsSnapshot, isClangdMcpEnabled
 
 ## 行为不变量
 Invariant: tools.disabledDelta 优先级高于 tools.enabledDelta.
@@ -215,7 +199,7 @@ Invariant: `lm_getDiagnostics` 支持 `{}` 全局查询和 `{ filePath }` 单文
 Invariant: `lm_getDiagnostics` 输出坐标统一为 1-based,并将 `code` 规范为 string|null,`tags` 规范为 string[]; files[] 不包含 `uri`.
 Invariant: `lm_getDiagnostics` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
 Invariant: `lm_getDiagnostics` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
-Invariant: `lmToolsBridge.clangd.enabled=false` 时不暴露任何 lm_clangd_* 工具.
+Invariant: lm_clangd_* tools are hard-disabled and must never be exposed in tools/list.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
 Invariant: workspace untrusted 时 clangd MCP 请求必须拒绝.
@@ -330,15 +314,15 @@ Seed: resolveInputFilePath | Use: clangd filePath 输入解析入口
 Seed: resolveStructuredPath | Use: 诊断路径映射到 workspacePath
 Seed: toStructuredLocation | Use: clangd 结构化位置对象规范化入口
 Seed: formatSummaryPath | Use: clangd 摘要路径渲染入口
-Seed: lm_clangd_status | Use: clangd 可用性诊断
-Seed: lm_clangd_typeHierarchy | Use: clangd 继承链摘要
-Seed: lm_clangd_symbolSearch | Use: clangd 名字/正则检索
-Seed: lm_clangd_symbolBundle | Use: clangd 聚合信息单次查询入口
-Seed: lm_clangd_symbolInfo | Use: clangd 符号定义摘要
-Seed: lm_clangd_symbolReferences | Use: clangd 引用关系摘要
-Seed: lm_clangd_symbolImplementations | Use: clangd 实现点摘要
-Seed: lm_clangd_callHierarchy | Use: clangd 调用关系摘要
-Seed: lm_clangd_lspRequest | Use: clangd 受限透传调用
+Seed: lm_clangd_status | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_typeHierarchy | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_symbolSearch | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_symbolBundle | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_symbolInfo | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_symbolReferences | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_symbolImplementations | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_callHierarchy | Use: deprecated, kept in code but disabled
+Seed: lm_clangd_lspRequest | Use: deprecated, kept in code but disabled
 Seed: lm_getDiagnostics | Use: VS Code diagnostics 查询
 
 ## 默认与内置列表的映射

@@ -129,10 +129,10 @@ User guidance:
 - `structuredContent` is emitted only when upstream returns a valid JSON object (`LanguageModelDataPart` with JSON mime, or tool-level `structuredContent` object).
 - Missing channels are kept missing. The bridge does not copy data across channels.
 
-### Clangd Tools (Optional)
-Enable clangd MCP tools with:
-- `lmToolsBridge.clangd.enabled`
-- Clangd tools are exposed by default but not enabled by default.
+### Clangd Tools
+Clangd MCP tools are deprecated and hard-disabled in this extension build.
+- No `lmToolsBridge.clangd.*` enablement settings are exposed.
+- `lm_clangd_*` tools are not registered and cannot be enabled from tool settings.
 
 Notes:
 - AI-first tools now use `filePath` input instead of `uri`.
@@ -154,18 +154,7 @@ Notes:
 - `lm_clangd_typeHierarchy` `SOURCE` section now emits `type -> preview -> path` to improve AI readability.
 - `lm_clangd_typeHierarchy` `structuredContent.sourceByClass` includes `absolutePath/workspacePath/startLine/endLine/preview`.
 - summary path format is `WorkspaceName/...#line` for workspace files, absolute path for external files.
-- Default exposed clangd AI tools:
-- `lm_clangd_status`
-- `lm_clangd_switchSourceHeader`
-- `lm_clangd_typeHierarchy`
-- `lm_clangd_symbolSearch`
-- `lm_clangd_symbolBundle`
-- `lm_clangd_symbolInfo`
-- `lm_clangd_symbolReferences`
-- `lm_clangd_symbolImplementations`
-- `lm_clangd_callHierarchy`
-- `lm_clangd_lspRequest` is controlled by `lmToolsBridge.clangd.enablePassthrough` and `lmToolsBridge.clangd.allowedMethods`.
-- With `lmToolsBridge.clangd.autoStartOnInvoke=true`, clangd can auto-start on first clangd tool invocation.
+- Previously exposed clangd AI tools are now disabled (`lm_clangd_status`, `lm_clangd_switchSourceHeader`, `lm_clangd_typeHierarchy`, `lm_clangd_symbolSearch`, `lm_clangd_symbolBundle`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, `lm_clangd_callHierarchy`, `lm_clangd_lspRequest`).
 - `clangd.enable` is clangd extension setting, not an `lmToolsBridge.*` setting.
 
 ### Key Settings
@@ -334,10 +323,10 @@ url = "http://127.0.0.1:47100/mcp"
 - 仅当上游返回合法 JSON object(来自 JSON mime 的 `LanguageModelDataPart` 或 tool-level `structuredContent` object)时输出 `structuredContent`.
 - 缺失通道保持缺失,bridge 不会跨通道复制数据.
 
-### Clangd 工具(可选)
-通过以下设置启用 clangd MCP tools:
-- `lmToolsBridge.clangd.enabled`
-- clangd 工具默认 exposed,但默认不 enabled.
+### Clangd 工具
+当前版本中 clangd MCP tools 已弃用并被硬禁用.
+- 不再暴露 `lmToolsBridge.clangd.*` 启用类设置项.
+- `lm_clangd_*` 工具不会注册,也无法通过工具设置开启.
 
 说明:
 - AI-first 工具已使用 `filePath` 输入替代 `uri`.
@@ -359,18 +348,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `lm_clangd_typeHierarchy` 的 `SOURCE` 区块现在按 `type -> preview -> path` 输出,更利于 AI 阅读.
 - `lm_clangd_typeHierarchy` 的 `structuredContent.sourceByClass` 包含 `absolutePath/workspacePath/startLine/endLine/preview`.
 - summary path 格式为: workspace 内文件使用 `WorkspaceName/...#line`,workspace 外文件使用绝对路径.
-- 默认暴露的 clangd AI tools:
-- `lm_clangd_status`
-- `lm_clangd_switchSourceHeader`
-- `lm_clangd_typeHierarchy`
-- `lm_clangd_symbolSearch`
-- `lm_clangd_symbolBundle`
-- `lm_clangd_symbolInfo`
-- `lm_clangd_symbolReferences`
-- `lm_clangd_symbolImplementations`
-- `lm_clangd_callHierarchy`
-- `lm_clangd_lspRequest` 由 `lmToolsBridge.clangd.enablePassthrough` 和 `lmToolsBridge.clangd.allowedMethods` 控制.
-- 当 `lmToolsBridge.clangd.autoStartOnInvoke=true` 时,首次 clangd 工具调用可自动拉起 clangd.
+- 历史 clangd AI tools 现均禁用(`lm_clangd_status`,`lm_clangd_switchSourceHeader`,`lm_clangd_typeHierarchy`,`lm_clangd_symbolSearch`,`lm_clangd_symbolBundle`,`lm_clangd_symbolInfo`,`lm_clangd_symbolReferences`,`lm_clangd_symbolImplementations`,`lm_clangd_callHierarchy`,`lm_clangd_lspRequest`).
 - `clangd.enable` 属于 clangd 扩展设置,不是 `lmToolsBridge.*` 设置.
 
 ### 关键设置

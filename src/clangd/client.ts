@@ -5,15 +5,21 @@ import { ClangdToolError } from './errors';
 import type { ClangdApiV1, ClangdExtensionApi, ClangdLanguageClient } from './types';
 
 export function isClangdMcpEnabled(): boolean {
-  return getConfigValue<boolean>('clangd.enabled', false);
+  // Deprecated hard-disable.
+  // return getConfigValue<boolean>('clangd.enabled', false);
+  return false;
 }
 
 export function isClangdPassthroughEnabled(): boolean {
-  return getConfigValue<boolean>('clangd.enablePassthrough', true);
+  // Deprecated hard-disable.
+  // return getConfigValue<boolean>('clangd.enablePassthrough', true);
+  return false;
 }
 
 export function isClangdAutoStartOnInvokeEnabled(): boolean {
-  return getConfigValue<boolean>('clangd.autoStartOnInvoke', true);
+  // Deprecated hard-disable.
+  // return getConfigValue<boolean>('clangd.autoStartOnInvoke', true);
+  return false;
 }
 
 export function getClangdRequestTimeoutMs(): number {

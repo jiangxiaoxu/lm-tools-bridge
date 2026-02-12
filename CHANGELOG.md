@@ -6,7 +6,7 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
-## [1.0.82] - 2026-02-12
+## [1.0.83] - 2026-02-12
 
 ### English
 
@@ -16,6 +16,8 @@ Maintenance rule:
 - Expanded `lm_debug_listLaunchConfigs` and `lm_debug_start` launch config discovery to include both workspace-folder launch settings and workspace-level launch settings.
 - Tightened `lm_debug_start` name-based selection: when `name` matches multiple launch configs, the tool now returns an explicit ambiguity error and asks callers to disambiguate with `index` or `workspaceFolder`.
 - Debug tool summaries now include launch config scope (`workspaceFolder` or `workspace`) and workspace folder path when available.
+- Deprecated and hard-disabled all `lm_clangd_*` MCP tools in runtime registration; clangd tools can no longer be enabled by settings.
+- Removed user-facing `lmToolsBridge.clangd.*` enablement settings from extension configuration contributions.
 
 ### 中文
 
@@ -25,6 +27,8 @@ Maintenance rule:
 - 扩展 `lm_debug_listLaunchConfigs` 与 `lm_debug_start` 的 launch 配置发现范围: 同时覆盖 workspace-folder launch 配置和 workspace 级 launch 配置.
 - 收紧 `lm_debug_start` 按 `name` 的选择行为: 当 `name` 命中多个 launch 配置时,返回明确歧义错误,并提示调用方使用 `index` 或 `workspaceFolder` 消歧.
 - debug 工具摘要新增配置作用域(`workspaceFolder` 或 `workspace`)和可用的 workspace folder 路径信息.
+- 将 `lm_clangd_*` MCP 工具标记为弃用并在运行时硬禁用,不再允许通过设置开启 clangd 工具.
+- 从扩展配置贡献中移除面向用户的 `lmToolsBridge.clangd.*` 启用类设置项.
 
 ## [1.0.79] - 2026-02-12
 

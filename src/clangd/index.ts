@@ -1,19 +1,23 @@
-import { getEffectiveAllowedPassthroughMethods, isClangdMcpEnabled, isClangdPassthroughEnabled } from './client';
 import type { ClangdCustomToolDefinition } from './types';
-import {
-  buildCallHierarchyTool,
-  buildLspRequestTool,
-  buildStatusTool,
-  buildSwitchSourceHeaderTool,
-  buildSymbolBundleTool,
-  buildSymbolImplementationsTool,
-  buildSymbolInfoTool,
-  buildSymbolReferencesTool,
-  buildSymbolSearchTool,
-  buildTypeHierarchyTool,
-} from './tools';
 
 export function getClangdToolsSnapshot(): readonly ClangdCustomToolDefinition[] {
+  // Clangd MCP tools are hard-disabled by product policy.
+  // Keep the previous registration flow below for future rollback reference.
+  /*
+  import { getEffectiveAllowedPassthroughMethods, isClangdMcpEnabled, isClangdPassthroughEnabled } from './client';
+  import {
+    buildCallHierarchyTool,
+    buildLspRequestTool,
+    buildStatusTool,
+    buildSwitchSourceHeaderTool,
+    buildSymbolBundleTool,
+    buildSymbolImplementationsTool,
+    buildSymbolInfoTool,
+    buildSymbolReferencesTool,
+    buildSymbolSearchTool,
+    buildTypeHierarchyTool,
+  } from './tools';
+
   if (!isClangdMcpEnabled()) {
     return [];
   }
@@ -35,4 +39,6 @@ export function getClangdToolsSnapshot(): readonly ClangdCustomToolDefinition[] 
     }
   }
   return tools;
+  */
+  return [];
 }

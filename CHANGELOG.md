@@ -25,6 +25,8 @@ Maintenance rule:
 - Increased old-manager shutdown wait timeout in restart flow from 3 seconds to 5 seconds.
 - Relaxed manager instance liveness TTL from 1.5 seconds to 2.5 seconds to reduce false stale detection during heartbeat jitter.
 - Updated `/mcp/status` to support content negotiation: browser requests now get a human-readable HTML dashboard with `Refresh` and `Auto refresh (2s)`, while programmatic requests keep JSON compatibility (`?format=json`, `?format=html`).
+- Added first-batch non-interactive task/debug tools: `lm_tasks_runBuild`, `lm_tasks_runTest`, `lm_debug_listLaunchConfigs`, and `lm_debug_start`.
+- New task/debug tools are exposed by default but remain disabled by default, so users can opt in from enabled-tools settings.
 
 ### 中文
 
@@ -43,6 +45,8 @@ Maintenance rule:
 - 将重启流程中等待旧 manager 退出超时从 3 秒提升到 5 秒.
 - 将 manager 实例存活 TTL 从 1.5 秒放宽到 2.5 秒,降低 heartbeat 抖动时的误判下线.
 - 更新 `/mcp/status` 为内容协商模式: 浏览器请求可获得人类可读 HTML 仪表页(含 `Refresh` 与 `Auto refresh (2s)`),程序化请求继续保持 JSON 兼容(`?format=json`,`?format=html`).
+- 新增首批非交互 task/debug 工具: `lm_tasks_runBuild`,`lm_tasks_runTest`,`lm_debug_listLaunchConfigs`,`lm_debug_start`.
+- 新增 task/debug 工具默认 exposed,但默认不 enabled,用户可按需在 enabled 工具设置中开启.
 
 ## [1.0.76] - 2026-02-11
 

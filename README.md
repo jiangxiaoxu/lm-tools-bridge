@@ -81,6 +81,14 @@ User guidance:
 - `preview` returns source code lines from `startLine` to `endLine`, capped at 10 lines.
 - `copilot_getErrors` is still available for compatibility, but `lm_getDiagnostics` provides stable structured output.
 
+### Tasks And Debug Tools
+- `lm_tasks_runBuild`: starts a build task via `vscode.tasks` without interactive pickers.
+- `lm_tasks_runTest`: starts a test task via `vscode.tasks` without interactive pickers.
+- `lm_debug_listLaunchConfigs`: lists launch configurations from `launch.configurations`.
+- `lm_debug_start`: starts debugging via `vscode.debug` with selection priority `index > name > first`.
+- All four tools support optional `workspaceFolder` (workspace name or absolute folder path).
+- Default policy: these tools are exposed by default, but not enabled by default.
+
 ### Troubleshooting
 - `workspace not set`:
   - Run `lmToolsBridge.requestWorkspaceMCPServer` with `cwd` first.
@@ -276,6 +284,14 @@ url = "http://127.0.0.1:47100/mcp"
 - structured diagnostics 不再包含 `uri`; 每条诊断包含 `preview`,`previewUnavailable`,`previewTruncated`.
 - `preview` 返回 `startLine` 到 `endLine` 的源码预览,最多 10 行.
 - `copilot_getErrors` 仍保留兼容,但 `lm_getDiagnostics` 提供更稳定的 structured 输出.
+
+### Tasks 与 Debug 工具
+- `lm_tasks_runBuild`: 通过 `vscode.tasks` 启动 build task,不使用交互式选择器.
+- `lm_tasks_runTest`: 通过 `vscode.tasks` 启动 test task,不使用交互式选择器.
+- `lm_debug_listLaunchConfigs`: 读取 `launch.configurations` 并返回可选配置列表.
+- `lm_debug_start`: 通过 `vscode.debug` 启动调试,选择优先级为 `index > name > first`.
+- 这 4 个工具都支持可选 `workspaceFolder`(workspace 名称或绝对路径).
+- 默认策略: 这些工具默认 exposed,但默认不 enabled.
 
 ### 故障排查
 - `workspace not set`:

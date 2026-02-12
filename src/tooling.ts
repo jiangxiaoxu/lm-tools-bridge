@@ -40,6 +40,10 @@ const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
 const LM_GET_DIAGNOSTICS_TOOL_NAME = 'lm_getDiagnostics';
+const LM_TASKS_RUN_BUILD_TOOL_NAME = 'lm_tasks_runBuild';
+const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
+const LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME = 'lm_debug_listLaunchConfigs';
+const LM_DEBUG_START_TOOL_NAME = 'lm_debug_start';
 const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 500;
 const LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS = 1;
 const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
@@ -69,6 +73,10 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
 ];
 const DEFAULT_EXPOSED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_TOOL_NAMES,
+  LM_TASKS_RUN_BUILD_TOOL_NAME,
+  LM_TASKS_RUN_TEST_TOOL_NAME,
+  LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME,
+  LM_DEBUG_START_TOOL_NAME,
   ...DEFAULT_CLANGD_EXPOSED_TOOL_NAMES,
 ];
 const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
@@ -256,6 +264,83 @@ const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   },
 };
 
+const LM_TASKS_RUN_BUILD_DESCRIPTION = [
+  'Start a build task using VS Code tasks API without showing interactive pickers.',
+  'If a default build task exists, it is preferred.',
+  'Optional workspaceFolder can target a specific workspace folder by name or absolute path.',
+].join('\n');
+
+const LM_TASKS_RUN_TEST_DESCRIPTION = [
+  'Start a test task using VS Code tasks API without showing interactive pickers.',
+  'If a default test task exists, it is preferred.',
+  'Optional workspaceFolder can target a specific workspace folder by name or absolute path.',
+].join('\n');
+
+const LM_TASKS_RUN_BUILD_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    workspaceFolder: {
+      type: 'string',
+      description: 'Optional workspace folder selector. Accepts workspace name or absolute folder path.',
+    },
+  },
+};
+
+const LM_TASKS_RUN_TEST_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    workspaceFolder: {
+      type: 'string',
+      description: 'Optional workspace folder selector. Accepts workspace name or absolute folder path.',
+    },
+  },
+};
+
+const LM_DEBUG_LIST_LAUNCH_CONFIGS_DESCRIPTION = [
+  'List launch configurations from launch.json for the current workspace folders.',
+  'Use this tool before lm_debug_start to choose a stable config index.',
+  'This tool does not start debugging.',
+].join('\n');
+
+const LM_DEBUG_LIST_LAUNCH_CONFIGS_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    workspaceFolder: {
+      type: 'string',
+      description: 'Optional workspace folder selector. Accepts workspace name or absolute folder path.',
+    },
+  },
+};
+
+const LM_DEBUG_START_DESCRIPTION = [
+  'Start debugging without interactive pickers using launch configurations from launch.json.',
+  'Selection priority: index > name > first available configuration.',
+  'Optional noDebug starts without debugging.',
+].join('\n');
+
+const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    index: {
+      type: 'number',
+      description: 'Optional 0-based index returned by lm_debug_listLaunchConfigs.',
+    },
+    name: {
+      type: 'string',
+      description: 'Optional launch configuration name. Used when index is not provided.',
+    },
+    workspaceFolder: {
+      type: 'string',
+      description: 'Optional workspace folder selector. Accepts workspace name or absolute folder path.',
+    },
+    noDebug: {
+      type: 'boolean',
+      description: 'Optional flag to start without debugging.',
+      default: false,
+    },
+  },
+};
+
 interface LmGetDiagnosticsNormalizedDiagnostic {
   severity: LmGetDiagnosticsSeverity;
   message: string;
@@ -284,6 +369,45 @@ interface LmGetDiagnosticsPayload {
   capped: boolean;
   totalDiagnostics: number;
   files: LmGetDiagnosticsFileResult[];
+}
+
+type TaskToolKind = 'build' | 'test';
+
+interface TaskRunPayload {
+  started: boolean;
+  taskName: string;
+  source: string;
+  scope: string;
+  workspaceFolder: string | null;
+  kind: TaskToolKind;
+  message: string;
+}
+
+interface LaunchConfigSummary {
+  index: number;
+  name: string;
+  type: string;
+  request: string;
+  workspaceFolder: string;
+}
+
+interface DebugListLaunchConfigsPayload {
+  count: number;
+  configs: LaunchConfigSummary[];
+  message: string;
+}
+
+interface DebugStartPayload {
+  started: boolean;
+  noDebug: boolean;
+  selectedConfig: LaunchConfigSummary;
+  message: string;
+}
+
+interface LaunchConfigEntry {
+  summary: LaunchConfigSummary;
+  workspaceFolder: vscode.WorkspaceFolder;
+  config: vscode.DebugConfiguration;
 }
 
 const schemaDefaultOverrideWarnings = new Set<string>();
@@ -1805,6 +1929,50 @@ function buildGetDiagnosticsToolDefinition(): CustomToolDefinition {
   };
 }
 
+function buildTasksRunBuildToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_TASKS_RUN_BUILD_TOOL_NAME,
+    description: LM_TASKS_RUN_BUILD_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_TASKS_RUN_BUILD_SCHEMA,
+    isCustom: true,
+    invoke: runTasksRunBuildTool,
+  };
+}
+
+function buildTasksRunTestToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_TASKS_RUN_TEST_TOOL_NAME,
+    description: LM_TASKS_RUN_TEST_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_TASKS_RUN_TEST_SCHEMA,
+    isCustom: true,
+    invoke: runTasksRunTestTool,
+  };
+}
+
+function buildDebugListLaunchConfigsToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME,
+    description: LM_DEBUG_LIST_LAUNCH_CONFIGS_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_DEBUG_LIST_LAUNCH_CONFIGS_SCHEMA,
+    isCustom: true,
+    invoke: runDebugListLaunchConfigsTool,
+  };
+}
+
+function buildDebugStartToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_DEBUG_START_TOOL_NAME,
+    description: LM_DEBUG_START_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_DEBUG_START_SCHEMA,
+    isCustom: true,
+    invoke: runDebugStartTool,
+  };
+}
+
 function buildCustomToolResult(
   text: string,
   structuredContent: unknown,
@@ -1867,6 +2035,356 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
   };
   const summaryText = formatLmGetDiagnosticsSummary(payload, limited.returnedDiagnostics);
   return buildCustomToolResult(summaryText, payload);
+}
+
+async function runTasksRunBuildTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  return runTaskTool('build', input);
+}
+
+async function runTasksRunTestTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  return runTaskTool('test', input);
+}
+
+async function runTaskTool(
+  kind: TaskToolKind,
+  input: Record<string, unknown>,
+): Promise<vscode.LanguageModelToolResult> {
+  const workspaceFolderSelector = parseOptionalStringInput(input, 'workspaceFolder');
+  const workspaceFolder = resolveWorkspaceFolderFromSelector(workspaceFolderSelector);
+  const tasks = await vscode.tasks.fetchTasks();
+  const scopedTasks = filterTasksByWorkspaceFolder(tasks, workspaceFolder);
+  const selectedTask = pickPreferredTaskByKind(scopedTasks, kind);
+  await vscode.tasks.executeTask(selectedTask);
+  const payload: TaskRunPayload = {
+    started: true,
+    kind,
+    taskName: selectedTask.name,
+    source: selectedTask.source,
+    scope: getTaskScopeLabel(selectedTask.scope),
+    workspaceFolder: resolveTaskWorkspaceFolderPath(selectedTask.scope, workspaceFolder),
+    message: `${capitalize(kind)} task started.`,
+  };
+  return buildCustomToolResult(formatTaskRunSummary(payload), payload);
+}
+
+async function runDebugListLaunchConfigsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const workspaceFolderSelector = parseOptionalStringInput(input, 'workspaceFolder');
+  const workspaceFolder = resolveWorkspaceFolderFromSelector(workspaceFolderSelector);
+  const configs = collectLaunchConfigEntries(workspaceFolder);
+  const payload: DebugListLaunchConfigsPayload = {
+    count: configs.length,
+    configs: configs.map((entry) => entry.summary),
+    message: configs.length > 0
+      ? `Found ${configs.length} launch configuration(s).`
+      : 'No launch configurations found.',
+  };
+  return buildCustomToolResult(formatDebugListLaunchConfigsSummary(payload), payload);
+}
+
+async function runDebugStartTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const workspaceFolderSelector = parseOptionalStringInput(input, 'workspaceFolder');
+  const workspaceFolder = resolveWorkspaceFolderFromSelector(workspaceFolderSelector);
+  const index = parseOptionalNonNegativeInteger(input.index, 'index');
+  const name = parseOptionalStringInput(input, 'name');
+  const noDebug = parseOptionalBoolean(input.noDebug, 'noDebug') ?? false;
+  const configs = collectLaunchConfigEntries(workspaceFolder);
+  if (configs.length === 0) {
+    throw new Error('No launch configurations found.');
+  }
+  const selected = selectLaunchConfig(configs, index, name);
+  const started = await vscode.debug.startDebugging(selected.workspaceFolder, selected.config, { noDebug });
+  if (!started) {
+    throw new Error('VS Code rejected debug start request.');
+  }
+  const payload: DebugStartPayload = {
+    started: true,
+    noDebug,
+    selectedConfig: selected.summary,
+    message: noDebug ? 'Debug configuration started with noDebug=true.' : 'Debug configuration started.',
+  };
+  return buildCustomToolResult(formatDebugStartSummary(payload), payload);
+}
+
+function parseOptionalStringInput(input: Record<string, unknown>, key: string): string | undefined {
+  const value = input[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`${key} must be a string when provided.`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${key} must be a non-empty string when provided.`);
+  }
+  return trimmed;
+}
+
+function parseOptionalBoolean(value: unknown, key: string): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`${key} must be a boolean when provided.`);
+  }
+  return value;
+}
+
+function parseOptionalNonNegativeInteger(value: unknown, key: string): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${key} must be a number when provided.`);
+  }
+  const rounded = Math.floor(value);
+  if (rounded < 0 || rounded !== value) {
+    throw new Error(`${key} must be a non-negative integer when provided.`);
+  }
+  return rounded;
+}
+
+function normalizeWorkspaceSelectorPath(value: string): string {
+  return path.resolve(value).replace(/\\/g, '/').toLowerCase();
+}
+
+function resolveWorkspaceFolderFromSelector(selector: string | undefined): vscode.WorkspaceFolder | undefined {
+  if (!selector) {
+    return undefined;
+  }
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) {
+    throw new Error('No workspace folders are available.');
+  }
+  const byName = folders.filter((folder) => folder.name === selector);
+  if (byName.length === 1) {
+    return byName[0];
+  }
+  if (byName.length > 1) {
+    throw new Error(`workspaceFolder is ambiguous by name: ${selector}`);
+  }
+  const normalizedSelectorPath = normalizeWorkspaceSelectorPath(selector);
+  const byPath = folders.filter((folder) => {
+    return normalizeWorkspaceSelectorPath(folder.uri.fsPath) === normalizedSelectorPath;
+  });
+  if (byPath.length === 1) {
+    return byPath[0];
+  }
+  if (byPath.length > 1) {
+    throw new Error(`workspaceFolder is ambiguous by path: ${selector}`);
+  }
+  throw new Error(`workspaceFolder not found: ${selector}`);
+}
+
+function isWorkspaceFolderScope(scope: unknown): scope is vscode.WorkspaceFolder {
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) {
+    return false;
+  }
+  const candidate = scope as { uri?: unknown; name?: unknown };
+  return candidate.uri instanceof vscode.Uri && typeof candidate.name === 'string';
+}
+
+function getTaskGroupId(group: vscode.TaskGroup | string | undefined): string | undefined {
+  if (!group) {
+    return undefined;
+  }
+  if (typeof group === 'string') {
+    return group;
+  }
+  const id = (group as { id?: unknown }).id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+function isTaskGroupDefault(group: vscode.TaskGroup | string | undefined): boolean {
+  if (!group || typeof group === 'string') {
+    return false;
+  }
+  return (group as { isDefault?: unknown }).isDefault === true;
+}
+
+function filterTasksByWorkspaceFolder(
+  tasks: readonly vscode.Task[],
+  workspaceFolder: vscode.WorkspaceFolder | undefined,
+): vscode.Task[] {
+  if (!workspaceFolder) {
+    return [...tasks];
+  }
+  const selectedPath = normalizeWorkspaceSelectorPath(workspaceFolder.uri.fsPath);
+  const allWorkspaceFolders = vscode.workspace.workspaceFolders ?? [];
+  return tasks.filter((task) => {
+    if (isWorkspaceFolderScope(task.scope)) {
+      return normalizeWorkspaceSelectorPath(task.scope.uri.fsPath) === selectedPath;
+    }
+    if (task.scope === vscode.TaskScope.Workspace && allWorkspaceFolders.length === 1) {
+      return normalizeWorkspaceSelectorPath(allWorkspaceFolders[0].uri.fsPath) === selectedPath;
+    }
+    return false;
+  });
+}
+
+function pickPreferredTaskByKind(tasks: readonly vscode.Task[], kind: TaskToolKind): vscode.Task {
+  const kindLabel = kind === 'build' ? 'Build' : 'Test';
+  const matches = tasks.filter((task) => getTaskGroupId(task.group) === kind);
+  if (matches.length === 0) {
+    throw new Error(`No ${kindLabel.toLowerCase()} task found. Configure a default ${kindLabel.toLowerCase()} task first.`);
+  }
+  const sorted = [...matches].sort((left, right) => {
+    const defaultDiff = Number(isTaskGroupDefault(right.group)) - Number(isTaskGroupDefault(left.group));
+    if (defaultDiff !== 0) {
+      return defaultDiff;
+    }
+    const nameDiff = left.name.localeCompare(right.name);
+    if (nameDiff !== 0) {
+      return nameDiff;
+    }
+    return left.source.localeCompare(right.source);
+  });
+  return sorted[0];
+}
+
+function getTaskScopeLabel(scope: vscode.TaskScope | vscode.WorkspaceFolder | undefined): string {
+  if (scope === undefined) {
+    return 'unknown';
+  }
+  if (scope === vscode.TaskScope.Global) {
+    return 'global';
+  }
+  if (scope === vscode.TaskScope.Workspace) {
+    return 'workspace';
+  }
+  if (isWorkspaceFolderScope(scope)) {
+    return `workspaceFolder:${scope.name}`;
+  }
+  return 'unknown';
+}
+
+function resolveTaskWorkspaceFolderPath(
+  scope: vscode.TaskScope | vscode.WorkspaceFolder | undefined,
+  fallback: vscode.WorkspaceFolder | undefined,
+): string | null {
+  if (scope === undefined) {
+    return fallback ? fallback.uri.fsPath : null;
+  }
+  if (isWorkspaceFolderScope(scope)) {
+    return scope.uri.fsPath;
+  }
+  if (fallback) {
+    return fallback.uri.fsPath;
+  }
+  return null;
+}
+
+function formatTaskRunSummary(payload: TaskRunPayload): string {
+  return [
+    `${capitalize(payload.kind)} task execution`,
+    `started: ${String(payload.started)}`,
+    `taskName: ${payload.taskName}`,
+    `source: ${payload.source}`,
+    `scope: ${payload.scope}`,
+    `workspaceFolder: ${payload.workspaceFolder ?? '-'}`,
+    payload.message,
+  ].join('\n');
+}
+
+function collectLaunchConfigEntries(workspaceFolder: vscode.WorkspaceFolder | undefined): LaunchConfigEntry[] {
+  const folders = workspaceFolder
+    ? [workspaceFolder]
+    : (vscode.workspace.workspaceFolders ?? []);
+  const entries: LaunchConfigEntry[] = [];
+  for (const folder of folders) {
+    const rawConfigs = vscode.workspace.getConfiguration('launch', folder.uri).get<unknown>('configurations');
+    if (!Array.isArray(rawConfigs)) {
+      continue;
+    }
+    for (const rawConfig of rawConfigs) {
+      if (!isPlainObject(rawConfig)) {
+        continue;
+      }
+      const name = typeof rawConfig.name === 'string' ? rawConfig.name : '';
+      const type = typeof rawConfig.type === 'string' ? rawConfig.type : '';
+      const request = typeof rawConfig.request === 'string' ? rawConfig.request : '';
+      if (!name || !type || !request) {
+        continue;
+      }
+      const summary: LaunchConfigSummary = {
+        index: -1,
+        name,
+        type,
+        request,
+        workspaceFolder: folder.uri.fsPath,
+      };
+      entries.push({
+        summary,
+        workspaceFolder: folder,
+        config: rawConfig as vscode.DebugConfiguration,
+      });
+    }
+  }
+  for (let index = 0; index < entries.length; index += 1) {
+    entries[index].summary.index = index;
+  }
+  return entries;
+}
+
+function selectLaunchConfig(
+  entries: readonly LaunchConfigEntry[],
+  index: number | undefined,
+  name: string | undefined,
+): LaunchConfigEntry {
+  if (index !== undefined) {
+    const byIndex = entries.find((entry) => entry.summary.index === index);
+    if (!byIndex) {
+      throw new Error(`Launch configuration index out of range: ${index}`);
+    }
+    return byIndex;
+  }
+  if (name !== undefined) {
+    const byName = entries.find((entry) => entry.summary.name === name);
+    if (!byName) {
+      throw new Error(`Launch configuration not found by name: ${name}`);
+    }
+    return byName;
+  }
+  return entries[0];
+}
+
+function formatDebugListLaunchConfigsSummary(payload: DebugListLaunchConfigsPayload): string {
+  const lines: string[] = [
+    'Launch configuration list',
+    `count: ${payload.count}`,
+  ];
+  if (payload.configs.length === 0) {
+    lines.push(payload.message);
+    return lines.join('\n');
+  }
+  for (const config of payload.configs) {
+    lines.push('---');
+    lines.push(`[${config.index}] ${config.name}`);
+    lines.push(`type: ${config.type} request: ${config.request}`);
+    lines.push(`workspaceFolder: ${config.workspaceFolder}`);
+  }
+  return lines.join('\n');
+}
+
+function formatDebugStartSummary(payload: DebugStartPayload): string {
+  return [
+    'Debug start result',
+    `started: ${String(payload.started)}`,
+    `noDebug: ${String(payload.noDebug)}`,
+    `selectedIndex: ${payload.selectedConfig.index}`,
+    `selectedName: ${payload.selectedConfig.name}`,
+    `selectedType: ${payload.selectedConfig.type}`,
+    `selectedRequest: ${payload.selectedConfig.request}`,
+    `workspaceFolder: ${payload.selectedConfig.workspaceFolder}`,
+    payload.message,
+  ].join('\n');
+}
+
+function capitalize(value: string): string {
+  if (value.length === 0) {
+    return value;
+  }
+  return `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
 function formatFindTextInFilesSummary(payload: Record<string, unknown>): string {
@@ -2549,6 +3067,10 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
     buildFindFilesToolDefinition(),
     buildFindTextInFilesToolDefinition(),
     buildGetDiagnosticsToolDefinition(),
+    buildTasksRunBuildToolDefinition(),
+    buildTasksRunTestToolDefinition(),
+    buildDebugListLaunchConfigsToolDefinition(),
+    buildDebugStartToolDefinition(),
     ...getClangdToolsSnapshot(),
   ];
 }

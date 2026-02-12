@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.82] - 2026-02-12
+
+### English
+
+#### Changed
+- Improved `workspaceFolder` path matching for task/debug tools to be platform-aware: Windows path comparison is case-insensitive, while POSIX comparison keeps case sensitivity.
+- Updated task selection for `lm_tasks_runBuild` and `lm_tasks_runTest` in multi-root workspaces: when `workspaceFolder` is provided, selection now prefers folder-scoped tasks and falls back to workspace-scoped tasks.
+- Expanded `lm_debug_listLaunchConfigs` and `lm_debug_start` launch config discovery to include both workspace-folder launch settings and workspace-level launch settings.
+- Tightened `lm_debug_start` name-based selection: when `name` matches multiple launch configs, the tool now returns an explicit ambiguity error and asks callers to disambiguate with `index` or `workspaceFolder`.
+- Debug tool summaries now include launch config scope (`workspaceFolder` or `workspace`) and workspace folder path when available.
+
+### 中文
+
+#### 变更
+- 改进 task/debug 工具的 `workspaceFolder` 路径匹配为平台感知: Windows 路径比较大小写不敏感,POSIX 路径比较保持大小写敏感.
+- 调整 `lm_tasks_runBuild` 与 `lm_tasks_runTest` 在 multi-root 下的选择策略: 当传入 `workspaceFolder` 时,优先选择该 folder 作用域 task,并回退到 workspace 作用域 task.
+- 扩展 `lm_debug_listLaunchConfigs` 与 `lm_debug_start` 的 launch 配置发现范围: 同时覆盖 workspace-folder launch 配置和 workspace 级 launch 配置.
+- 收紧 `lm_debug_start` 按 `name` 的选择行为: 当 `name` 命中多个 launch 配置时,返回明确歧义错误,并提示调用方使用 `index` 或 `workspaceFolder` 消歧.
+- debug 工具摘要新增配置作用域(`workspaceFolder` 或 `workspace`)和可用的 workspace folder 路径信息.
+
 ## [1.0.79] - 2026-02-12
 
 ### English

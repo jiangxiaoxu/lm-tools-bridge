@@ -84,8 +84,9 @@ User guidance:
 ### Tasks And Debug Tools
 - `lm_tasks_runBuild`: starts a build task via `vscode.tasks` without interactive pickers.
 - `lm_tasks_runTest`: starts a test task via `vscode.tasks` without interactive pickers.
-- `lm_debug_listLaunchConfigs`: lists launch configurations from `launch.configurations`.
-- `lm_debug_start`: starts debugging via `vscode.debug` with selection priority `index > name > first`.
+- `lm_tasks_runBuild` and `lm_tasks_runTest`: when `workspaceFolder` is set in multi-root workspaces, tool selection prefers tasks scoped to that folder and then falls back to workspace-scoped tasks.
+- `lm_debug_listLaunchConfigs`: lists launch configurations from both workspace-folder launch settings and workspace-level launch settings.
+- `lm_debug_start`: starts debugging via `vscode.debug` with selection priority `index > name > first`; if `name` matches multiple configs, the tool throws an ambiguity error and asks for `index` or `workspaceFolder`.
 - All four tools support optional `workspaceFolder` (workspace name or absolute folder path).
 - Default policy: these tools are exposed by default, but not enabled by default.
 
@@ -288,8 +289,9 @@ url = "http://127.0.0.1:47100/mcp"
 ### Tasks 与 Debug 工具
 - `lm_tasks_runBuild`: 通过 `vscode.tasks` 启动 build task,不使用交互式选择器.
 - `lm_tasks_runTest`: 通过 `vscode.tasks` 启动 test task,不使用交互式选择器.
-- `lm_debug_listLaunchConfigs`: 读取 `launch.configurations` 并返回可选配置列表.
-- `lm_debug_start`: 通过 `vscode.debug` 启动调试,选择优先级为 `index > name > first`.
+- `lm_tasks_runBuild` 与 `lm_tasks_runTest`: 在 multi-root 且设置 `workspaceFolder` 时,优先选择该 folder 作用域 task,其次回退到 workspace 作用域 task.
+- `lm_debug_listLaunchConfigs`: 同时读取 workspace-folder launch 配置与 workspace 级 launch 配置并返回可选列表.
+- `lm_debug_start`: 通过 `vscode.debug` 启动调试,选择优先级为 `index > name > first`; 若 `name` 命中多个配置会返回歧义错误,并提示使用 `index` 或 `workspaceFolder`.
 - 这 4 个工具都支持可选 `workspaceFolder`(workspace 名称或绝对路径).
 - 默认策略: 这些工具默认 exposed,但默认不 enabled.
 

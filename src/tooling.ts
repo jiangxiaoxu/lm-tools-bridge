@@ -297,7 +297,7 @@ const LM_TASKS_RUN_TEST_SCHEMA: Record<string, unknown> = {
 };
 
 const LM_DEBUG_LIST_LAUNCH_CONFIGS_DESCRIPTION = [
-  'List launch configurations from launch.json for the current workspace folders.',
+  'List launch configurations from workspace folders and workspace-level launch settings.',
   'Use this tool before lm_debug_start to choose a stable config index.',
   'This tool does not start debugging.',
 ].join('\n');
@@ -315,6 +315,7 @@ const LM_DEBUG_LIST_LAUNCH_CONFIGS_SCHEMA: Record<string, unknown> = {
 const LM_DEBUG_START_DESCRIPTION = [
   'Start debugging without interactive pickers using launch configurations from launch.json.',
   'Selection priority: index > name > first available configuration.',
+  'When name matches multiple configurations, this tool throws an ambiguity error.',
   'Optional noDebug starts without debugging.',
 ].join('\n');
 
@@ -388,7 +389,8 @@ interface LaunchConfigSummary {
   name: string;
   type: string;
   request: string;
-  workspaceFolder: string;
+  scope: 'workspaceFolder' | 'workspace';
+  workspaceFolder: string | null;
 }
 
 interface DebugListLaunchConfigsPayload {
@@ -406,7 +408,7 @@ interface DebugStartPayload {
 
 interface LaunchConfigEntry {
   summary: LaunchConfigSummary;
-  workspaceFolder: vscode.WorkspaceFolder;
+  workspaceFolder: vscode.WorkspaceFolder | undefined;
   config: vscode.DebugConfiguration;
 }
 
@@ -2053,7 +2055,7 @@ async function runTaskTool(
   const workspaceFolder = resolveWorkspaceFolderFromSelector(workspaceFolderSelector);
   const tasks = await vscode.tasks.fetchTasks();
   const scopedTasks = filterTasksByWorkspaceFolder(tasks, workspaceFolder);
-  const selectedTask = pickPreferredTaskByKind(scopedTasks, kind);
+  const selectedTask = pickPreferredTaskByKind(scopedTasks, kind, workspaceFolder);
   await vscode.tasks.executeTask(selectedTask);
   const payload: TaskRunPayload = {
     started: true,
@@ -2092,7 +2094,8 @@ async function runDebugStartTool(input: Record<string, unknown>): Promise<vscode
     throw new Error('No launch configurations found.');
   }
   const selected = selectLaunchConfig(configs, index, name);
-  const started = await vscode.debug.startDebugging(selected.workspaceFolder, selected.config, { noDebug });
+  const debugTarget = selected.summary.scope === 'workspace' ? undefined : selected.workspaceFolder;
+  const started = await vscode.debug.startDebugging(debugTarget, selected.config, { noDebug });
   if (!started) {
     throw new Error('VS Code rejected debug start request.');
   }
@@ -2145,7 +2148,8 @@ function parseOptionalNonNegativeInteger(value: unknown, key: string): number | 
 }
 
 function normalizeWorkspaceSelectorPath(value: string): string {
-  return path.resolve(value).replace(/\\/g, '/').toLowerCase();
+  const resolved = path.resolve(value).replace(/\\/g, '/');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function resolveWorkspaceFolderFromSelector(selector: string | undefined): vscode.WorkspaceFolder | undefined {
@@ -2210,25 +2214,43 @@ function filterTasksByWorkspaceFolder(
     return [...tasks];
   }
   const selectedPath = normalizeWorkspaceSelectorPath(workspaceFolder.uri.fsPath);
-  const allWorkspaceFolders = vscode.workspace.workspaceFolders ?? [];
   return tasks.filter((task) => {
-    if (isWorkspaceFolderScope(task.scope)) {
-      return normalizeWorkspaceSelectorPath(task.scope.uri.fsPath) === selectedPath;
-    }
-    if (task.scope === vscode.TaskScope.Workspace && allWorkspaceFolders.length === 1) {
-      return normalizeWorkspaceSelectorPath(allWorkspaceFolders[0].uri.fsPath) === selectedPath;
-    }
-    return false;
+    return getTaskWorkspaceMatchTier(task, selectedPath) !== undefined;
   });
 }
 
-function pickPreferredTaskByKind(tasks: readonly vscode.Task[], kind: TaskToolKind): vscode.Task {
+function getTaskWorkspaceMatchTier(task: vscode.Task, selectedWorkspacePath: string): number | undefined {
+  if (isWorkspaceFolderScope(task.scope)) {
+    return normalizeWorkspaceSelectorPath(task.scope.uri.fsPath) === selectedWorkspacePath ? 0 : undefined;
+  }
+  if (task.scope === vscode.TaskScope.Workspace) {
+    return 1;
+  }
+  return undefined;
+}
+
+function pickPreferredTaskByKind(
+  tasks: readonly vscode.Task[],
+  kind: TaskToolKind,
+  workspaceFolder: vscode.WorkspaceFolder | undefined,
+): vscode.Task {
   const kindLabel = kind === 'build' ? 'Build' : 'Test';
   const matches = tasks.filter((task) => getTaskGroupId(task.group) === kind);
   if (matches.length === 0) {
     throw new Error(`No ${kindLabel.toLowerCase()} task found. Configure a default ${kindLabel.toLowerCase()} task first.`);
   }
+  const selectedWorkspacePath = workspaceFolder
+    ? normalizeWorkspaceSelectorPath(workspaceFolder.uri.fsPath)
+    : undefined;
   const sorted = [...matches].sort((left, right) => {
+    if (selectedWorkspacePath) {
+      const leftTier = getTaskWorkspaceMatchTier(left, selectedWorkspacePath) ?? Number.MAX_SAFE_INTEGER;
+      const rightTier = getTaskWorkspaceMatchTier(right, selectedWorkspacePath) ?? Number.MAX_SAFE_INTEGER;
+      const tierDiff = leftTier - rightTier;
+      if (tierDiff !== 0) {
+        return tierDiff;
+      }
+    }
     const defaultDiff = Number(isTaskGroupDefault(right.group)) - Number(isTaskGroupDefault(left.group));
     if (defaultDiff !== 0) {
       return defaultDiff;
@@ -2292,38 +2314,63 @@ function collectLaunchConfigEntries(workspaceFolder: vscode.WorkspaceFolder | un
     : (vscode.workspace.workspaceFolders ?? []);
   const entries: LaunchConfigEntry[] = [];
   for (const folder of folders) {
-    const rawConfigs = vscode.workspace.getConfiguration('launch', folder.uri).get<unknown>('configurations');
-    if (!Array.isArray(rawConfigs)) {
-      continue;
+    const folderConfigs = getWorkspaceFolderLaunchConfigurations(folder);
+    for (const rawConfig of folderConfigs) {
+      const entry = toLaunchConfigEntry(rawConfig, 'workspaceFolder', folder);
+      if (entry) {
+        entries.push(entry);
+      }
     }
-    for (const rawConfig of rawConfigs) {
-      if (!isPlainObject(rawConfig)) {
-        continue;
-      }
-      const name = typeof rawConfig.name === 'string' ? rawConfig.name : '';
-      const type = typeof rawConfig.type === 'string' ? rawConfig.type : '';
-      const request = typeof rawConfig.request === 'string' ? rawConfig.request : '';
-      if (!name || !type || !request) {
-        continue;
-      }
-      const summary: LaunchConfigSummary = {
-        index: -1,
-        name,
-        type,
-        request,
-        workspaceFolder: folder.uri.fsPath,
-      };
-      entries.push({
-        summary,
-        workspaceFolder: folder,
-        config: rawConfig as vscode.DebugConfiguration,
-      });
+  }
+  const workspaceConfigs = getWorkspaceLaunchConfigurations();
+  for (const rawConfig of workspaceConfigs) {
+    const entry = toLaunchConfigEntry(rawConfig, 'workspace', undefined);
+    if (entry) {
+      entries.push(entry);
     }
   }
   for (let index = 0; index < entries.length; index += 1) {
     entries[index].summary.index = index;
   }
   return entries;
+}
+
+function getWorkspaceFolderLaunchConfigurations(folder: vscode.WorkspaceFolder): readonly unknown[] {
+  const inspected = vscode.workspace.getConfiguration('launch', folder.uri).inspect<unknown>('configurations');
+  return Array.isArray(inspected?.workspaceFolderValue) ? inspected.workspaceFolderValue : [];
+}
+
+function getWorkspaceLaunchConfigurations(): readonly unknown[] {
+  const inspected = vscode.workspace.getConfiguration('launch').inspect<unknown>('configurations');
+  return Array.isArray(inspected?.workspaceValue) ? inspected.workspaceValue : [];
+}
+
+function toLaunchConfigEntry(
+  rawConfig: unknown,
+  scope: LaunchConfigSummary['scope'],
+  workspaceFolder: vscode.WorkspaceFolder | undefined,
+): LaunchConfigEntry | undefined {
+  if (!isPlainObject(rawConfig)) {
+    return undefined;
+  }
+  const name = typeof rawConfig.name === 'string' ? rawConfig.name : '';
+  const type = typeof rawConfig.type === 'string' ? rawConfig.type : '';
+  const request = typeof rawConfig.request === 'string' ? rawConfig.request : '';
+  if (!name || !type || !request) {
+    return undefined;
+  }
+  return {
+    summary: {
+      index: -1,
+      name,
+      type,
+      request,
+      scope,
+      workspaceFolder: workspaceFolder ? workspaceFolder.uri.fsPath : null,
+    },
+    workspaceFolder,
+    config: rawConfig as vscode.DebugConfiguration,
+  };
 }
 
 function selectLaunchConfig(
@@ -2339,13 +2386,25 @@ function selectLaunchConfig(
     return byIndex;
   }
   if (name !== undefined) {
-    const byName = entries.find((entry) => entry.summary.name === name);
-    if (!byName) {
+    const byName = entries.filter((entry) => entry.summary.name === name);
+    if (byName.length === 0) {
       throw new Error(`Launch configuration not found by name: ${name}`);
     }
-    return byName;
+    if (byName.length > 1) {
+      throw new Error(buildLaunchConfigNameAmbiguousError(name, byName.map((entry) => entry.summary)));
+    }
+    return byName[0];
   }
   return entries[0];
+}
+
+function buildLaunchConfigNameAmbiguousError(name: string, matches: readonly LaunchConfigSummary[]): string {
+  const details = matches
+    .map((summary) => {
+      return `[${summary.index}] scope=${summary.scope} workspaceFolder=${summary.workspaceFolder ?? '-'} type=${summary.type} request=${summary.request}`;
+    })
+    .join('; ');
+  return `Launch configuration name is ambiguous: ${name}. Matches: ${details}. Use index or workspaceFolder to disambiguate.`;
 }
 
 function formatDebugListLaunchConfigsSummary(payload: DebugListLaunchConfigsPayload): string {
@@ -2361,7 +2420,8 @@ function formatDebugListLaunchConfigsSummary(payload: DebugListLaunchConfigsPayl
     lines.push('---');
     lines.push(`[${config.index}] ${config.name}`);
     lines.push(`type: ${config.type} request: ${config.request}`);
-    lines.push(`workspaceFolder: ${config.workspaceFolder}`);
+    lines.push(`scope: ${config.scope}`);
+    lines.push(`workspaceFolder: ${config.workspaceFolder ?? '-'}`);
   }
   return lines.join('\n');
 }
@@ -2375,7 +2435,8 @@ function formatDebugStartSummary(payload: DebugStartPayload): string {
     `selectedName: ${payload.selectedConfig.name}`,
     `selectedType: ${payload.selectedConfig.type}`,
     `selectedRequest: ${payload.selectedConfig.request}`,
-    `workspaceFolder: ${payload.selectedConfig.workspaceFolder}`,
+    `selectedScope: ${payload.selectedConfig.scope}`,
+    `workspaceFolder: ${payload.selectedConfig.workspaceFolder ?? '-'}`,
     payload.message,
   ].join('\n');
 }

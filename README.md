@@ -76,8 +76,13 @@ User guidance:
 
 ### Diagnostics Tool
 - `lm_getDiagnostics` reads diagnostics from VS Code Problems data source (`vscode.languages.getDiagnostics`).
-- Inputs: optional `filePath`, optional `severities` (`error|warning|information|hint`), optional `maxResults` (default `500`).
-- Default severities are `error` and `warning`.
+- Inputs: optional `filePaths` (`string[]`), optional `severities` (`error|warning|information|hint`), optional `maxResults` (default `100`).
+- `filePaths` supports `WorkspaceName/...` and absolute paths. Empty `filePaths` means no file filter.
+- Duplicate `filePaths` entries are deduplicated after trim.
+- Legacy `filePath` is ignored when provided.
+- `severities` values are matched case-insensitively and deduplicated after normalization. Invalid values return an input error. Default is `error` and `warning` when omitted.
+- `maxResults` is strict: it must be an integer >= `1`; invalid values return an input error.
+- Unknown input fields are ignored.
 - Structured diagnostics no longer include `uri`; each diagnostic includes `preview`, `previewUnavailable`, and `previewTruncated`.
 - `preview` returns source code lines from `startLine` to `endLine`, capped at 10 lines.
 - `copilot_getErrors` is still available for compatibility, but `lm_getDiagnostics` provides stable structured output.
@@ -124,7 +129,7 @@ User guidance:
   - Ensure the tool is both exposed and enabled.
 
 ### Tool Output Mapping
-- Built-in custom tools (`lm_find*`, `lm_getDiagnostics`, `lm_clangd_*`) always return both `content.text` and `structuredContent`.
+- Built-in custom tools (`lm_find*`, `lm_getDiagnostics`) always return both `content.text` and `structuredContent`.
 - For forwarded LM tools (`lm.invokeTool`), output is passthrough-based:
 - `content.text` is emitted only when upstream returns `LanguageModelTextPart`.
 - `structuredContent` is emitted only when upstream returns a valid JSON object (`LanguageModelDataPart` with JSON mime, or tool-level `structuredContent` object).
@@ -134,29 +139,7 @@ User guidance:
 Clangd MCP tools are deprecated and hard-disabled in this extension build.
 - No `lmToolsBridge.clangd.*` enablement settings are exposed.
 - `lm_clangd_*` tools are not registered and cannot be enabled from tool settings.
-
-Notes:
-- AI-first tools now use `filePath` input instead of `uri`.
-- `filePath` supports:
-- workspace-prefixed path, for example `UE5/Engine/Source/...`
-- absolute path, for example `G:/UE_Folder/...` or `G:\\UE_Folder\\...`
-- `file:///...` URI input is rejected.
-- AI-first outputs use summary text blocks:
-- first line `counts ...`
-- second line `---`
-- then repeated `<path>#<lineOrRange>` + summary line entries with `---` separators
-- AI-first clangd tools also return `structuredContent` with machine-stable fields:
-- location fields use `absolutePath` (always) + `workspacePath` (nullable)
-- line/character fields remain numeric 1-based fields, not `path#...` strings
-- structured outputs avoid echoing raw input arguments
-- `lm_clangd_symbolSearch` now includes full symbol signature by default in both text summary and `structuredContent`.
-- `lm_clangd_symbolInfo` snippet source excludes generated files (`*.generated.h`, `*.gen.cpp`) by default.
-- `lm_clangd_symbolInfo` now uses adaptive symbol-category output and includes `typeDefinition` for value-like symbols when meaningful.
-- `lm_clangd_typeHierarchy` `SOURCE` section now emits `type -> preview -> path` to improve AI readability.
-- `lm_clangd_typeHierarchy` `structuredContent.sourceByClass` includes `absolutePath/workspacePath/startLine/endLine/preview`.
-- summary path format is `WorkspaceName/...#line` for workspace files, absolute path for external files.
-- Previously exposed clangd AI tools are now disabled (`lm_clangd_status`, `lm_clangd_switchSourceHeader`, `lm_clangd_typeHierarchy`, `lm_clangd_symbolSearch`, `lm_clangd_symbolBundle`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, `lm_clangd_callHierarchy`, `lm_clangd_lspRequest`).
-- `clangd.enable` is clangd extension setting, not an `lmToolsBridge.*` setting.
+- Historical clangd tool behavior is intentionally omitted because clangd MCP tools are unavailable in this build.
 
 ### Key Settings
 - `lmToolsBridge.server.autoStart`
@@ -271,8 +254,13 @@ url = "http://127.0.0.1:47100/mcp"
 
 ### 诊断工具
 - `lm_getDiagnostics` 从 VS Code Problems 数据源(`vscode.languages.getDiagnostics`)读取诊断.
-- 输入: 可选 `filePath`,可选 `severities`(`error|warning|information|hint`),可选 `maxResults`(默认 `500`).
-- 默认 severity 为 `error` 和 `warning`.
+- 输入: 可选 `filePaths`(`string[]`),可选 `severities`(`error|warning|information|hint`),可选 `maxResults`(默认 `100`).
+- `filePaths` 支持 `WorkspaceName/...` 和绝对路径. 空数组 `filePaths` 等价于不设置文件过滤.
+- `filePaths` 在 trim 后会去重重复项.
+- 旧字段 `filePath` 传入时会被忽略.
+- `severities` 大小写不敏感,归一化后会自动去重; 非法值会返回输入错误. 未传时默认 `error` 和 `warning`.
+- `maxResults` 使用严格校验: 必须为 >= `1` 的整数; 非法值会返回输入错误.
+- 未定义输入字段会被忽略.
 - structured diagnostics 不再包含 `uri`; 每条诊断包含 `preview`,`previewUnavailable`,`previewTruncated`.
 - `preview` 返回 `startLine` 到 `endLine` 的源码预览,最多 10 行.
 - `copilot_getErrors` 仍保留兼容,但 `lm_getDiagnostics` 提供更稳定的 structured 输出.
@@ -319,7 +307,7 @@ url = "http://127.0.0.1:47100/mcp"
   - 确认该工具同时处于 exposed 和 enabled.
 
 ### 工具输出映射
-- 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)固定同时返回 `content.text` 和 `structuredContent`.
+- 内置自定义工具(`lm_find*`,`lm_getDiagnostics`)固定同时返回 `content.text` 和 `structuredContent`.
 - 对上游转发 LM tools(`lm.invokeTool`),输出按存在性透传:
 - 仅当上游返回 `LanguageModelTextPart` 时输出 `content.text`.
 - 仅当上游返回合法 JSON object(来自 JSON mime 的 `LanguageModelDataPart` 或 tool-level `structuredContent` object)时输出 `structuredContent`.
@@ -329,29 +317,7 @@ url = "http://127.0.0.1:47100/mcp"
 当前版本中 clangd MCP tools 已弃用并被硬禁用.
 - 不再暴露 `lmToolsBridge.clangd.*` 启用类设置项.
 - `lm_clangd_*` 工具不会注册,也无法通过工具设置开启.
-
-说明:
-- AI-first 工具已使用 `filePath` 输入替代 `uri`.
-- `filePath` 支持:
-- workspace 前缀路径,例如 `UE5/Engine/Source/...`
-- 绝对路径,例如 `G:/UE_Folder/...` 或 `G:\\UE_Folder\\...`
-- `file:///...` URI 输入会被拒绝.
-- AI-first 输出使用摘要文本块:
-- 第一行 `counts ...`
-- 第二行 `---`
-- 后续按 `<path>#<lineOrRange>` + summary 行输出,条目之间以 `---` 分隔
-- clangd AI-first 工具也返回 `structuredContent` 机读字段:
-- 路径字段为 `absolutePath`(始终存在) + `workspacePath`(可空)
-- 行列字段保持 1-based 数值字段,不使用 `path#...` 字符串
-- structured 输出避免回显原始输入参数
-- `lm_clangd_symbolSearch` 现在默认在 text summary 与 `structuredContent` 中包含完整 symbol signature.
-- `lm_clangd_symbolInfo` 默认排除 generated 文件(`*.generated.h`, `*.gen.cpp`)的 snippet 来源.
-- `lm_clangd_symbolInfo` 现在使用自适应 symbol-category 输出,并在 value-like symbols 上按需包含 `typeDefinition`.
-- `lm_clangd_typeHierarchy` 的 `SOURCE` 区块现在按 `type -> preview -> path` 输出,更利于 AI 阅读.
-- `lm_clangd_typeHierarchy` 的 `structuredContent.sourceByClass` 包含 `absolutePath/workspacePath/startLine/endLine/preview`.
-- summary path 格式为: workspace 内文件使用 `WorkspaceName/...#line`,workspace 外文件使用绝对路径.
-- 历史 clangd AI tools 现均禁用(`lm_clangd_status`,`lm_clangd_switchSourceHeader`,`lm_clangd_typeHierarchy`,`lm_clangd_symbolSearch`,`lm_clangd_symbolBundle`,`lm_clangd_symbolInfo`,`lm_clangd_symbolReferences`,`lm_clangd_symbolImplementations`,`lm_clangd_callHierarchy`,`lm_clangd_lspRequest`).
-- `clangd.enable` 属于 clangd 扩展设置,不是 `lmToolsBridge.*` 设置.
+- 由于 clangd MCP tools 在当前构建不可用,README 不再描述历史 clangd 工具行为细节.
 
 ### 关键设置
 - `lmToolsBridge.server.autoStart`

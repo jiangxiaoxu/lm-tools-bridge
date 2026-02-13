@@ -106,7 +106,7 @@ Task: 诊断结构化输出
 Entry: lm_getDiagnostics
 Path: runGetDiagnosticsTool -> vscode.languages.getDiagnostics -> normalize/filter/preview/cap
 Files: src/tooling.ts, src/clangd/workspacePath.ts
-Log: "filePath must be a string when provided.", "Tool not found or disabled"
+Log: "maxResults must be an integer when provided.", "Tool not found or disabled"
 
 Task: clangd 工具未暴露
 Entry: lm_clangd_* tools
@@ -194,8 +194,12 @@ Invariant: 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)�
 Invariant: 转发 LM tool 结果时,content.text 优先来自 LanguageModelTextPart; 若缺失则按序回退到序列化文本与 structuredContent 的 JSON 文本,确保 content.text 始终存在.
 Invariant: 未启用或被禁用的工具返回 MethodNotFound.
 Invariant: `lm_getDiagnostics` 仅使用 VS Code diagnostics 数据源(`vscode.languages.getDiagnostics`),不依赖 `copilot_getErrors`.
-Invariant: `lm_getDiagnostics` 默认 severity 过滤为 `error` + `warning`,并支持通过 `severities` 覆盖.
-Invariant: `lm_getDiagnostics` 支持 `{}` 全局查询和 `{ filePath }` 单文件查询,全局模式包含 workspace 外诊断.
+Invariant: `lm_getDiagnostics` 默认 severity 过滤为 `error` + `warning`; `severities` 支持大小写不敏感匹配,归一化后自动去重,非法值直接报错.
+Invariant: `lm_getDiagnostics` 支持 `{}` 全局查询和 `{ filePaths }` 文件过滤查询(`WorkspaceName/...` 或绝对路径),全局模式包含 workspace 外诊断.
+Invariant: `lm_getDiagnostics` 的 `scope` 支持 `workspace+external` / `single-file` / `multi-file`.
+Invariant: `lm_getDiagnostics` 旧字段 `filePath` 会被忽略.
+Invariant: `lm_getDiagnostics` 未定义输入字段会被忽略.
+Invariant: `lm_getDiagnostics` 的 `maxResults` 若提供必须为 >=1 的整数; 非法值直接报错.
 Invariant: `lm_getDiagnostics` 输出坐标统一为 1-based,并将 `code` 规范为 string|null,`tags` 规范为 string[]; files[] 不包含 `uri`.
 Invariant: `lm_getDiagnostics` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
 Invariant: `lm_getDiagnostics` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
@@ -229,9 +233,17 @@ Case: tool input 非 object
 Result: error payload + inputSchema
 Code: invokeExposedTool
 
-Case: lm_getDiagnostics filePath 非法
+Case: lm_getDiagnostics filePaths 非法
 Result: error payload(由 invokeExposedTool 统一包装)
-Code: runGetDiagnosticsTool -> resolveInputFilePath
+Code: runGetDiagnosticsTool -> parseLmGetDiagnosticsFilePaths
+
+Case: lm_getDiagnostics severities 非法
+Result: error payload(由 invokeExposedTool 统一包装)
+Code: runGetDiagnosticsTool -> parseLmGetDiagnosticsSeverities
+
+Case: lm_getDiagnostics maxResults 非法
+Result: error payload(由 invokeExposedTool 统一包装)
+Code: runGetDiagnosticsTool -> parseLmGetDiagnosticsMaxResults
 
 Case: lm_getDiagnostics 结果超出 maxResults
 Result: structuredContent.capped=true

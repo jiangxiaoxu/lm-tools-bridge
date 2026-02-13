@@ -44,7 +44,7 @@ const LM_TASKS_RUN_BUILD_TOOL_NAME = 'lm_tasks_runBuild';
 const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
 const LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME = 'lm_debug_listLaunchConfigs';
 const LM_DEBUG_START_TOOL_NAME = 'lm_debug_start';
-const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 500;
+const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 100;
 const LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS = 1;
 const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
 const LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
@@ -237,31 +237,33 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   required: ['query', 'isRegexp'],
 };
 
-const LM_GET_DIAGNOSTICS_DESCRIPTION = [
-  'Read diagnostics from VS Code Problems data source using vscode.languages.getDiagnostics.',
-  'Use this tool for stable machine-readable diagnostics instead of prompt-tsx output.',
-  'By default it returns only error and warning diagnostics.',
-  'Optional filePath filters diagnostics to a single file. Supports WorkspaceName/... and absolute paths.',
-].join('\n');
+const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for specific files or across all files. Use this tool to inspect the same Problems diagnostics the user sees, analyze all current issues when no file is specified, and validate changes after edits. The optional filePaths parameter filters diagnostics to specific files and supports WorkspaceName/... and absolute paths.';
 
 const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    filePath: {
-      type: 'string',
-      description: 'Optional file path filter. Supports WorkspaceName/... and absolute paths.',
+    filePaths: {
+      type: 'array',
+      uniqueItems: true,
+      items: {
+        type: 'string',
+        minLength: 1,
+        pattern: '\\S',
+      },
+      description: 'Optional file path filters. Supports WorkspaceName/... and absolute paths. Empty array means no file filter.',
     },
     severities: {
       type: 'array',
+      uniqueItems: true,
       items: {
         type: 'string',
-        enum: [...LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES],
       },
-      description: 'Optional severity filter. Allowed values: error, warning, information, hint. Defaults to error+warning.',
+      default: [...LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES],
+      description: 'Optional severity filter array. Allowed values: error, warning, information, hint. If omitted, defaults to error+warning.',
     },
     maxResults: {
-      type: 'number',
-      description: 'Maximum diagnostics to return across all files. Defaults to 500, minimum is 1.',
+      type: 'integer',
+      description: 'Maximum diagnostics to return across all files. Must be an integer >= 1. Defaults to 100 when omitted.',
       default: LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS,
       minimum: LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS,
     },
@@ -369,7 +371,7 @@ interface LmGetDiagnosticsFileResult {
 
 interface LmGetDiagnosticsPayload {
   source: 'vscode.languages.getDiagnostics';
-  scope: 'workspace+external' | 'single-file';
+  scope: 'workspace+external' | 'single-file' | 'multi-file';
   severities: LmGetDiagnosticsSeverity[];
   capped: boolean;
   totalDiagnostics: number;
@@ -1883,22 +1885,21 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
     throw new Error('vscode.languages.getDiagnostics is not available in this VS Code version.');
   }
 
-  const filePathValue = input.filePath;
-  if (filePathValue !== undefined && typeof filePathValue !== 'string') {
-    throw new Error('filePath must be a string when provided.');
-  }
-  const requestedFilePath = typeof filePathValue === 'string' ? filePathValue.trim() : undefined;
-  if (requestedFilePath !== undefined && requestedFilePath.length === 0) {
-    throw new Error('filePath must be a non-empty string when provided.');
-  }
+  const requestedFilePaths = parseLmGetDiagnosticsFilePaths(input.filePaths);
 
   const severities = parseLmGetDiagnosticsSeverities(input.severities);
   const severitySet = new Set<LmGetDiagnosticsSeverity>(severities);
   const maxResults = parseLmGetDiagnosticsMaxResults(input.maxResults);
-  const diagnosticsByUri: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> = requestedFilePath
-    ? getDiagnosticsForSingleFile(getDiagnostics, requestedFilePath)
+  const diagnosticsByUri: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> =
+    requestedFilePaths && requestedFilePaths.length > 0
+    ? getDiagnosticsForFilePaths(getDiagnostics, requestedFilePaths)
     : getDiagnostics();
-  const scope: LmGetDiagnosticsPayload['scope'] = requestedFilePath ? 'single-file' : 'workspace+external';
+  const scope: LmGetDiagnosticsPayload['scope'] =
+    !requestedFilePaths || requestedFilePaths.length === 0
+      ? 'workspace+external'
+      : requestedFilePaths.length === 1
+        ? 'single-file'
+        : 'multi-file';
 
   const files = await collectLmGetDiagnosticsFiles(diagnosticsByUri, severitySet);
   const totalDiagnostics = files.reduce((count, file) => count + file.diagnostics.length, 0);
@@ -2373,13 +2374,23 @@ function formatFindFilesSummary(payload: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
-function getDiagnosticsForSingleFile(
+function getDiagnosticsForFilePaths(
   getDiagnostics: typeof vscode.languages.getDiagnostics,
-  filePath: string,
+  filePaths: readonly string[],
 ): ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> {
-  const resolved = resolveInputFilePath(filePath);
-  const uri = vscode.Uri.file(resolved.absoluteFilePath);
-  return [[uri, getDiagnostics(uri)]];
+  const entries: Array<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> = [];
+  const seenUris = new Set<string>();
+  for (const filePath of filePaths) {
+    const resolved = resolveInputFilePath(filePath);
+    const uri = vscode.Uri.file(resolved.absoluteFilePath);
+    const key = uri.toString();
+    if (seenUris.has(key)) {
+      continue;
+    }
+    seenUris.add(key);
+    entries.push([uri, getDiagnostics(uri)]);
+  }
+  return entries;
 }
 
 async function collectLmGetDiagnosticsFiles(
@@ -2642,18 +2653,24 @@ function compareLmGetDiagnostics(
 }
 
 function parseLmGetDiagnosticsSeverities(input: unknown): LmGetDiagnosticsSeverity[] {
-  if (!Array.isArray(input)) {
+  if (input === undefined) {
     return [...LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES];
+  }
+  if (!Array.isArray(input)) {
+    throw new Error('severities must be an array when provided.');
   }
   const values: LmGetDiagnosticsSeverity[] = [];
   const seen = new Set<LmGetDiagnosticsSeverity>();
-  for (const item of input) {
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
     if (typeof item !== 'string') {
-      continue;
+      throw new Error(`severities[${index}] must be a string.`);
     }
     const normalized = item.trim().toLowerCase();
     if (!isLmGetDiagnosticsSeverity(normalized)) {
-      continue;
+      throw new Error(
+        `severities[${index}] must be one of: ${LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES.join(', ')}.`,
+      );
     }
     if (seen.has(normalized)) {
       continue;
@@ -2667,19 +2684,51 @@ function parseLmGetDiagnosticsSeverities(input: unknown): LmGetDiagnosticsSeveri
   return values;
 }
 
+function parseLmGetDiagnosticsFilePaths(input: unknown): string[] | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(input)) {
+    throw new Error('filePaths must be an array of strings when provided.');
+  }
+  const values: string[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (typeof item !== 'string') {
+      throw new Error(`filePaths[${index}] must be a string.`);
+    }
+    const normalized = item.trim();
+    if (normalized.length === 0) {
+      throw new Error(`filePaths[${index}] must be a non-empty string.`);
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    values.push(normalized);
+  }
+  return values;
+}
+
 function isLmGetDiagnosticsSeverity(value: string): value is LmGetDiagnosticsSeverity {
   return (LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES as readonly string[]).includes(value);
 }
 
 function parseLmGetDiagnosticsMaxResults(value: unknown): number {
+  if (value === undefined) {
+    return LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS;
+  }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS;
+    throw new Error('maxResults must be a finite number when provided.');
   }
-  const rounded = Math.floor(value);
-  if (rounded < LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS) {
-    return LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS;
+  if (!Number.isInteger(value)) {
+    throw new Error('maxResults must be an integer when provided.');
   }
-  return rounded;
+  if (value < LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS) {
+    throw new Error(`maxResults must be >= ${LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS}.`);
+  }
+  return value;
 }
 
 function applyLmGetDiagnosticsLimit(

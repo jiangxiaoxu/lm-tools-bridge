@@ -6,6 +6,28 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.85] - 2026-02-13
+
+### English
+
+#### Changed
+- Breaking change: `lm_getDiagnostics` input migrated from `filePath` to `filePaths` (`string[]`); legacy `filePath` is now ignored.
+- `lm_getDiagnostics` now supports multi-file filtering with `filePaths` and keeps path parsing behavior aligned with workspace-aware resolution (`WorkspaceName/...` and absolute paths).
+- `lm_getDiagnostics` structured payload `scope` now includes `multi-file` in addition to `workspace+external` and `single-file`.
+- Updated `lm_getDiagnostics` default `maxResults` from `500` to `100`.
+- Updated `lm_getDiagnostics` input behavior: unknown fields are ignored, `severities` now matches case-insensitively with normalization dedupe, and `maxResults` remains strict (`integer >= 1`).
+- Updated documentation (`README.md`, `face-ai-report.md`) to match the new diagnostics input contract and failure cases.
+
+### 中文
+
+#### 变更
+- Breaking change: `lm_getDiagnostics` 输入由 `filePath` 迁移为 `filePaths`(`string[]`); 旧字段 `filePath` 现在会被忽略.
+- `lm_getDiagnostics` 新增 `filePaths` 多文件过滤能力,并保持工作区感知路径解析行为(`WorkspaceName/...` 和绝对路径).
+- `lm_getDiagnostics` 结构化输出 `scope` 新增 `multi-file`,并继续保留 `workspace+external` 与 `single-file`.
+- 将 `lm_getDiagnostics` 默认 `maxResults` 从 `500` 调整为 `100`.
+- 调整 `lm_getDiagnostics` 输入行为: 未定义字段改为忽略,`severities` 改为大小写不敏感并在归一化后去重,`maxResults` 继续保持严格校验(必须为 >= 1 的整数).
+- 同步更新文档(`README.md`,`face-ai-report.md`),对齐新的诊断工具输入约定与失败路径.
+
 ## [1.0.83] - 2026-02-12
 
 ### English

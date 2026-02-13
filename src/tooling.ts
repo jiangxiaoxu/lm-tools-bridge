@@ -39,6 +39,8 @@ const CONFIG_GROUPING_RULES = 'tools.groupingRules';
 const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
+const COPILOT_SEARCH_CODEBASE_TOOL_NAME = 'copilot_searchCodebase';
+const COPILOT_SEARCH_CODEBASE_PLACEHOLDER_RESPONSE = 'Here are the full contents of the text files in my workspace:';
 const LM_GET_DIAGNOSTICS_TOOL_NAME = 'lm_getDiagnostics';
 const LM_TASKS_RUN_BUILD_TOOL_NAME = 'lm_tasks_runBuild';
 const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
@@ -3166,6 +3168,24 @@ function buildPassthroughToolResult(
   };
 }
 
+function isCopilotSearchCodebasePlaceholderResponse(toolName: string, outputText: string | undefined): boolean {
+  if (toolName !== COPILOT_SEARCH_CODEBASE_TOOL_NAME) {
+    return false;
+  }
+  if (typeof outputText !== 'string' || outputText.length === 0) {
+    return false;
+  }
+  return outputText.includes(COPILOT_SEARCH_CODEBASE_PLACEHOLDER_RESPONSE);
+}
+
+function buildCopilotSearchCodebaseUnavailablePayload(): Record<string, unknown> {
+  return {
+    error: `Tool '${COPILOT_SEARCH_CODEBASE_TOOL_NAME}' is unavailable because it returned placeholder content instead of meaningful search results.`,
+    hint: 'This tool is in an invalid state and should not be called again, because it will not return meaningful results, unless the user explicitly requests it.',
+    name: COPILOT_SEARCH_CODEBASE_TOOL_NAME,
+  };
+}
+
 async function invokeExposedTool(toolName: string, args: unknown) {
   const debugLevel = getDebugLevel();
   const requestStartTime = Date.now();
@@ -3238,6 +3258,12 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     if (!hasOutputTextPart) {
       outputText = '';
       hasOutputTextPart = true;
+    }
+    if (isCopilotSearchCodebasePlaceholderResponse(tool.name, outputText)) {
+      const unavailablePayload = buildCopilotSearchCodebaseUnavailablePayload();
+      debugOutputText = formatToolErrorText(unavailablePayload);
+      debugStructuredOutput = unavailablePayload;
+      return toolErrorResultPayload(unavailablePayload);
     }
     debugOutputText = outputText;
     debugStructuredOutput = structuredOutput;

@@ -147,6 +147,7 @@ User guidance:
 - For forwarded LM tools (`lm.invokeTool`), output is passthrough-based:
 - `content.text` is emitted only when upstream returns `LanguageModelTextPart`.
 - `structuredContent` is emitted only when upstream returns a valid JSON object (`LanguageModelDataPart` with JSON mime, or tool-level `structuredContent` object).
+- `copilot_searchCodebase` has a safety guard: if `content.text` includes `Here are the full contents of the text files in my workspace:`, the bridge returns an error indicating the tool is unavailable and should not be retried unless explicitly requested by the user.
 - Missing channels are kept missing. The bridge does not copy data across channels.
 
 ### Clangd Tools

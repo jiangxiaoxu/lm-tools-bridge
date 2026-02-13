@@ -160,7 +160,7 @@ Clangd MCP tools are deprecated and hard-disabled in this extension build.
 - `lmToolsBridge.server.autoStart`
 - `lmToolsBridge.server.port`
 - `lmToolsBridge.manager.httpPort`
-- `lmToolsBridge.useWorkspaceSettings` is workspace-only. If it is written in User settings, the extension removes it automatically and shows a warning.
+- `lmToolsBridge.useWorkspaceSettings` is workspace-only. If it is written in User settings, the extension removes it automatically and shows a warning. In `.code-workspace` mode, lmToolsBridge settings are read from and written to the workspace file.
 - `lmToolsBridge.tools.exposedDelta`
 - `lmToolsBridge.tools.unexposedDelta`
 - `lmToolsBridge.tools.enabledDelta`
@@ -352,7 +352,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `lmToolsBridge.server.autoStart`
 - `lmToolsBridge.server.port`
 - `lmToolsBridge.manager.httpPort`
-- `lmToolsBridge.useWorkspaceSettings` 仅支持 workspace 级. 若写入 User settings,扩展会自动移除并给出 warning.
+- `lmToolsBridge.useWorkspaceSettings` 仅支持 workspace 级. 若写入 User settings,扩展会自动移除并给出 warning. 在 `.code-workspace` 模式下,会直接从 workspace 文件读取并写入 lmToolsBridge 配置.
 - `lmToolsBridge.tools.exposedDelta`
 - `lmToolsBridge.tools.unexposedDelta`
 - `lmToolsBridge.tools.enabledDelta`

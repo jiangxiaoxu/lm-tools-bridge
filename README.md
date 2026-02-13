@@ -19,7 +19,8 @@ This README covers the current Manager-based version only.
 - Manager status endpoint (diagnostics): `http://127.0.0.1:47100/mcp/status`
 - Workspace MCP endpoint (dynamic target): `http://127.0.0.1:<runtime-port>/mcp`
 - Status format negotiation:
-- Browser requests (`Accept: text/html`) return a human-readable status page with `Refresh` and `Auto refresh (2s)` controls.
+- Browser requests (`Accept: text/html`) return a human-readable status page with `Refresh` and `Auto refresh (2s)` controls; auto refresh is enabled by default.
+- The status page uses responsive layout (`<960px` card-style rows) and supports per-cell `Expand/Collapse` for long values.
 - Programmatic requests default to JSON; use `?format=json` to force JSON and `?format=html` to force HTML.
 
 ### Manager vs Workspace MCP Server
@@ -35,7 +36,10 @@ This README covers the current Manager-based version only.
 4. Read `callTool`, `bridgedTools`, and `resourceTemplates` from handshake `discovery`.
 5. Compose tool/schema URIs with templates and tool `name` (`lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
 6. Use `lmToolsBridge.callTool` or standard `tools/call`.
-7. If session header is lost/expired, call `lmToolsBridge.requestWorkspaceMCPServer` again; manager can auto-recover a new session for handshake calls and returns a fresh `Mcp-Session-Id` header.
+7. If client declares `capabilities.roots`, manager requests `roots/list` from client after `notifications/initialized` and `notifications/roots/list_changed`.
+8. Roots sync events are logged to `/mcp/log` and summarized in `/mcp/status` (`rootsPolicy`, `aliasPolicy`, `aliasCount`, `aliasDetails`, session roots fields, auto-derived `sessionDetails[].clientCapabilityFlags`/`sessionDetails[].clientCapabilityObjectKeys`, and full `sessionDetails[].clientCapabilities` snapshot from `initialize`).
+9. If session header is lost/expired, call `lmToolsBridge.requestWorkspaceMCPServer` again; manager auto-recovers and returns a fresh `Mcp-Session-Id` header.
+10. Handshake result payload also includes `mcpSessionId` for diagnostics/observability. The response header remains the source of truth.
 
 ### Handshake Discovery Payload
 - A successful handshake includes `discovery` with:
@@ -100,7 +104,13 @@ User guidance:
 - `workspace not set`:
   - Run `lmToolsBridge.requestWorkspaceMCPServer` with `cwd` first.
 - stale or missing `Mcp-Session-Id`:
-  - `lmToolsBridge.requestWorkspaceMCPServer` can auto-recover by issuing a new session header; if the client still caches old headers, re-initialize once.
+  - `lmToolsBridge.requestWorkspaceMCPServer` can auto-recover by issuing a new session header.
+  - Manager also keeps a temporary alias from stale session id to recovered active session, so follow-up `resources/read` and `tools/call` can continue while client headers refresh.
+  - `/mcp/status` exposes alias observability fields: `aliasPolicy`, `aliasCount`, and `aliasDetails` (`staleSessionId -> activeSessionId`).
+- `roots/list` behavior:
+  - `roots/list` is a server-initiated request (`server -> client`) from manager. Do not call it as a normal client request.
+  - Declare `capabilities.roots` in `initialize` and handle manager-initiated requests/responses to enable roots sync.
+  - Check `/mcp/log` for `roots.*` lines and `/mcp/status` for `rootsPolicy`, per-session roots sync fields, auto-derived capability fields (`sessionDetails[].clientCapabilityFlags`, `sessionDetails[].clientCapabilityObjectKeys`), and `sessionDetails[].clientCapabilities`.
 - `workspace not matched`:
   - Check `cwd` points inside the target workspace folder.
 - `resolved MCP server is offline`:
@@ -197,7 +207,8 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - Manager 状态端点(诊断): `http://127.0.0.1:47100/mcp/status`
 - Workspace MCP 端点(动态目标): `http://127.0.0.1:<runtime-port>/mcp`
 - 状态格式协商:
-- 浏览器请求(`Accept: text/html`)会返回人类可读状态页,并提供 `Refresh` 与 `Auto refresh (2s)` 控件.
+- 浏览器请求(`Accept: text/html`)会返回人类可读状态页,并提供 `Refresh` 与 `Auto refresh (2s)` 控件; 自动刷新默认开启.
+- 状态页采用响应式布局(`<960px` 时按卡片行展示),并支持长文本单元格独立 `Expand/Collapse`.
 - 程序化请求默认返回 JSON; 可使用 `?format=json` 强制 JSON,`?format=html` 强制 HTML.
 
 ### Manager 与 Workspace MCP Server 的关系
@@ -213,7 +224,10 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 4. 从握手 `discovery` 中读取 `callTool`,`bridgedTools`,`resourceTemplates`.
 5. 使用模板和工具 `name` 组装 tool/schema URI(`lm-tools://tool/{name}`,`lm-tools://schema/{name}`).
 6. 使用 `lmToolsBridge.callTool` 或标准 `tools/call`.
-7. 如果会话头丢失或过期,再次调用 `lmToolsBridge.requestWorkspaceMCPServer`. Manager 会在握手调用中自动恢复会话并返回新的 `Mcp-Session-Id`.
+7. 如果客户端在 `initialize` 声明了 `capabilities.roots`,Manager 会在 `notifications/initialized` 和 `notifications/roots/list_changed` 后向客户端发起 `roots/list` 请求.
+8. roots 同步事件会写入 `/mcp/log`,并在 `/mcp/status` 中通过 `rootsPolicy`、`aliasPolicy`、`aliasCount`、`aliasDetails`、session roots 字段、自动推导的 capability 字段(`sessionDetails[].clientCapabilityFlags`,`sessionDetails[].clientCapabilityObjectKeys`)以及 `sessionDetails[].clientCapabilities`(来自 `initialize`) 展示摘要.
+9. 如果会话头丢失或过期,再次调用 `lmToolsBridge.requestWorkspaceMCPServer`. Manager 会自动恢复并返回新的 `Mcp-Session-Id`.
+10. 握手结果 payload 还会返回 `mcpSessionId` 便于诊断和观测,但响应头仍是权威会话来源.
 
 ### 握手 discovery 载荷
 - 成功握手会返回包含以下字段的 `discovery`:
@@ -278,7 +292,13 @@ url = "http://127.0.0.1:47100/mcp"
 - `workspace not set`:
   - 先调用 `lmToolsBridge.requestWorkspaceMCPServer` 并传 `cwd`.
 - stale or missing `Mcp-Session-Id`:
-  - `lmToolsBridge.requestWorkspaceMCPServer` 可自动恢复新 session header; 如客户端仍缓存旧 header,请重新 initialize 一次.
+  - `lmToolsBridge.requestWorkspaceMCPServer` 可自动恢复新 session header.
+  - Manager 会为旧 session id 建立临时 alias 到恢复后的 active session,客户端 header 刷新期间后续 `resources/read`/`tools/call` 仍可继续.
+  - `/mcp/status` 提供 alias 可观测字段: `aliasPolicy`、`aliasCount`、`aliasDetails`(`staleSessionId -> activeSessionId`).
+- `roots/list` 行为:
+  - `roots/list` 是 manager 发起的 `server -> client` 请求,不要再作为普通 client 请求主动调用.
+  - 在 `initialize` 声明 `capabilities.roots`,并处理 manager 发起的请求/响应,才能启用 roots 同步.
+  - 可在 `/mcp/log` 查看 `roots.*` 日志,并在 `/mcp/status` 查看 `rootsPolicy`、每个 session 的 roots 同步字段、自动推导 capability 字段(`sessionDetails[].clientCapabilityFlags`,`sessionDetails[].clientCapabilityObjectKeys`)与 `sessionDetails[].clientCapabilities`.
 - `workspace not matched`:
   - 检查 `cwd` 是否位于目标 workspace 目录内.
 - `resolved MCP server is offline`:

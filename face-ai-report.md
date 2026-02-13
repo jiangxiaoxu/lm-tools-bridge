@@ -23,8 +23,18 @@ Output: 自定义工具固定返回 content.text + structuredContent; 上游 lm.
 
 Flow: Manager handshake 与转发
 Entry: lmToolsBridge.requestWorkspaceMCPServer
-Path: handleSessionMessage -> refreshSessionTarget -> checkTargetHealth -> forwardMcpMessage
+Path: handleMcpHttpRequest -> resolveSessionByHeaderId -> (recover+alias on handshake when needed) -> handleSessionMessage -> refreshSessionTarget -> checkTargetHealth -> forwardMcpMessage
 Output: 绑定成功返回 target, 失败返回错误码
+
+Flow: Roots 标准同步(client capability)
+Entry: notifications/initialized or notifications/roots/list_changed
+Path: handleSessionMessage -> dispatchRootsListRequest(server -> client roots/list) -> handleMcpHttpRequest(response-only) -> handleIncomingClientResponse
+Output: roots 同步结果写入 /mcp/log,并更新 /mcp/status roots 字段; sessionDetails 额外包含 initialize capability 快照(clientCapabilities) 与自动推导 capability 字段
+
+Flow: Manager 状态页渲染
+Entry: GET /mcp/status (Accept: text/html)
+Path: handleMcpHttpRequest -> buildManagerStatusPayload -> renderStatusHtml
+Output: 默认开启 2s 自动刷新,小屏响应式卡片行展示,长文本单元格支持独立 Expand/Collapse,并展示 session alias 观测区块
 
 Flow: 自定义搜索工具
 Entry: lm_findFiles / lm_findTextInFiles
@@ -95,6 +105,36 @@ Entry: lmToolsBridge.requestWorkspaceMCPServer
 Path: refreshSessionTarget -> checkTargetHealth
 Files: src/manager.ts
 Log: "No matching VS Code instance", "Resolved MCP server is offline"
+
+Task: Unknown Mcp-Session-Id 持续出现
+Entry: resources/read or tools/call with stale session header
+Path: handleMcpHttpRequest -> resolveSessionByHeaderId -> sessionAliases (recover alias only via handshake path)
+Files: src/manager.ts
+Log: "Unknown Mcp-Session-Id", "session.recover", "session.alias.hit"
+
+Task: 查看 session alias 映射状态
+Entry: GET /mcp/status
+Path: buildManagerStatusPayload(aliasPolicy/aliasCount/aliasDetails) -> renderStatusHtml(Session Aliases)
+Files: src/manager.ts
+Log: "session.alias.set", "session.alias.hit"
+
+Task: roots 同步未触发或无结果
+Entry: notifications/initialized / notifications/roots/list_changed / response-only POST
+Path: dispatchRootsListRequest -> handleIncomingClientResponse
+Files: src/manager.ts
+Log: "roots.capability", "roots.list.request", "roots.list.result", "roots.list.error", "roots.list.skip", "roots.list.timeout"
+
+Task: /mcp/status 页面排版拥挤或小屏可读性差
+Entry: GET /mcp/status (html)
+Path: renderStatusHtml -> appendCell -> responsive-table media queries
+Files: src/manager.ts
+Log: N/A (UI render path)
+
+Task: 查看客户端 capability 明细
+Entry: GET /mcp/status
+Path: handleMcpHttpRequest -> buildManagerStatusPayload(sessionDetails[].clientCapabilities + auto-derived capability summaries)
+Files: src/manager.ts
+Log: "roots.capability"
 
 Task: 搜索结果不完整
 Entry: lm_findFiles / lm_findTextInFiles
@@ -204,6 +244,11 @@ Invariant: `lm_getDiagnostics` 输出坐标统一为 1-based,并将 `code` 规�
 Invariant: `lm_getDiagnostics` 每条诊断包含 `preview`(startLine..endLine 代码预览,最多 10 行),以及 `previewUnavailable` 与 `previewTruncated`.
 Invariant: `lm_getDiagnostics` 的 `maxResults` 在全局诊断级别截断,并通过 `capped` 标记结果是否被截断.
 Invariant: `copilot_findFiles` 与 `copilot_findTextInFiles` 属于 built-in disabled,必须始终不可 exposed/enabled/call.
+Invariant: `/mcp/status` 的 `sessionDetails[].clientCapabilities` 必须反映 initialize 入参中的 `params.capabilities` 快照(用于观测,不改变鉴权/路由决策).
+Invariant: `/mcp/status` 还需输出 capability 自动汇总字段(`clientCapabilityFlags`,`clientCapabilityObjectKeys`),避免按 capability 名称硬编码状态字段.
+Invariant: `/mcp/status` 还需输出 alias 可观测字段(`aliasPolicy`,`aliasCount`,`aliasDetails`),用于诊断 stale->active 会话映射.
+Invariant: `/mcp/status` HTML 页自动刷新复选框默认选中,并在初次渲染后启动 2 秒轮询.
+Invariant: `/mcp/status` HTML 在 `<960px` 断点下切换为卡片化行展示,并支持长文本单元格独立 Expand/Collapse.
 Invariant: lm_clangd_* tools are hard-disabled and must never be exposed in tools/list.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
@@ -260,6 +305,26 @@ Code: runGetDiagnosticsTool -> computePreviewEndLine
 Case: workspace 无匹配
 Result: ERROR_NO_MATCH
 Code: refreshSessionTarget
+
+Case: stale session id 通过握手恢复后继续调用
+Result: alias 命中后继续成功; 响应头回写 active session id
+Code: handleMcpHttpRequest -> resolveSessionByHeaderId -> sessionAliases
+
+Case: stale session id 且未经过握手恢复
+Result: Unknown Mcp-Session-Id
+Code: handleMcpHttpRequest
+
+Case: client 主动调用 roots/list
+Result: MethodNotFound(-32601),不再返回 workspace roots
+Code: handleSessionMessage
+
+Case: client 未声明 capabilities.roots
+Result: 不发送 roots/list,记录 roots.list.skip(no_capability)
+Code: dispatchRootsListRequest
+
+Case: roots/list 响应超时
+Result: 记录 roots.list.timeout,清理 pendingRootsRequestId
+Code: pruneSessions
 
 Case: 目标离线
 Result: ERROR_MCP_OFFLINE
@@ -319,6 +384,9 @@ Seed: applyInputDefaultsToToolInput | Use: 输入 defaults 注入
 Seed: lmToolsBridge.requestWorkspaceMCPServer | Use: Manager handshake
 Seed: lmToolsBridge.callTool | Use: Manager 直通 tool
 Seed: /mcp/status | Use: Manager 运行状态
+Seed: dispatchRootsListRequest | Use: server 发起 roots/list 入口
+Seed: handleIncomingClientResponse | Use: 处理 roots/list 客户端响应
+Seed: notifications/roots/list_changed | Use: roots 变更触发入口
 Seed: notifications/tools/list_changed | Use: tool list 变更通知
 Seed: getClangdToolsSnapshot | Use: clangd 工具暴露入口
 Seed: ensureClangdRunning | Use: clangd 按需启动入口

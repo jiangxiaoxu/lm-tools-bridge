@@ -3,7 +3,6 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
 
@@ -49,14 +48,36 @@ interface SessionState {
   currentTarget?: ManagerMatch;
   offlineSince?: number;
   resolveInFlight?: Promise<ResolveResult>;
+  clientSupportsRoots: boolean;
+  clientSupportsRootsListChanged: boolean;
+  clientCapabilityFlags: Record<string, boolean>;
+  clientCapabilityObjectKeys: Record<string, string[]>;
+  clientCapabilities: Record<string, unknown>;
+  pendingRootsRequestId?: string;
+  pendingRootsRequestedAt?: number;
+  pendingRootsReason?: RootsSyncReason;
+  lastRootsSyncAt?: number;
+  lastRootsSyncReason?: RootsSyncReason;
+  lastRootsCount?: number;
+  lastRootsPreview: string[];
+  lastRootsError?: string;
   lastSeen: number;
 }
 
 type ResolveErrorKind = 'no_match';
+type RootsSyncReason = 'initialized' | 'list_changed';
 
 type ResolveResult = {
   target?: ManagerMatch;
   errorKind?: ResolveErrorKind;
+};
+
+type JsonRpcLikeMessage = {
+  id?: unknown;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: unknown;
+  error?: unknown;
 };
 
 type DiscoveryIssueLevel = 'error' | 'warning';
@@ -122,6 +143,43 @@ interface ManagerStatusSessionDetail {
   lastSeenAgeSec: number;
   offlineSince: number | null;
   offlineSinceLocal: string | null;
+  clientRootsSupported: boolean;
+  clientRootsListChangedSupported: boolean;
+  clientCapabilityFlags: Record<string, boolean>;
+  clientCapabilityObjectKeys: Record<string, string[]>;
+  clientCapabilities: Record<string, unknown>;
+  pendingRootsRequestId: string | null;
+  lastRootsSyncAt: number | null;
+  lastRootsSyncAtLocal: string | null;
+  lastRootsSyncReason: RootsSyncReason | null;
+  lastRootsCount: number | null;
+  lastRootsPreview: string[];
+  lastRootsError: string | null;
+}
+
+interface ManagerStatusRootsPolicy {
+  mode: 'server-requests-client';
+  triggerOnInitialized: boolean;
+  triggerOnListChanged: boolean;
+  source: 'client-capability-roots';
+  logging: '/mcp/log';
+}
+
+interface ManagerStatusAliasPolicy {
+  mode: 'stale-to-active';
+  createdOnHandshakeRecovery: true;
+  resolvedOnAnyRequest: true;
+  cleanedOnSessionPrune: true;
+  cleanedOnSessionDelete: true;
+  logging: '/mcp/log';
+}
+
+interface ManagerStatusAliasDetail {
+  staleSessionId: string;
+  activeSessionId: string;
+  activeSessionExists: boolean;
+  activeSessionLastSeen: number | null;
+  activeSessionLastSeenLocal: string | null;
 }
 
 interface ManagerStatusPayload {
@@ -134,6 +192,10 @@ interface ManagerStatusPayload {
   instanceDetails: ManagerStatusInstanceDetail[];
   sessions: number;
   sessionDetails: ManagerStatusSessionDetail[];
+  rootsPolicy: ManagerStatusRootsPolicy;
+  aliasPolicy: ManagerStatusAliasPolicy;
+  aliasCount: number;
+  aliasDetails: ManagerStatusAliasDetail[];
   lastNonEmptyAt: number;
   lastNonEmptyAtIso: string;
   lastNonEmptyAtLocal: string;
@@ -155,6 +217,8 @@ const STARTUP_GRACE_MS = 5000;
 const STARTUP_TIME = Date.now();
 const HEALTH_PATH = '/mcp/health';
 const HEALTH_TIMEOUT_MS = 1200;
+const ROOTS_REQUEST_TIMEOUT_MS = 15000;
+const ROOTS_PREVIEW_LIMIT = 5;
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
 const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge://handshake';
@@ -166,10 +230,26 @@ const ERROR_MCP_OFFLINE = -32006;
 const LOG_ENV = 'LM_TOOLS_BRIDGE_MANAGER_LOG';
 const LOG_MAX_LINES = 200;
 const logBuffer: string[] = [];
+const ROOTS_POLICY: ManagerStatusRootsPolicy = {
+  mode: 'server-requests-client',
+  triggerOnInitialized: true,
+  triggerOnListChanged: true,
+  source: 'client-capability-roots',
+  logging: '/mcp/log',
+};
+const ALIAS_POLICY: ManagerStatusAliasPolicy = {
+  mode: 'stale-to-active',
+  createdOnHandshakeRecovery: true,
+  resolvedOnAnyRequest: true,
+  cleanedOnSessionPrune: true,
+  cleanedOnSessionDelete: true,
+  logging: '/mcp/log',
+};
 
 const instances = new Map<string, InstanceRecord>();
 const reservedPorts = new Map<string, { port: number; reservedAt: number }>();
 const sessions = new Map<string, SessionState>();
+const sessionAliases = new Map<string, string>();
 let lastNonEmptyAt = Date.now();
 let managerInternalRequestCounter = 0;
 
@@ -256,8 +336,22 @@ function prunePortReservations(now: number): void {
 
 function pruneSessions(now: number): void {
   for (const [sessionId, session] of sessions.entries()) {
+    if (session.pendingRootsRequestId
+      && typeof session.pendingRootsRequestedAt === 'number'
+      && now - session.pendingRootsRequestedAt > ROOTS_REQUEST_TIMEOUT_MS) {
+      appendLog(
+        `[roots.list.timeout] session=${session.sessionId} id=${session.pendingRootsRequestId} reason=${session.pendingRootsReason ?? 'unknown'}`,
+      );
+      session.lastRootsError = 'roots/list response timeout';
+      clearPendingRootsRequest(session);
+    }
     if (now - session.lastSeen > MCP_SESSION_TTL_MS) {
       sessions.delete(sessionId);
+    }
+  }
+  for (const [staleSessionId, activeSessionId] of sessionAliases.entries()) {
+    if (!sessions.has(activeSessionId)) {
+      sessionAliases.delete(staleSessionId);
     }
   }
 }
@@ -346,6 +440,19 @@ function createSessionState(sessionId: string): SessionState {
     currentTarget: undefined,
     offlineSince: undefined,
     resolveInFlight: undefined,
+    clientSupportsRoots: false,
+    clientSupportsRootsListChanged: false,
+    clientCapabilityFlags: {},
+    clientCapabilityObjectKeys: {},
+    clientCapabilities: {},
+    pendingRootsRequestId: undefined,
+    pendingRootsRequestedAt: undefined,
+    pendingRootsReason: undefined,
+    lastRootsSyncAt: undefined,
+    lastRootsSyncReason: undefined,
+    lastRootsCount: undefined,
+    lastRootsPreview: [],
+    lastRootsError: undefined,
     lastSeen: Date.now(),
   };
 }
@@ -431,15 +538,160 @@ function isCwdMatchingWorkspaceFile(cwd: string, workspaceFile?: string | null):
   return normalizePath(cwd) === normalizePath(workspaceFile);
 }
 
-function buildRoots(match: ManagerMatch): Array<{ uri: string; name: string }> {
-  const folders = Array.isArray(match.workspaceFolders) ? match.workspaceFolders : [];
-  return folders.map((folder) => {
-    const resolved = path.resolve(folder);
-    return {
-      uri: pathToFileURL(resolved).toString(),
-      name: path.basename(resolved),
-    };
+function clearPendingRootsRequest(session: SessionState): void {
+  session.pendingRootsRequestId = undefined;
+  session.pendingRootsRequestedAt = undefined;
+  session.pendingRootsReason = undefined;
+}
+
+function cloneJsonRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  try {
+    const cloned = JSON.parse(JSON.stringify(value)) as unknown;
+    if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) {
+      return {};
+    }
+    return cloned as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function toObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function getObjectKeys(value: unknown): string[] {
+  const record = toObjectRecord(value);
+  if (!record) {
+    return [];
+  }
+  return Object.keys(record).sort((a, b) => a.localeCompare(b));
+}
+
+function cloneBooleanRecord(record: Record<string, boolean>): Record<string, boolean> {
+  const cloned: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === 'boolean') {
+      cloned[key] = value;
+    }
+  }
+  return cloned;
+}
+
+function cloneStringArrayRecord(record: Record<string, string[]>): Record<string, string[]> {
+  const cloned: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(record)) {
+    cloned[key] = Array.isArray(value) ? [...value] : [];
+  }
+  return cloned;
+}
+
+function parseInitializeClientCapabilities(params: unknown): {
+  clientSupportsRoots: boolean;
+  clientSupportsRootsListChanged: boolean;
+  clientCapabilityFlags: Record<string, boolean>;
+  clientCapabilityObjectKeys: Record<string, string[]>;
+  clientCapabilities: Record<string, unknown>;
+} {
+  const fallback = {
+    clientSupportsRoots: false,
+    clientSupportsRootsListChanged: false,
+    clientCapabilityFlags: {},
+    clientCapabilityObjectKeys: {},
+    clientCapabilities: {},
+  };
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    return fallback;
+  }
+  const capabilities = cloneJsonRecord((params as { capabilities?: unknown }).capabilities);
+  const rootsCapability = toObjectRecord(capabilities.roots);
+  const capabilityFlags: Record<string, boolean> = {};
+  const capabilityObjectKeys: Record<string, string[]> = {};
+  for (const [capabilityName, capabilityValue] of Object.entries(capabilities)) {
+    const capabilityObject = toObjectRecord(capabilityValue);
+    capabilityFlags[capabilityName] = Boolean(capabilityObject);
+    if (capabilityObject) {
+      capabilityObjectKeys[capabilityName] = getObjectKeys(capabilityObject);
+    }
+  }
+  const listChanged = rootsCapability ? rootsCapability.listChanged : undefined;
+  return {
+    clientSupportsRoots: Boolean(rootsCapability),
+    clientSupportsRootsListChanged: Boolean(listChanged),
+    clientCapabilityFlags: capabilityFlags,
+    clientCapabilityObjectKeys: capabilityObjectKeys,
+    clientCapabilities: capabilities,
+  };
+}
+
+function describeRootsPreview(
+  roots: Array<{ uri: string; name?: string }>,
+  limit = ROOTS_PREVIEW_LIMIT,
+): string[] {
+  return roots.slice(0, limit).map((root) => {
+    const rootName = typeof root.name === 'string' && root.name.trim().length > 0 ? root.name.trim() : undefined;
+    return rootName ? `${rootName} -> ${root.uri}` : root.uri;
   });
+}
+
+function normalizeRootsFromResult(result: unknown): {
+  roots: Array<{ uri: string; name?: string }>;
+  error?: string;
+} {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return { roots: [], error: 'Invalid roots/list result payload: expected object.' };
+  }
+  const rootsValue = (result as { roots?: unknown }).roots;
+  if (!Array.isArray(rootsValue)) {
+    return { roots: [], error: 'Invalid roots/list result payload: roots must be an array.' };
+  }
+  const roots = rootsValue.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return [];
+    }
+    const uri = (entry as { uri?: unknown }).uri;
+    if (typeof uri !== 'string' || uri.trim().length === 0) {
+      return [];
+    }
+    const name = (entry as { name?: unknown }).name;
+    return [{
+      uri: uri.trim(),
+      name: typeof name === 'string' && name.trim().length > 0 ? name.trim() : undefined,
+    }];
+  });
+  return { roots };
+}
+
+function extractJsonRpcErrorMessage(error: unknown): string {
+  if (!error || typeof error !== 'object' || Array.isArray(error)) {
+    return 'Unknown roots/list error.';
+  }
+  const code = (error as { code?: unknown }).code;
+  const message = (error as { message?: unknown }).message;
+  if (typeof code === 'number' && typeof message === 'string' && message.trim().length > 0) {
+    return `[${code}] ${message.trim()}`;
+  }
+  if (typeof message === 'string' && message.trim().length > 0) {
+    return message.trim();
+  }
+  if (typeof code === 'number') {
+    return `[${code}] roots/list failed.`;
+  }
+  return 'Unknown roots/list error.';
+}
+
+function formatRootsPolicySummary(policy: ManagerStatusRootsPolicy): string {
+  return `${policy.mode}, init=${String(policy.triggerOnInitialized)}, listChanged=${String(policy.triggerOnListChanged)}`;
+}
+
+function formatAliasPolicySummary(policy: ManagerStatusAliasPolicy): string {
+  return `${policy.mode}, recover=${String(policy.createdOnHandshakeRecovery)}, resolve=${String(policy.resolvedOnAnyRequest)}`;
 }
 
 function delay(ms: number): Promise<void> {
@@ -551,6 +803,18 @@ function formatLocalDateTime(value: number): string {
 
 function buildManagerStatusPayload(now: number): ManagerStatusPayload {
   const alive = getAliveRecords();
+  const aliasDetails: ManagerStatusAliasDetail[] = Array.from(sessionAliases.entries())
+    .map(([staleSessionId, activeSessionId]) => {
+      const activeSession = sessions.get(activeSessionId);
+      return {
+        staleSessionId,
+        activeSessionId,
+        activeSessionExists: Boolean(activeSession),
+        activeSessionLastSeen: activeSession?.lastSeen ?? null,
+        activeSessionLastSeenLocal: activeSession?.lastSeen ? formatLocalDateTime(activeSession.lastSeen) : null,
+      };
+    })
+    .sort((a, b) => a.staleSessionId.localeCompare(b.staleSessionId));
   return {
     ok: true,
     version: getManagerVersion(),
@@ -590,7 +854,23 @@ function buildManagerStatusPayload(now: number): ManagerStatusPayload {
       lastSeenAgeSec: Math.floor((now - session.lastSeen) / 1000),
       offlineSince: session.offlineSince ?? null,
       offlineSinceLocal: session.offlineSince ? formatLocalDateTime(session.offlineSince) : null,
+      clientRootsSupported: session.clientSupportsRoots,
+      clientRootsListChangedSupported: session.clientSupportsRootsListChanged,
+      clientCapabilityFlags: cloneBooleanRecord(session.clientCapabilityFlags),
+      clientCapabilityObjectKeys: cloneStringArrayRecord(session.clientCapabilityObjectKeys),
+      clientCapabilities: cloneJsonRecord(session.clientCapabilities),
+      pendingRootsRequestId: session.pendingRootsRequestId ?? null,
+      lastRootsSyncAt: session.lastRootsSyncAt ?? null,
+      lastRootsSyncAtLocal: session.lastRootsSyncAt ? formatLocalDateTime(session.lastRootsSyncAt) : null,
+      lastRootsSyncReason: session.lastRootsSyncReason ?? null,
+      lastRootsCount: typeof session.lastRootsCount === 'number' ? session.lastRootsCount : null,
+      lastRootsPreview: [...session.lastRootsPreview],
+      lastRootsError: session.lastRootsError ?? null,
     })),
+    rootsPolicy: ROOTS_POLICY,
+    aliasPolicy: ALIAS_POLICY,
+    aliasCount: aliasDetails.length,
+    aliasDetails,
     lastNonEmptyAt,
     lastNonEmptyAtIso: new Date(lastNonEmptyAt).toISOString(),
     lastNonEmptyAtLocal: formatLocalDateTime(lastNonEmptyAt),
@@ -630,6 +910,9 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
     `Now (local): ${payload.nowLocal}`,
     `Active instances: ${payload.instances}`,
     `Active sessions: ${payload.sessions}`,
+    `Roots policy: ${formatRootsPolicySummary(payload.rootsPolicy)}`,
+    `Alias policy: ${formatAliasPolicySummary(payload.aliasPolicy)}`,
+    `Alias mappings: ${payload.aliasCount}`,
     `Manager uptime (s): ${payload.uptimeSec}`,
     `Idle marker age (s): ${payload.lastNonEmptyAgeSec}`,
   ]
@@ -644,17 +927,29 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
     <style>
       :root {
         color-scheme: light dark;
+        --bg: #f5f7fb;
+        --fg: #111827;
+        --card-bg: #ffffff;
+        --card-border: #e5e7eb;
+        --table-header-bg: #f3f4f6;
+        --row-border: #e5e7eb;
+        --muted: #6b7280;
+        --danger: #b91c1c;
+        --button-bg: #ffffff;
+        --button-border: #d1d5db;
+        --button-fg: #111827;
+        --label-fg: #374151;
       }
       body {
         margin: 0;
         font-family: "Segoe UI", Arial, sans-serif;
-        background: #f5f7fb;
-        color: #111827;
+        background: var(--bg);
+        color: var(--fg);
       }
       main {
-        max-width: 1100px;
-        margin: 20px auto;
-        padding: 0 16px 24px;
+        max-width: min(96vw, 1680px);
+        margin: 16px auto;
+        padding: 0 14px 24px;
       }
       h1 {
         margin: 0 0 12px;
@@ -669,31 +964,37 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
         gap: 12px;
         align-items: center;
         flex-wrap: wrap;
-        margin-bottom: 12px;
+        margin-bottom: 14px;
       }
       button {
-        border: 1px solid #d1d5db;
+        border: 1px solid var(--button-border);
         border-radius: 6px;
         padding: 6px 10px;
-        background: #ffffff;
+        background: var(--button-bg);
+        color: var(--button-fg);
         cursor: pointer;
       }
       button:disabled {
         opacity: 0.6;
         cursor: default;
       }
+      .toolbar label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
       .muted {
-        color: #6b7280;
+        color: var(--muted);
         font-size: 13px;
       }
       .error {
         margin: 0 0 12px;
-        color: #b91c1c;
+        color: var(--danger);
         font-size: 13px;
       }
       .card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
         border-radius: 8px;
         padding: 12px;
         margin-bottom: 12px;
@@ -706,49 +1007,135 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
         border-collapse: collapse;
         font-size: 13px;
       }
+      .responsive-table {
+        table-layout: auto;
+      }
       th, td {
-        border-bottom: 1px solid #e5e7eb;
-        padding: 6px 8px;
+        border-bottom: 1px solid var(--row-border);
+        padding: 8px 10px;
         text-align: left;
         vertical-align: top;
       }
       th {
-        background: #f3f4f6;
+        background: var(--table-header-bg);
         font-weight: 600;
       }
       .kv-key {
         width: 220px;
-        color: #374151;
+        color: var(--label-fg);
+      }
+      .long-cell {
+        max-width: 420px;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      .mono-cell {
+        font-family: Consolas, "Courier New", monospace;
+        white-space: pre-wrap;
+      }
+      .cell-content {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .cell-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      .cell-text--mono {
+        font-family: Consolas, "Courier New", monospace;
+      }
+      .cell-text--clamp {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+      }
+      .cell-toggle {
+        align-self: flex-start;
+        padding: 2px 8px;
+        font-size: 12px;
+        line-height: 1.4;
       }
       noscript pre {
         margin: 0;
         white-space: pre-wrap;
       }
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: #111827;
-          color: #f3f4f6;
-        }
-        .card {
-          background: #0f172a;
-          border-color: #334155;
-        }
-        button {
-          background: #1f2937;
-          border-color: #475569;
-          color: #f3f4f6;
-        }
-        th {
-          background: #1e293b;
+      @media (max-width: 1365px) {
+        main {
+          max-width: min(98vw, 1440px);
         }
         th, td {
-          border-color: #334155;
+          padding: 7px 8px;
+          font-size: 12px;
         }
-        .muted {
-          color: #94a3b8;
+        .long-cell {
+          max-width: 320px;
         }
-        .kv-key {
-          color: #cbd5e1;
+      }
+      @media (max-width: 959px) {
+        .table-wrap {
+          overflow: visible;
+        }
+        .responsive-table thead {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          border: 0;
+        }
+        .responsive-table,
+        .responsive-table tbody,
+        .responsive-table tr,
+        .responsive-table td {
+          display: block;
+          width: 100%;
+          box-sizing: border-box;
+        }
+        .responsive-table tr {
+          background: var(--card-bg);
+          border: 1px solid var(--card-border);
+          border-radius: 8px;
+          margin: 0 0 10px;
+          overflow: hidden;
+        }
+        .responsive-table td {
+          border-bottom: 1px dashed var(--row-border);
+          padding: 7px 10px;
+        }
+        .responsive-table td:last-child {
+          border-bottom: 0;
+        }
+        .responsive-table td::before {
+          content: attr(data-label);
+          display: block;
+          margin-bottom: 4px;
+          color: var(--label-fg);
+          font-weight: 600;
+        }
+        .long-cell,
+        .mono-cell {
+          max-width: none;
+        }
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111827;
+          --fg: #f3f4f6;
+          --card-bg: #0f172a;
+          --card-border: #334155;
+          --table-header-bg: #1e293b;
+          --row-border: #334155;
+          --muted: #94a3b8;
+          --button-bg: #1f2937;
+          --button-border: #475569;
+          --button-fg: #f3f4f6;
+          --label-fg: #cbd5e1;
+          --danger: #fca5a5;
         }
       }
     </style>
@@ -758,7 +1145,7 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
       <h1>LM Tools Bridge Manager Status</h1>
       <div class="toolbar">
         <button id="refresh-button" type="button">Refresh</button>
-        <label><input id="auto-refresh" type="checkbox" /> Auto refresh (2s)</label>
+        <label><input id="auto-refresh" type="checkbox" checked /> Auto refresh (2s)</label>
         <span id="updated-at" class="muted"></span>
       </div>
       <p id="error" class="error" hidden></p>
@@ -776,10 +1163,10 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
         <h2>Instances</h2>
         <p id="instances-empty" class="muted">No active instances.</p>
         <div class="table-wrap">
-          <table id="instances-table" hidden>
+          <table id="instances-table" class="responsive-table" hidden>
             <thead>
               <tr>
-                <th>Session ID</th>
+                <th>VS Code Instance Session ID</th>
                 <th>PID</th>
                 <th>Host:Port</th>
                 <th>Workspace</th>
@@ -793,18 +1180,39 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
       </section>
 
       <section class="card">
+        <h2>Session Aliases</h2>
+        <p id="aliases-empty" class="muted">No active alias mappings.</p>
+        <div class="table-wrap">
+          <table id="aliases-table" class="responsive-table" hidden>
+            <thead>
+              <tr>
+                <th>Stale MCP Session ID</th>
+                <th>Active MCP Session ID</th>
+                <th>Active Session Exists</th>
+                <th>Active Session Last Seen (local)</th>
+              </tr>
+            </thead>
+            <tbody id="aliases-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>Sessions</h2>
         <p id="sessions-empty" class="muted">No active sessions.</p>
         <div class="table-wrap">
-          <table id="sessions-table" hidden>
+          <table id="sessions-table" class="responsive-table" hidden>
             <thead>
               <tr>
-                <th>Session ID</th>
+                <th>MCP Session ID</th>
                 <th>Resolve CWD</th>
                 <th>Workspace Flags</th>
                 <th>Target</th>
                 <th>Last Seen (s)</th>
                 <th>Offline Since</th>
+                <th>Roots</th>
+                <th>Capability Flags</th>
+                <th>Client Capabilities</th>
               </tr>
             </thead>
             <tbody id="sessions-body"></tbody>
@@ -824,6 +1232,7 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
       (() => {
         const STATUS_JSON_URL = '/mcp/status?format=json';
         const AUTO_REFRESH_INTERVAL_MS = 2000;
+        const EXPANDABLE_TEXT_THRESHOLD = 80;
         const refreshButton = document.getElementById('refresh-button');
         const autoRefreshCheckbox = document.getElementById('auto-refresh');
         const updatedAt = document.getElementById('updated-at');
@@ -832,6 +1241,9 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
         const instancesTable = document.getElementById('instances-table');
         const instancesBody = document.getElementById('instances-body');
         const instancesEmpty = document.getElementById('instances-empty');
+        const aliasesTable = document.getElementById('aliases-table');
+        const aliasesBody = document.getElementById('aliases-body');
+        const aliasesEmpty = document.getElementById('aliases-empty');
         const sessionsTable = document.getElementById('sessions-table');
         const sessionsBody = document.getElementById('sessions-body');
         const sessionsEmpty = document.getElementById('sessions-empty');
@@ -846,29 +1258,86 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
           return String(value);
         }
 
-        function appendCell(row, text, className) {
+        function shouldUseExpandableText(value) {
+          return value.length > EXPANDABLE_TEXT_THRESHOLD || value.indexOf('\\n') !== -1;
+        }
+
+        function appendCell(row, text, options) {
+          const cellOptions = options && typeof options === 'object' ? options : {};
           const cell = document.createElement('td');
-          if (className) {
-            cell.className = className;
+          const valueText = toText(text);
+          if (cellOptions.className) {
+            cell.className = cellOptions.className;
           }
-          cell.textContent = text;
+          if (cellOptions.label) {
+            cell.setAttribute('data-label', cellOptions.label);
+          }
+          const enableExpandable = Boolean(cellOptions.expandable) && shouldUseExpandableText(valueText);
+          if (!enableExpandable) {
+            cell.textContent = valueText;
+            row.appendChild(cell);
+            return;
+          }
+          const content = document.createElement('div');
+          content.className = 'cell-content';
+          const textBlock = document.createElement('div');
+          textBlock.className = 'cell-text cell-text--clamp';
+          if (typeof cellOptions.className === 'string' && cellOptions.className.indexOf('mono-cell') !== -1) {
+            textBlock.className += ' cell-text--mono';
+          }
+          textBlock.textContent = valueText;
+          const toggle = document.createElement('button');
+          toggle.type = 'button';
+          toggle.className = 'cell-toggle';
+          toggle.textContent = 'Expand';
+          toggle.setAttribute('aria-expanded', 'false');
+          toggle.addEventListener('click', () => {
+            const expanded = toggle.getAttribute('aria-expanded') === 'true';
+            if (expanded) {
+              toggle.setAttribute('aria-expanded', 'false');
+              toggle.textContent = 'Expand';
+              textBlock.classList.add('cell-text--clamp');
+            } else {
+              toggle.setAttribute('aria-expanded', 'true');
+              toggle.textContent = 'Collapse';
+              textBlock.classList.remove('cell-text--clamp');
+            }
+          });
+          content.appendChild(textBlock);
+          content.appendChild(toggle);
+          cell.appendChild(content);
           row.appendChild(cell);
         }
 
         function renderSummary(payload) {
           summaryBody.replaceChildren();
+          const rootsPolicy = payload && payload.rootsPolicy ? payload.rootsPolicy : undefined;
+          const rootsPolicyText = rootsPolicy
+            ? toText(rootsPolicy.mode)
+              + ', init=' + toText(rootsPolicy.triggerOnInitialized)
+              + ', listChanged=' + toText(rootsPolicy.triggerOnListChanged)
+            : '-';
+          const aliasPolicy = payload && payload.aliasPolicy ? payload.aliasPolicy : undefined;
+          const aliasPolicyText = aliasPolicy
+            ? toText(aliasPolicy.mode)
+              + ', recover=' + toText(aliasPolicy.createdOnHandshakeRecovery)
+              + ', resolve=' + toText(aliasPolicy.resolvedOnAnyRequest)
+            : '-';
           const rows = [
             ['Version', toText(payload.version)],
             ['Now (local)', toText(payload.nowLocal)],
             ['Active instances', toText(payload.instances)],
             ['Active sessions', toText(payload.sessions)],
+            ['Roots policy', rootsPolicyText],
+            ['Alias policy', aliasPolicyText],
+            ['Alias mappings', toText(payload.aliasCount)],
             ['Manager uptime (s)', toText(payload.uptimeSec)],
             ['Idle marker age (s)', toText(payload.lastNonEmptyAgeSec)],
           ];
           for (const [key, value] of rows) {
             const row = document.createElement('tr');
-            appendCell(row, key, 'kv-key');
-            appendCell(row, value);
+            appendCell(row, key, { className: 'kv-key' });
+            appendCell(row, value, {});
             summaryBody.appendChild(row);
           }
         }
@@ -892,7 +1361,75 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
           if (!detail || !detail.target) {
             return '-';
           }
-          return detail.target.sessionId + ' @ ' + detail.target.host + ':' + detail.target.port;
+          return 'vscodeInstanceSessionId=' + detail.target.sessionId + ' @ ' + detail.target.host + ':' + detail.target.port;
+        }
+
+        function formatSessionRoots(detail) {
+          const parts = [];
+          parts.push('clientRootsSupported=' + toText(detail.clientRootsSupported));
+          parts.push('clientRootsListChangedSupported=' + toText(detail.clientRootsListChangedSupported));
+          if (detail.pendingRootsRequestId) {
+            parts.push('pending=' + toText(detail.pendingRootsRequestId));
+          }
+          if (detail.lastRootsSyncReason) {
+            parts.push('reason=' + toText(detail.lastRootsSyncReason));
+          }
+          if (detail.lastRootsCount !== null && detail.lastRootsCount !== undefined) {
+            parts.push('count=' + toText(detail.lastRootsCount));
+          }
+          if (detail.lastRootsSyncAtLocal) {
+            parts.push('at=' + toText(detail.lastRootsSyncAtLocal));
+          }
+          const preview = Array.isArray(detail.lastRootsPreview) ? detail.lastRootsPreview : [];
+          if (preview.length > 0) {
+            parts.push('preview=' + preview.join(' | '));
+          }
+          if (detail.lastRootsError) {
+            parts.push('error=' + toText(detail.lastRootsError));
+          }
+          return parts.join(', ');
+        }
+
+        function formatSessionCapabilityFlags(detail) {
+          const parts = [];
+          const flags = detail
+            && detail.clientCapabilityFlags
+            && typeof detail.clientCapabilityFlags === 'object'
+            && !Array.isArray(detail.clientCapabilityFlags)
+            ? detail.clientCapabilityFlags
+            : {};
+          const flagKeys = Object.keys(flags).sort();
+          for (const key of flagKeys) {
+            parts.push(key + '=' + toText(flags[key]));
+          }
+          const objectKeysMap = detail
+            && detail.clientCapabilityObjectKeys
+            && typeof detail.clientCapabilityObjectKeys === 'object'
+            && !Array.isArray(detail.clientCapabilityObjectKeys)
+            ? detail.clientCapabilityObjectKeys
+            : {};
+          const capabilityKeys = Object.keys(objectKeysMap).sort();
+          for (const key of capabilityKeys) {
+            const keys = Array.isArray(objectKeysMap[key]) ? objectKeysMap[key] : [];
+            if (keys.length > 0) {
+              parts.push(key + '.keys=' + keys.join('|'));
+            }
+          }
+          return parts.length > 0 ? parts.join(', ') : '-';
+        }
+
+        function formatSessionCapabilities(detail) {
+          const capabilities = detail
+            && detail.clientCapabilities
+            && typeof detail.clientCapabilities === 'object'
+            && !Array.isArray(detail.clientCapabilities)
+            ? detail.clientCapabilities
+            : {};
+          try {
+            return JSON.stringify(capabilities, null, 2);
+          } catch {
+            return '{}';
+          }
         }
 
         function renderInstances(payload) {
@@ -907,13 +1444,51 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
           instancesTable.hidden = false;
           for (const detail of details) {
             const row = document.createElement('tr');
-            appendCell(row, toText(detail.sessionId));
-            appendCell(row, toText(detail.pid));
-            appendCell(row, toText(detail.host) + ':' + toText(detail.port));
-            appendCell(row, formatWorkspace(detail));
-            appendCell(row, toText(detail.lastSeenAgeSec));
-            appendCell(row, toText(detail.uptimeSec));
+            appendCell(row, toText(detail.sessionId), {
+              label: 'VS Code Instance Session ID',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, toText(detail.pid), { label: 'PID' });
+            appendCell(row, toText(detail.host) + ':' + toText(detail.port), { label: 'Host:Port' });
+            appendCell(row, formatWorkspace(detail), {
+              label: 'Workspace',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, toText(detail.lastSeenAgeSec), { label: 'Last Seen (s)' });
+            appendCell(row, toText(detail.uptimeSec), { label: 'Uptime (s)' });
             instancesBody.appendChild(row);
+          }
+        }
+
+        function renderAliases(payload) {
+          aliasesBody.replaceChildren();
+          const details = Array.isArray(payload.aliasDetails) ? payload.aliasDetails : [];
+          if (details.length === 0) {
+            aliasesTable.hidden = true;
+            aliasesEmpty.hidden = false;
+            return;
+          }
+          aliasesEmpty.hidden = true;
+          aliasesTable.hidden = false;
+          for (const detail of details) {
+            const row = document.createElement('tr');
+            appendCell(row, toText(detail.staleSessionId), {
+              label: 'Stale MCP Session ID',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, toText(detail.activeSessionId), {
+              label: 'Active MCP Session ID',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, toText(detail.activeSessionExists), { label: 'Active Session Exists' });
+            appendCell(row, detail.activeSessionLastSeenLocal ? detail.activeSessionLastSeenLocal : '-', {
+              label: 'Active Session Last Seen (local)',
+            });
+            aliasesBody.appendChild(row);
           }
         }
 
@@ -929,12 +1504,40 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
           sessionsTable.hidden = false;
           for (const detail of details) {
             const row = document.createElement('tr');
-            appendCell(row, toText(detail.sessionId));
-            appendCell(row, toText(detail.resolveCwd));
-            appendCell(row, 'set=' + toText(detail.workspaceSetExplicitly) + ', matched=' + toText(detail.workspaceMatched));
-            appendCell(row, formatSessionTarget(detail));
-            appendCell(row, toText(detail.lastSeenAgeSec));
-            appendCell(row, detail.offlineSinceLocal ? detail.offlineSinceLocal : '-');
+            appendCell(row, toText(detail.sessionId), {
+              label: 'MCP Session ID',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, toText(detail.resolveCwd), {
+              label: 'Resolve CWD',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, 'set=' + toText(detail.workspaceSetExplicitly) + ', matched=' + toText(detail.workspaceMatched), {
+              label: 'Workspace Flags',
+            });
+            appendCell(row, formatSessionTarget(detail), {
+              label: 'Target',
+              className: 'long-cell',
+            });
+            appendCell(row, toText(detail.lastSeenAgeSec), { label: 'Last Seen (s)' });
+            appendCell(row, detail.offlineSinceLocal ? detail.offlineSinceLocal : '-', { label: 'Offline Since' });
+            appendCell(row, formatSessionRoots(detail), {
+              label: 'Roots',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, formatSessionCapabilityFlags(detail), {
+              label: 'Capability Flags',
+              className: 'long-cell',
+              expandable: true,
+            });
+            appendCell(row, formatSessionCapabilities(detail), {
+              label: 'Client Capabilities',
+              className: 'long-cell mono-cell',
+              expandable: true,
+            });
             sessionsBody.appendChild(row);
           }
         }
@@ -942,6 +1545,7 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
         function renderPayload(payload) {
           renderSummary(payload);
           renderInstances(payload);
+          renderAliases(payload);
           renderSessions(payload);
           updatedAt.textContent = 'Last updated: ' + toText(payload.nowLocal);
         }
@@ -996,6 +1600,8 @@ function renderStatusHtml(payload: ManagerStatusPayload): string {
         });
 
         renderPayload(initialPayload);
+        autoRefreshCheckbox.checked = true;
+        setAutoRefresh(true);
       })();
     </script>
   </body>
@@ -1758,6 +2364,32 @@ function getSession(sessionId: string): SessionState | undefined {
   return sessions.get(sessionId);
 }
 
+function removeSessionAliasEntriesForSession(sessionId: string): void {
+  for (const [staleSessionId, activeSessionId] of sessionAliases.entries()) {
+    if (staleSessionId === sessionId || activeSessionId === sessionId) {
+      sessionAliases.delete(staleSessionId);
+    }
+  }
+}
+
+function resolveSessionByHeaderId(sessionId: string): SessionState | undefined {
+  const direct = getSession(sessionId);
+  if (direct) {
+    return direct;
+  }
+  const activeSessionId = sessionAliases.get(sessionId);
+  if (!activeSessionId) {
+    return undefined;
+  }
+  const aliased = getSession(activeSessionId);
+  if (!aliased) {
+    sessionAliases.delete(sessionId);
+    return undefined;
+  }
+  appendLog(`[session.alias.hit] stale=${sessionId} active=${activeSessionId}`);
+  return aliased;
+}
+
 function createAndRegisterSession(): SessionState {
   let sessionId = generateSessionId();
   while (sessions.has(sessionId)) {
@@ -1782,6 +2414,104 @@ function isWorkspaceHandshakeRpcMessage(rpcMessage: { method?: string; params?: 
   }
   const name = rpcMessage.params?.name;
   return typeof name === 'string' && name === REQUEST_WORKSPACE_METHOD;
+}
+
+function isJsonRpcResponseMessage(message: JsonRpcLikeMessage): boolean {
+  if (message.id === undefined) {
+    return false;
+  }
+  if (message.method !== undefined) {
+    return false;
+  }
+  const hasResult = Object.prototype.hasOwnProperty.call(message, 'result');
+  const hasError = Object.prototype.hasOwnProperty.call(message, 'error');
+  return hasResult || hasError;
+}
+
+function dispatchRootsListRequest(
+  session: SessionState,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  reason: RootsSyncReason,
+  requestIdForSse?: string,
+): boolean {
+  const now = Date.now();
+  if (!session.clientSupportsRoots) {
+    appendLog(`[roots.list.skip] session=${session.sessionId} reason=no_capability trigger=${reason}`);
+    return false;
+  }
+  if (session.pendingRootsRequestId && typeof session.pendingRootsRequestedAt === 'number') {
+    if (now - session.pendingRootsRequestedAt <= ROOTS_REQUEST_TIMEOUT_MS) {
+      appendLog(
+        `[roots.list.skip] session=${session.sessionId} reason=pending trigger=${reason} pendingId=${session.pendingRootsRequestId}`,
+      );
+      return false;
+    }
+    appendLog(
+      `[roots.list.timeout] session=${session.sessionId} id=${session.pendingRootsRequestId} reason=${session.pendingRootsReason ?? 'unknown'}`,
+    );
+    session.lastRootsError = 'roots/list response timeout';
+    clearPendingRootsRequest(session);
+  }
+  if (!isSseRequest(req)) {
+    appendLog(`[roots.list.skip] session=${session.sessionId} reason=no_sse trigger=${reason}`);
+    return false;
+  }
+  const requestId = requestIdForSse ?? nextManagerRequestId('roots-list');
+  session.pendingRootsRequestId = requestId;
+  session.pendingRootsRequestedAt = now;
+  session.pendingRootsReason = reason;
+  appendLog(`[roots.list.request] session=${session.sessionId} id=${requestId} reason=${reason}`);
+  respondSse(
+    res,
+    [{
+      jsonrpc: '2.0',
+      id: requestId,
+      method: 'roots/list',
+      params: {},
+    }],
+  );
+  return true;
+}
+
+function handleIncomingClientResponse(session: SessionState, message: JsonRpcLikeMessage): void {
+  const pendingId = session.pendingRootsRequestId;
+  const responseId = typeof message.id === 'string' || typeof message.id === 'number'
+    ? String(message.id)
+    : undefined;
+  if (!pendingId || !responseId || responseId !== pendingId) {
+    appendLog(
+      `[rpc.response] session=${session.sessionId} ignored=true id=${String(responseId ?? 'unknown')} pending=${String(pendingId ?? '')}`,
+    );
+    return;
+  }
+  const reason = session.pendingRootsReason ?? 'initialized';
+  clearPendingRootsRequest(session);
+  session.lastRootsSyncAt = Date.now();
+  session.lastRootsSyncReason = reason;
+  if (Object.prototype.hasOwnProperty.call(message, 'error')) {
+    const errorText = extractJsonRpcErrorMessage(message.error);
+    session.lastRootsCount = undefined;
+    session.lastRootsPreview = [];
+    session.lastRootsError = errorText;
+    appendLog(`[roots.list.error] session=${session.sessionId} id=${responseId} reason=${reason} error=${errorText}`);
+    return;
+  }
+  const normalized = normalizeRootsFromResult(message.result);
+  if (normalized.error) {
+    session.lastRootsCount = undefined;
+    session.lastRootsPreview = [];
+    session.lastRootsError = normalized.error;
+    appendLog(`[roots.list.error] session=${session.sessionId} id=${responseId} reason=${reason} error=${normalized.error}`);
+    return;
+  }
+  session.lastRootsCount = normalized.roots.length;
+  session.lastRootsPreview = describeRootsPreview(normalized.roots);
+  session.lastRootsError = undefined;
+  const previewText = session.lastRootsPreview.length > 0 ? session.lastRootsPreview.join(' | ') : '-';
+  appendLog(
+    `[roots.list.result] session=${session.sessionId} id=${responseId} reason=${reason} count=${normalized.roots.length} preview=${previewText}`,
+  );
 }
 
 async function buildStatusPayload(session: SessionState): Promise<{
@@ -1897,6 +2627,7 @@ async function handleRequestWorkspace(
   return {
     payload: {
       ok: true,
+      mcpSessionId: session.sessionId,
       cwd: session.resolveCwd,
       target: {
         sessionId: matchedTarget.sessionId,
@@ -1965,19 +2696,44 @@ async function forwardMcpMessage(
 
 async function handleSessionMessage(
   session: SessionState,
-  message: { id?: unknown; method?: string; params?: Record<string, unknown> },
+  message: JsonRpcLikeMessage,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> {
   const method = message.method ?? '';
   appendLog(`[session] id=${session.sessionId} method=${method} matched=${String(session.workspaceMatched)} set=${String(session.workspaceSetExplicitly)} cwd=${session.resolveCwd}`);
-  if (method === 'initialized') {
-    res.statusCode = 204;
-    res.end();
+  if (method === 'initialized' || method === 'notifications/initialized') {
+    if (message.id === undefined || message.id === null) {
+      const dispatched = dispatchRootsListRequest(session, req, res, 'initialized');
+      if (!dispatched) {
+        res.statusCode = 204;
+        res.end();
+      }
+      return;
+    }
+    respondJsonRpcResult(res, message.id, {});
+    return;
+  }
+  if (method === 'notifications/roots/list_changed') {
+    const dispatched = dispatchRootsListRequest(session, req, res, 'list_changed');
+    if (!dispatched) {
+      res.statusCode = 204;
+      res.end();
+    }
     return;
   }
   if (method === 'ping') {
     respondJsonRpcResult(res, message.id ?? null, {});
+    return;
+  }
+  if (method === 'roots/list') {
+    respondJsonRpcError(
+      res,
+      200,
+      message.id ?? null,
+      -32601,
+      'Method not found: roots/list is a client capability request and is issued by server to client.',
+    );
     return;
   }
   if (method === 'resources/read' && message.params?.uri === HANDSHAKE_RESOURCE_URI) {
@@ -2289,40 +3045,6 @@ async function handleSessionMessage(
     );
     return;
   }
-  if (method === 'roots/list') {
-    let target = session.currentTarget;
-    if (!target) {
-      const now = Date.now();
-      const graceDeadline = STARTUP_TIME + STARTUP_GRACE_MS;
-      const refreshResult = await refreshSessionTarget(session, now < graceDeadline ? graceDeadline : undefined);
-      target = refreshResult?.target;
-      if (!target) {
-        respondJsonRpcError(
-          res,
-          200,
-          message.id ?? null,
-          refreshResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
-          refreshResult?.errorKind === 'no_match'
-            ? 'No matching VS Code instance for current workspace.'
-            : 'Manager unreachable.',
-        );
-        return;
-      }
-    }
-    const health = await checkTargetHealth(target);
-    if (!isHealthOk(health)) {
-      session.workspaceMatched = false;
-      session.currentTarget = undefined;
-      if (!session.offlineSince) {
-        session.offlineSince = Date.now();
-      }
-      respondJsonRpcError(res, 200, message.id ?? null, ERROR_MCP_OFFLINE, 'Resolved MCP server is offline.');
-      return;
-    }
-    respondJsonRpcResult(res, message.id ?? null, { roots: buildRoots(target) });
-    return;
-  }
-
   const payload = JSON.stringify(message);
   let target = session.currentTarget;
   if (!target) {
@@ -2436,10 +3158,25 @@ async function handleMcpHttpRequest(
   }
   if ((requestUrl.pathname === '/mcp' || requestUrl.pathname === '/mcp/')
     && req.method === 'DELETE') {
-    const sessionId = getSessionIdFromRequest(req);
-    if (sessionId) {
-      const existed = sessions.delete(sessionId);
-      respondJson(res, 200, { ok: true, deleted: existed, sessionId });
+    const requestedSessionId = getSessionIdFromRequest(req);
+    if (requestedSessionId) {
+      const resolved = resolveSessionByHeaderId(requestedSessionId);
+      const activeSessionId = resolved?.sessionId ?? requestedSessionId;
+      const existed = sessions.delete(activeSessionId);
+      removeSessionAliasEntriesForSession(activeSessionId);
+      if (requestedSessionId !== activeSessionId) {
+        sessionAliases.delete(requestedSessionId);
+      }
+      respondJson(
+        res,
+        200,
+        {
+          ok: true,
+          deleted: existed,
+          sessionId: requestedSessionId,
+          resolvedSessionId: activeSessionId !== requestedSessionId ? activeSessionId : undefined,
+        },
+      );
       return;
     }
     respondJson(res, 200, { ok: true, deleted: false, reason: 'missing_session' });
@@ -2481,10 +3218,19 @@ async function handleMcpHttpRequest(
     respondJsonRpcError(res, 400, null, -32600, 'Invalid request.');
     return;
   }
-  const rpcMessage = message as { id?: unknown; method?: string; params?: Record<string, unknown> };
+  const rpcMessage = message as JsonRpcLikeMessage;
   appendLog(`[rpc] method=${String(rpcMessage.method ?? '')} id=${String(rpcMessage.id ?? '')} hasParams=${String(Boolean(rpcMessage.params))}`);
   if (rpcMessage.method === 'initialize') {
     const session = createAndRegisterSession();
+    const clientCapabilities = parseInitializeClientCapabilities(rpcMessage.params);
+    session.clientSupportsRoots = clientCapabilities.clientSupportsRoots;
+    session.clientSupportsRootsListChanged = clientCapabilities.clientSupportsRootsListChanged;
+    session.clientCapabilityFlags = cloneBooleanRecord(clientCapabilities.clientCapabilityFlags);
+    session.clientCapabilityObjectKeys = cloneStringArrayRecord(clientCapabilities.clientCapabilityObjectKeys);
+    session.clientCapabilities = clientCapabilities.clientCapabilities;
+    appendLog(
+      `[roots.capability] session=${session.sessionId} roots=${String(session.clientSupportsRoots)} listChanged=${String(session.clientSupportsRootsListChanged)}`,
+    );
     respondJsonRpcResult(
       res,
       rpcMessage.id ?? null,
@@ -2505,31 +3251,23 @@ async function handleMcpHttpRequest(
             read: true,
             listChanged: true,
           },
-          roots: {
-            list: true,
-          },
         },
       },
       { 'Mcp-Session-Id': session.sessionId },
     );
     return;
   }
-  if (rpcMessage.method === 'initialized' || rpcMessage.method === 'notifications/initialized') {
-    if (rpcMessage.id === undefined || rpcMessage.id === null) {
-      res.statusCode = 204;
-      res.end();
-      return;
-    }
-    respondJsonRpcResult(res, rpcMessage.id, {});
-    return;
-  }
   const sessionId = getSessionIdFromRequest(req);
-  let session = sessionId ? getSession(sessionId) : undefined;
+  let session = sessionId ? resolveSessionByHeaderId(sessionId) : undefined;
   if (!session) {
     if (isWorkspaceHandshakeRpcMessage(rpcMessage)) {
       const recoveredSession = createAndRegisterSession();
       session = recoveredSession;
       res.setHeader('Mcp-Session-Id', recoveredSession.sessionId);
+      if (sessionId) {
+        sessionAliases.set(sessionId, recoveredSession.sessionId);
+        appendLog(`[session.alias.set] stale=${sessionId} active=${recoveredSession.sessionId}`);
+      }
       appendLog(`[session.recover] created=${recoveredSession.sessionId} reason=${sessionId ? 'unknown' : 'missing'}`);
     } else if (!sessionId) {
       respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Missing Mcp-Session-Id.');
@@ -2545,7 +3283,16 @@ async function handleMcpHttpRequest(
       return;
     }
   }
+  if (sessionId && session.sessionId !== sessionId) {
+    res.setHeader('Mcp-Session-Id', session.sessionId);
+  }
   touchSession(session);
+  if (isJsonRpcResponseMessage(rpcMessage)) {
+    handleIncomingClientResponse(session, rpcMessage);
+    res.statusCode = 202;
+    res.end();
+    return;
+  }
   await handleSessionMessage(session, rpcMessage, req, res);
 }
 
@@ -2810,3 +3557,4 @@ mcpServer.listen(httpPort, '127.0.0.1');
 
 const pruneTimer = setInterval(pruneInstances, PRUNE_INTERVAL_MS);
 pruneTimer.unref();
+

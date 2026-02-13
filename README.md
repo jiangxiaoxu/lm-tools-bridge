@@ -17,10 +17,11 @@ This README covers the current Manager-based version only.
 ### Endpoints
 - Manager MCP endpoint (client entry): `http://127.0.0.1:47100/mcp`
 - Manager status endpoint (diagnostics): `http://127.0.0.1:47100/mcp/status`
+- Manager log endpoint: `http://127.0.0.1:47100/mcp/log`
 - Workspace MCP endpoint (dynamic target): `http://127.0.0.1:<runtime-port>/mcp`
 - Status format negotiation:
 - Browser requests (`Accept: text/html`) return a human-readable status page with `Refresh` and `Auto refresh (2s)` controls; auto refresh is enabled by default.
-- The status page uses responsive layout (`<960px` card-style rows) and supports per-cell `Expand/Collapse` for long values.
+- The status page uses responsive layout (`<960px` card-style rows); long values are shown as full multi-line text by default.
 - Programmatic requests default to JSON; use `?format=json` to force JSON and `?format=html` to force HTML.
 
 ### Manager vs Workspace MCP Server
@@ -37,9 +38,9 @@ This README covers the current Manager-based version only.
 5. Compose tool/schema URIs with templates and tool `name` (`lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
 6. Use `lmToolsBridge.callTool` or standard `tools/call`.
 7. If client declares `capabilities.roots`, manager requests `roots/list` from client after `notifications/initialized` and `notifications/roots/list_changed`.
-8. Roots sync events are logged to `/mcp/log` and summarized in `/mcp/status` (`rootsPolicy`, `aliasPolicy`, `aliasCount`, `aliasDetails`, session roots fields, auto-derived `sessionDetails[].clientCapabilityFlags`/`sessionDetails[].clientCapabilityObjectKeys`, and full `sessionDetails[].clientCapabilities` snapshot from `initialize`).
-9. If session header is lost/expired, call `lmToolsBridge.requestWorkspaceMCPServer` again; manager auto-recovers and returns a fresh `Mcp-Session-Id` header.
-10. Handshake result payload also includes `mcpSessionId` for diagnostics/observability. The response header remains the source of truth.
+8. Roots sync events are logged to `/mcp/log` and summarized in `/mcp/status` (`rootsPolicy`, session roots fields, auto-derived `sessionDetails[].clientCapabilityFlags`/`sessionDetails[].clientCapabilityObjectKeys`, and full `sessionDetails[].clientCapabilities` snapshot from `initialize`).
+9. If a stale session header is used on non-`initialize` requests, call `lmToolsBridge.requestWorkspaceMCPServer` again with the current `Mcp-Session-Id` header to re-bind.
+10. Handshake result payload includes `mcpSessionId` for diagnostics/observability.
 
 ### Handshake Discovery Payload
 - A successful handshake includes `discovery` with:
@@ -104,9 +105,12 @@ User guidance:
 - `workspace not set`:
   - Run `lmToolsBridge.requestWorkspaceMCPServer` with `cwd` first.
 - stale or missing `Mcp-Session-Id`:
-  - `lmToolsBridge.requestWorkspaceMCPServer` can auto-recover by issuing a new session header.
-  - Manager also keeps a temporary alias from stale session id to recovered active session, so follow-up `resources/read` and `tools/call` can continue while client headers refresh.
-  - `/mcp/status` exposes alias observability fields: `aliasPolicy`, `aliasCount`, and `aliasDetails` (`staleSessionId -> activeSessionId`).
+  - Use `lmToolsBridge.requestWorkspaceMCPServer` to re-bind with the current `Mcp-Session-Id`.
+  - Unknown session on non-`initialize` requests returns `Unknown Mcp-Session-Id` and requires handshake.
+- `/mcp/log` request noise control:
+  - Request-level logs now keep only MCP business ingress (`POST /mcp`, `DELETE /mcp`).
+  - Observability endpoints and probes (`GET /mcp/status`, `GET /mcp/log`, `/.well-known/*`, and other non-`/mcp` HTTP requests) are not logged as `[request]` lines.
+  - `[rpc]` lines and business logs (`resources.list.*`, `tools.call.*`, `handshake.*`, `roots.list.*`) remain unchanged.
 - `roots/list` behavior:
   - `roots/list` is a server-initiated request (`server -> client`) from manager. Do not call it as a normal client request.
   - Declare `capabilities.roots` in `initialize` and handle manager-initiated requests/responses to enable roots sync.
@@ -205,10 +209,11 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 ### 端点
 - Manager MCP 端点(客户端入口): `http://127.0.0.1:47100/mcp`
 - Manager 状态端点(诊断): `http://127.0.0.1:47100/mcp/status`
+- Manager 日志端点: `http://127.0.0.1:47100/mcp/log`
 - Workspace MCP 端点(动态目标): `http://127.0.0.1:<runtime-port>/mcp`
 - 状态格式协商:
 - 浏览器请求(`Accept: text/html`)会返回人类可读状态页,并提供 `Refresh` 与 `Auto refresh (2s)` 控件; 自动刷新默认开启.
-- 状态页采用响应式布局(`<960px` 时按卡片行展示),并支持长文本单元格独立 `Expand/Collapse`.
+- 状态页采用响应式布局(`<960px` 时按卡片行展示),长文本默认完整多行展示.
 - 程序化请求默认返回 JSON; 可使用 `?format=json` 强制 JSON,`?format=html` 强制 HTML.
 
 ### Manager 与 Workspace MCP Server 的关系
@@ -225,9 +230,9 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 5. 使用模板和工具 `name` 组装 tool/schema URI(`lm-tools://tool/{name}`,`lm-tools://schema/{name}`).
 6. 使用 `lmToolsBridge.callTool` 或标准 `tools/call`.
 7. 如果客户端在 `initialize` 声明了 `capabilities.roots`,Manager 会在 `notifications/initialized` 和 `notifications/roots/list_changed` 后向客户端发起 `roots/list` 请求.
-8. roots 同步事件会写入 `/mcp/log`,并在 `/mcp/status` 中通过 `rootsPolicy`、`aliasPolicy`、`aliasCount`、`aliasDetails`、session roots 字段、自动推导的 capability 字段(`sessionDetails[].clientCapabilityFlags`,`sessionDetails[].clientCapabilityObjectKeys`)以及 `sessionDetails[].clientCapabilities`(来自 `initialize`) 展示摘要.
-9. 如果会话头丢失或过期,再次调用 `lmToolsBridge.requestWorkspaceMCPServer`. Manager 会自动恢复并返回新的 `Mcp-Session-Id`.
-10. 握手结果 payload 还会返回 `mcpSessionId` 便于诊断和观测,但响应头仍是权威会话来源.
+8. roots 同步事件会写入 `/mcp/log`,并在 `/mcp/status` 中通过 `rootsPolicy`、session roots 字段、自动推导的 capability 字段(`sessionDetails[].clientCapabilityFlags`,`sessionDetails[].clientCapabilityObjectKeys`)以及 `sessionDetails[].clientCapabilities`(来自 `initialize`) 展示摘要.
+9. 当 non-`initialize` 请求携带 stale session header 时,需要重新调用 `lmToolsBridge.requestWorkspaceMCPServer` 完成 re-bind.
+10. 握手结果 payload 会返回 `mcpSessionId` 便于诊断和观测.
 
 ### 握手 discovery 载荷
 - 成功握手会返回包含以下字段的 `discovery`:
@@ -292,9 +297,12 @@ url = "http://127.0.0.1:47100/mcp"
 - `workspace not set`:
   - 先调用 `lmToolsBridge.requestWorkspaceMCPServer` 并传 `cwd`.
 - stale or missing `Mcp-Session-Id`:
-  - `lmToolsBridge.requestWorkspaceMCPServer` 可自动恢复新 session header.
-  - Manager 会为旧 session id 建立临时 alias 到恢复后的 active session,客户端 header 刷新期间后续 `resources/read`/`tools/call` 仍可继续.
-  - `/mcp/status` 提供 alias 可观测字段: `aliasPolicy`、`aliasCount`、`aliasDetails`(`staleSessionId -> activeSessionId`).
+  - 使用 `lmToolsBridge.requestWorkspaceMCPServer` 按当前 `Mcp-Session-Id` 重新执行握手.
+  - non-`initialize` 请求遇到未知会话时会返回 `Unknown Mcp-Session-Id`,并要求先握手.
+- `/mcp/log` 请求降噪:
+  - request 级日志仅保留 MCP 业务入口(`POST /mcp`,`DELETE /mcp`).
+  - 观测与探测类请求(`GET /mcp/status`,`GET /mcp/log`,`/.well-known/*` 及其他非 `/mcp` HTTP 请求)不再输出 `[request]` 日志行.
+  - `[rpc]` 与业务日志(`resources.list.*`,`tools.call.*`,`handshake.*`,`roots.list.*`)保持不变.
 - `roots/list` 行为:
   - `roots/list` 是 manager 发起的 `server -> client` 请求,不要再作为普通 client 请求主动调用.
   - 在 `initialize` 声明 `capabilities.roots`,并处理 manager 发起的请求/响应,才能启用 roots 同步.

@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { renderStatusHtml } from './managerStatusPage';
 
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
 
@@ -165,24 +166,7 @@ interface ManagerStatusRootsPolicy {
   logging: '/mcp/log';
 }
 
-interface ManagerStatusAliasPolicy {
-  mode: 'stale-to-active';
-  createdOnHandshakeRecovery: true;
-  resolvedOnAnyRequest: true;
-  cleanedOnSessionPrune: true;
-  cleanedOnSessionDelete: true;
-  logging: '/mcp/log';
-}
-
-interface ManagerStatusAliasDetail {
-  staleSessionId: string;
-  activeSessionId: string;
-  activeSessionExists: boolean;
-  activeSessionLastSeen: number | null;
-  activeSessionLastSeenLocal: string | null;
-}
-
-interface ManagerStatusPayload {
+export interface ManagerStatusPayload {
   ok: true;
   version: string;
   now: number;
@@ -193,9 +177,6 @@ interface ManagerStatusPayload {
   sessions: number;
   sessionDetails: ManagerStatusSessionDetail[];
   rootsPolicy: ManagerStatusRootsPolicy;
-  aliasPolicy: ManagerStatusAliasPolicy;
-  aliasCount: number;
-  aliasDetails: ManagerStatusAliasDetail[];
   lastNonEmptyAt: number;
   lastNonEmptyAtIso: string;
   lastNonEmptyAtLocal: string;
@@ -237,19 +218,10 @@ const ROOTS_POLICY: ManagerStatusRootsPolicy = {
   source: 'client-capability-roots',
   logging: '/mcp/log',
 };
-const ALIAS_POLICY: ManagerStatusAliasPolicy = {
-  mode: 'stale-to-active',
-  createdOnHandshakeRecovery: true,
-  resolvedOnAnyRequest: true,
-  cleanedOnSessionPrune: true,
-  cleanedOnSessionDelete: true,
-  logging: '/mcp/log',
-};
 
 const instances = new Map<string, InstanceRecord>();
 const reservedPorts = new Map<string, { port: number; reservedAt: number }>();
 const sessions = new Map<string, SessionState>();
-const sessionAliases = new Map<string, string>();
 let lastNonEmptyAt = Date.now();
 let managerInternalRequestCounter = 0;
 
@@ -268,9 +240,6 @@ function formatLog(message: string): string {
 }
 
 function appendLog(message: string): void {
-  if (message.startsWith('[request] GET /mcp/log')) {
-    return;
-  }
   const line = formatLog(message);
   logBuffer.push(line);
   if (logBuffer.length > LOG_MAX_LINES) {
@@ -349,11 +318,6 @@ function pruneSessions(now: number): void {
       sessions.delete(sessionId);
     }
   }
-  for (const [staleSessionId, activeSessionId] of sessionAliases.entries()) {
-    if (!sessions.has(activeSessionId)) {
-      sessionAliases.delete(staleSessionId);
-    }
-  }
 }
 
 function getUsedPorts(now: number): Set<number> {
@@ -413,6 +377,16 @@ function getRequestUrl(req: http.IncomingMessage): URL | undefined {
   } catch {
     return undefined;
   }
+}
+
+function shouldLogHttpRequest(req: http.IncomingMessage, requestUrl: URL | undefined): boolean {
+  const method = (req.method ?? '').toUpperCase();
+  const pathname = requestUrl?.pathname ?? '';
+  const isMcpPath = pathname === '/mcp' || pathname === '/mcp/';
+  if (!isMcpPath) {
+    return false;
+  }
+  return method === 'POST' || method === 'DELETE';
 }
 
 function getSessionIdFromRequest(req: http.IncomingMessage): string | undefined {
@@ -686,14 +660,6 @@ function extractJsonRpcErrorMessage(error: unknown): string {
   return 'Unknown roots/list error.';
 }
 
-function formatRootsPolicySummary(policy: ManagerStatusRootsPolicy): string {
-  return `${policy.mode}, init=${String(policy.triggerOnInitialized)}, listChanged=${String(policy.triggerOnListChanged)}`;
-}
-
-function formatAliasPolicySummary(policy: ManagerStatusAliasPolicy): string {
-  return `${policy.mode}, recover=${String(policy.createdOnHandshakeRecovery)}, resolve=${String(policy.resolvedOnAnyRequest)}`;
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -803,18 +769,6 @@ function formatLocalDateTime(value: number): string {
 
 function buildManagerStatusPayload(now: number): ManagerStatusPayload {
   const alive = getAliveRecords();
-  const aliasDetails: ManagerStatusAliasDetail[] = Array.from(sessionAliases.entries())
-    .map(([staleSessionId, activeSessionId]) => {
-      const activeSession = sessions.get(activeSessionId);
-      return {
-        staleSessionId,
-        activeSessionId,
-        activeSessionExists: Boolean(activeSession),
-        activeSessionLastSeen: activeSession?.lastSeen ?? null,
-        activeSessionLastSeenLocal: activeSession?.lastSeen ? formatLocalDateTime(activeSession.lastSeen) : null,
-      };
-    })
-    .sort((a, b) => a.staleSessionId.localeCompare(b.staleSessionId));
   return {
     ok: true,
     version: getManagerVersion(),
@@ -868,9 +822,6 @@ function buildManagerStatusPayload(now: number): ManagerStatusPayload {
       lastRootsError: session.lastRootsError ?? null,
     })),
     rootsPolicy: ROOTS_POLICY,
-    aliasPolicy: ALIAS_POLICY,
-    aliasCount: aliasDetails.length,
-    aliasDetails,
     lastNonEmptyAt,
     lastNonEmptyAtIso: new Date(lastNonEmptyAt).toISOString(),
     lastNonEmptyAtLocal: formatLocalDateTime(lastNonEmptyAt),
@@ -892,720 +843,6 @@ function shouldServeHtmlStatus(
   }
   const accept = Array.isArray(acceptHeader) ? acceptHeader.join(',') : acceptHeader ?? '';
   return accept.toLowerCase().includes('text/html');
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function renderStatusHtml(payload: ManagerStatusPayload): string {
-  const initialPayloadBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
-  const noScriptSummary = [
-    `Version: ${payload.version}`,
-    `Now (local): ${payload.nowLocal}`,
-    `Active instances: ${payload.instances}`,
-    `Active sessions: ${payload.sessions}`,
-    `Roots policy: ${formatRootsPolicySummary(payload.rootsPolicy)}`,
-    `Alias policy: ${formatAliasPolicySummary(payload.aliasPolicy)}`,
-    `Alias mappings: ${payload.aliasCount}`,
-    `Manager uptime (s): ${payload.uptimeSec}`,
-    `Idle marker age (s): ${payload.lastNonEmptyAgeSec}`,
-  ]
-    .map((line) => `<li>${escapeHtml(line)}</li>`)
-    .join('');
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LM Tools Bridge Manager Status</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #f5f7fb;
-        --fg: #111827;
-        --card-bg: #ffffff;
-        --card-border: #e5e7eb;
-        --table-header-bg: #f3f4f6;
-        --row-border: #e5e7eb;
-        --muted: #6b7280;
-        --danger: #b91c1c;
-        --button-bg: #ffffff;
-        --button-border: #d1d5db;
-        --button-fg: #111827;
-        --label-fg: #374151;
-      }
-      body {
-        margin: 0;
-        font-family: "Segoe UI", Arial, sans-serif;
-        background: var(--bg);
-        color: var(--fg);
-      }
-      main {
-        max-width: min(96vw, 1680px);
-        margin: 16px auto;
-        padding: 0 14px 24px;
-      }
-      h1 {
-        margin: 0 0 12px;
-        font-size: 22px;
-      }
-      h2 {
-        margin: 0 0 8px;
-        font-size: 16px;
-      }
-      .toolbar {
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-        margin-bottom: 14px;
-      }
-      button {
-        border: 1px solid var(--button-border);
-        border-radius: 6px;
-        padding: 6px 10px;
-        background: var(--button-bg);
-        color: var(--button-fg);
-        cursor: pointer;
-      }
-      button:disabled {
-        opacity: 0.6;
-        cursor: default;
-      }
-      .toolbar label {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .muted {
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .error {
-        margin: 0 0 12px;
-        color: var(--danger);
-        font-size: 13px;
-      }
-      .card {
-        background: var(--card-bg);
-        border: 1px solid var(--card-border);
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 12px;
-      }
-      .table-wrap {
-        overflow-x: auto;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-      }
-      .responsive-table {
-        table-layout: auto;
-      }
-      th, td {
-        border-bottom: 1px solid var(--row-border);
-        padding: 8px 10px;
-        text-align: left;
-        vertical-align: top;
-      }
-      th {
-        background: var(--table-header-bg);
-        font-weight: 600;
-      }
-      .kv-key {
-        width: 220px;
-        color: var(--label-fg);
-      }
-      .long-cell {
-        max-width: 420px;
-        word-break: break-word;
-        overflow-wrap: anywhere;
-      }
-      .mono-cell {
-        font-family: Consolas, "Courier New", monospace;
-        white-space: pre-wrap;
-      }
-      .cell-content {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .cell-text {
-        white-space: pre-wrap;
-        word-break: break-word;
-        overflow-wrap: anywhere;
-      }
-      .cell-text--mono {
-        font-family: Consolas, "Courier New", monospace;
-      }
-      .cell-text--clamp {
-        display: -webkit-box;
-        -webkit-box-orient: vertical;
-        -webkit-line-clamp: 2;
-        overflow: hidden;
-      }
-      .cell-toggle {
-        align-self: flex-start;
-        padding: 2px 8px;
-        font-size: 12px;
-        line-height: 1.4;
-      }
-      noscript pre {
-        margin: 0;
-        white-space: pre-wrap;
-      }
-      @media (max-width: 1365px) {
-        main {
-          max-width: min(98vw, 1440px);
-        }
-        th, td {
-          padding: 7px 8px;
-          font-size: 12px;
-        }
-        .long-cell {
-          max-width: 320px;
-        }
-      }
-      @media (max-width: 959px) {
-        .table-wrap {
-          overflow: visible;
-        }
-        .responsive-table thead {
-          position: absolute;
-          width: 1px;
-          height: 1px;
-          padding: 0;
-          margin: -1px;
-          overflow: hidden;
-          clip: rect(0 0 0 0);
-          border: 0;
-        }
-        .responsive-table,
-        .responsive-table tbody,
-        .responsive-table tr,
-        .responsive-table td {
-          display: block;
-          width: 100%;
-          box-sizing: border-box;
-        }
-        .responsive-table tr {
-          background: var(--card-bg);
-          border: 1px solid var(--card-border);
-          border-radius: 8px;
-          margin: 0 0 10px;
-          overflow: hidden;
-        }
-        .responsive-table td {
-          border-bottom: 1px dashed var(--row-border);
-          padding: 7px 10px;
-        }
-        .responsive-table td:last-child {
-          border-bottom: 0;
-        }
-        .responsive-table td::before {
-          content: attr(data-label);
-          display: block;
-          margin-bottom: 4px;
-          color: var(--label-fg);
-          font-weight: 600;
-        }
-        .long-cell,
-        .mono-cell {
-          max-width: none;
-        }
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #111827;
-          --fg: #f3f4f6;
-          --card-bg: #0f172a;
-          --card-border: #334155;
-          --table-header-bg: #1e293b;
-          --row-border: #334155;
-          --muted: #94a3b8;
-          --button-bg: #1f2937;
-          --button-border: #475569;
-          --button-fg: #f3f4f6;
-          --label-fg: #cbd5e1;
-          --danger: #fca5a5;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>LM Tools Bridge Manager Status</h1>
-      <div class="toolbar">
-        <button id="refresh-button" type="button">Refresh</button>
-        <label><input id="auto-refresh" type="checkbox" checked /> Auto refresh (2s)</label>
-        <span id="updated-at" class="muted"></span>
-      </div>
-      <p id="error" class="error" hidden></p>
-
-      <section class="card">
-        <h2>Summary</h2>
-        <div class="table-wrap">
-          <table>
-            <tbody id="summary-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Instances</h2>
-        <p id="instances-empty" class="muted">No active instances.</p>
-        <div class="table-wrap">
-          <table id="instances-table" class="responsive-table" hidden>
-            <thead>
-              <tr>
-                <th>VS Code Instance Session ID</th>
-                <th>PID</th>
-                <th>Host:Port</th>
-                <th>Workspace</th>
-                <th>Last Seen (s)</th>
-                <th>Uptime (s)</th>
-              </tr>
-            </thead>
-            <tbody id="instances-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Session Aliases</h2>
-        <p id="aliases-empty" class="muted">No active alias mappings.</p>
-        <div class="table-wrap">
-          <table id="aliases-table" class="responsive-table" hidden>
-            <thead>
-              <tr>
-                <th>Stale MCP Session ID</th>
-                <th>Active MCP Session ID</th>
-                <th>Active Session Exists</th>
-                <th>Active Session Last Seen (local)</th>
-              </tr>
-            </thead>
-            <tbody id="aliases-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Sessions</h2>
-        <p id="sessions-empty" class="muted">No active sessions.</p>
-        <div class="table-wrap">
-          <table id="sessions-table" class="responsive-table" hidden>
-            <thead>
-              <tr>
-                <th>MCP Session ID</th>
-                <th>Resolve CWD</th>
-                <th>Workspace Flags</th>
-                <th>Target</th>
-                <th>Last Seen (s)</th>
-                <th>Offline Since</th>
-                <th>Roots</th>
-                <th>Capability Flags</th>
-                <th>Client Capabilities</th>
-              </tr>
-            </thead>
-            <tbody id="sessions-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <noscript>
-        <section class="card">
-          <h2>Summary (JavaScript disabled)</h2>
-          <p class="muted">Enable JavaScript to use Refresh and Auto refresh.</p>
-          <ul>${noScriptSummary}</ul>
-        </section>
-      </noscript>
-    </main>
-    <script>
-      (() => {
-        const STATUS_JSON_URL = '/mcp/status?format=json';
-        const AUTO_REFRESH_INTERVAL_MS = 2000;
-        const EXPANDABLE_TEXT_THRESHOLD = 80;
-        const refreshButton = document.getElementById('refresh-button');
-        const autoRefreshCheckbox = document.getElementById('auto-refresh');
-        const updatedAt = document.getElementById('updated-at');
-        const errorBox = document.getElementById('error');
-        const summaryBody = document.getElementById('summary-body');
-        const instancesTable = document.getElementById('instances-table');
-        const instancesBody = document.getElementById('instances-body');
-        const instancesEmpty = document.getElementById('instances-empty');
-        const aliasesTable = document.getElementById('aliases-table');
-        const aliasesBody = document.getElementById('aliases-body');
-        const aliasesEmpty = document.getElementById('aliases-empty');
-        const sessionsTable = document.getElementById('sessions-table');
-        const sessionsBody = document.getElementById('sessions-body');
-        const sessionsEmpty = document.getElementById('sessions-empty');
-        const initialPayload = JSON.parse(atob('${initialPayloadBase64}'));
-        let autoRefreshTimer;
-        let refreshInFlight = false;
-
-        function toText(value) {
-          if (value === null || value === undefined || value === '') {
-            return '-';
-          }
-          return String(value);
-        }
-
-        function shouldUseExpandableText(value) {
-          return value.length > EXPANDABLE_TEXT_THRESHOLD || value.indexOf('\\n') !== -1;
-        }
-
-        function appendCell(row, text, options) {
-          const cellOptions = options && typeof options === 'object' ? options : {};
-          const cell = document.createElement('td');
-          const valueText = toText(text);
-          if (cellOptions.className) {
-            cell.className = cellOptions.className;
-          }
-          if (cellOptions.label) {
-            cell.setAttribute('data-label', cellOptions.label);
-          }
-          const enableExpandable = Boolean(cellOptions.expandable) && shouldUseExpandableText(valueText);
-          if (!enableExpandable) {
-            cell.textContent = valueText;
-            row.appendChild(cell);
-            return;
-          }
-          const content = document.createElement('div');
-          content.className = 'cell-content';
-          const textBlock = document.createElement('div');
-          textBlock.className = 'cell-text cell-text--clamp';
-          if (typeof cellOptions.className === 'string' && cellOptions.className.indexOf('mono-cell') !== -1) {
-            textBlock.className += ' cell-text--mono';
-          }
-          textBlock.textContent = valueText;
-          const toggle = document.createElement('button');
-          toggle.type = 'button';
-          toggle.className = 'cell-toggle';
-          toggle.textContent = 'Expand';
-          toggle.setAttribute('aria-expanded', 'false');
-          toggle.addEventListener('click', () => {
-            const expanded = toggle.getAttribute('aria-expanded') === 'true';
-            if (expanded) {
-              toggle.setAttribute('aria-expanded', 'false');
-              toggle.textContent = 'Expand';
-              textBlock.classList.add('cell-text--clamp');
-            } else {
-              toggle.setAttribute('aria-expanded', 'true');
-              toggle.textContent = 'Collapse';
-              textBlock.classList.remove('cell-text--clamp');
-            }
-          });
-          content.appendChild(textBlock);
-          content.appendChild(toggle);
-          cell.appendChild(content);
-          row.appendChild(cell);
-        }
-
-        function renderSummary(payload) {
-          summaryBody.replaceChildren();
-          const rootsPolicy = payload && payload.rootsPolicy ? payload.rootsPolicy : undefined;
-          const rootsPolicyText = rootsPolicy
-            ? toText(rootsPolicy.mode)
-              + ', init=' + toText(rootsPolicy.triggerOnInitialized)
-              + ', listChanged=' + toText(rootsPolicy.triggerOnListChanged)
-            : '-';
-          const aliasPolicy = payload && payload.aliasPolicy ? payload.aliasPolicy : undefined;
-          const aliasPolicyText = aliasPolicy
-            ? toText(aliasPolicy.mode)
-              + ', recover=' + toText(aliasPolicy.createdOnHandshakeRecovery)
-              + ', resolve=' + toText(aliasPolicy.resolvedOnAnyRequest)
-            : '-';
-          const rows = [
-            ['Version', toText(payload.version)],
-            ['Now (local)', toText(payload.nowLocal)],
-            ['Active instances', toText(payload.instances)],
-            ['Active sessions', toText(payload.sessions)],
-            ['Roots policy', rootsPolicyText],
-            ['Alias policy', aliasPolicyText],
-            ['Alias mappings', toText(payload.aliasCount)],
-            ['Manager uptime (s)', toText(payload.uptimeSec)],
-            ['Idle marker age (s)', toText(payload.lastNonEmptyAgeSec)],
-          ];
-          for (const [key, value] of rows) {
-            const row = document.createElement('tr');
-            appendCell(row, key, { className: 'kv-key' });
-            appendCell(row, value, {});
-            summaryBody.appendChild(row);
-          }
-        }
-
-        function formatWorkspace(detail) {
-          const folders = Array.isArray(detail.workspaceFolders) ? detail.workspaceFolders : [];
-          const parts = [];
-          if (folders.length > 0) {
-            parts.push(folders.join(', '));
-          }
-          if (detail.workspaceFile) {
-            parts.push('file: ' + detail.workspaceFile);
-          }
-          if (parts.length === 0) {
-            return '-';
-          }
-          return parts.join(' | ');
-        }
-
-        function formatSessionTarget(detail) {
-          if (!detail || !detail.target) {
-            return '-';
-          }
-          return 'vscodeInstanceSessionId=' + detail.target.sessionId + ' @ ' + detail.target.host + ':' + detail.target.port;
-        }
-
-        function formatSessionRoots(detail) {
-          const parts = [];
-          parts.push('clientRootsSupported=' + toText(detail.clientRootsSupported));
-          parts.push('clientRootsListChangedSupported=' + toText(detail.clientRootsListChangedSupported));
-          if (detail.pendingRootsRequestId) {
-            parts.push('pending=' + toText(detail.pendingRootsRequestId));
-          }
-          if (detail.lastRootsSyncReason) {
-            parts.push('reason=' + toText(detail.lastRootsSyncReason));
-          }
-          if (detail.lastRootsCount !== null && detail.lastRootsCount !== undefined) {
-            parts.push('count=' + toText(detail.lastRootsCount));
-          }
-          if (detail.lastRootsSyncAtLocal) {
-            parts.push('at=' + toText(detail.lastRootsSyncAtLocal));
-          }
-          const preview = Array.isArray(detail.lastRootsPreview) ? detail.lastRootsPreview : [];
-          if (preview.length > 0) {
-            parts.push('preview=' + preview.join(' | '));
-          }
-          if (detail.lastRootsError) {
-            parts.push('error=' + toText(detail.lastRootsError));
-          }
-          return parts.join(', ');
-        }
-
-        function formatSessionCapabilityFlags(detail) {
-          const parts = [];
-          const flags = detail
-            && detail.clientCapabilityFlags
-            && typeof detail.clientCapabilityFlags === 'object'
-            && !Array.isArray(detail.clientCapabilityFlags)
-            ? detail.clientCapabilityFlags
-            : {};
-          const flagKeys = Object.keys(flags).sort();
-          for (const key of flagKeys) {
-            parts.push(key + '=' + toText(flags[key]));
-          }
-          const objectKeysMap = detail
-            && detail.clientCapabilityObjectKeys
-            && typeof detail.clientCapabilityObjectKeys === 'object'
-            && !Array.isArray(detail.clientCapabilityObjectKeys)
-            ? detail.clientCapabilityObjectKeys
-            : {};
-          const capabilityKeys = Object.keys(objectKeysMap).sort();
-          for (const key of capabilityKeys) {
-            const keys = Array.isArray(objectKeysMap[key]) ? objectKeysMap[key] : [];
-            if (keys.length > 0) {
-              parts.push(key + '.keys=' + keys.join('|'));
-            }
-          }
-          return parts.length > 0 ? parts.join(', ') : '-';
-        }
-
-        function formatSessionCapabilities(detail) {
-          const capabilities = detail
-            && detail.clientCapabilities
-            && typeof detail.clientCapabilities === 'object'
-            && !Array.isArray(detail.clientCapabilities)
-            ? detail.clientCapabilities
-            : {};
-          try {
-            return JSON.stringify(capabilities, null, 2);
-          } catch {
-            return '{}';
-          }
-        }
-
-        function renderInstances(payload) {
-          instancesBody.replaceChildren();
-          const details = Array.isArray(payload.instanceDetails) ? payload.instanceDetails : [];
-          if (details.length === 0) {
-            instancesTable.hidden = true;
-            instancesEmpty.hidden = false;
-            return;
-          }
-          instancesEmpty.hidden = true;
-          instancesTable.hidden = false;
-          for (const detail of details) {
-            const row = document.createElement('tr');
-            appendCell(row, toText(detail.sessionId), {
-              label: 'VS Code Instance Session ID',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, toText(detail.pid), { label: 'PID' });
-            appendCell(row, toText(detail.host) + ':' + toText(detail.port), { label: 'Host:Port' });
-            appendCell(row, formatWorkspace(detail), {
-              label: 'Workspace',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, toText(detail.lastSeenAgeSec), { label: 'Last Seen (s)' });
-            appendCell(row, toText(detail.uptimeSec), { label: 'Uptime (s)' });
-            instancesBody.appendChild(row);
-          }
-        }
-
-        function renderAliases(payload) {
-          aliasesBody.replaceChildren();
-          const details = Array.isArray(payload.aliasDetails) ? payload.aliasDetails : [];
-          if (details.length === 0) {
-            aliasesTable.hidden = true;
-            aliasesEmpty.hidden = false;
-            return;
-          }
-          aliasesEmpty.hidden = true;
-          aliasesTable.hidden = false;
-          for (const detail of details) {
-            const row = document.createElement('tr');
-            appendCell(row, toText(detail.staleSessionId), {
-              label: 'Stale MCP Session ID',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, toText(detail.activeSessionId), {
-              label: 'Active MCP Session ID',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, toText(detail.activeSessionExists), { label: 'Active Session Exists' });
-            appendCell(row, detail.activeSessionLastSeenLocal ? detail.activeSessionLastSeenLocal : '-', {
-              label: 'Active Session Last Seen (local)',
-            });
-            aliasesBody.appendChild(row);
-          }
-        }
-
-        function renderSessions(payload) {
-          sessionsBody.replaceChildren();
-          const details = Array.isArray(payload.sessionDetails) ? payload.sessionDetails : [];
-          if (details.length === 0) {
-            sessionsTable.hidden = true;
-            sessionsEmpty.hidden = false;
-            return;
-          }
-          sessionsEmpty.hidden = true;
-          sessionsTable.hidden = false;
-          for (const detail of details) {
-            const row = document.createElement('tr');
-            appendCell(row, toText(detail.sessionId), {
-              label: 'MCP Session ID',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, toText(detail.resolveCwd), {
-              label: 'Resolve CWD',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, 'set=' + toText(detail.workspaceSetExplicitly) + ', matched=' + toText(detail.workspaceMatched), {
-              label: 'Workspace Flags',
-            });
-            appendCell(row, formatSessionTarget(detail), {
-              label: 'Target',
-              className: 'long-cell',
-            });
-            appendCell(row, toText(detail.lastSeenAgeSec), { label: 'Last Seen (s)' });
-            appendCell(row, detail.offlineSinceLocal ? detail.offlineSinceLocal : '-', { label: 'Offline Since' });
-            appendCell(row, formatSessionRoots(detail), {
-              label: 'Roots',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, formatSessionCapabilityFlags(detail), {
-              label: 'Capability Flags',
-              className: 'long-cell',
-              expandable: true,
-            });
-            appendCell(row, formatSessionCapabilities(detail), {
-              label: 'Client Capabilities',
-              className: 'long-cell mono-cell',
-              expandable: true,
-            });
-            sessionsBody.appendChild(row);
-          }
-        }
-
-        function renderPayload(payload) {
-          renderSummary(payload);
-          renderInstances(payload);
-          renderAliases(payload);
-          renderSessions(payload);
-          updatedAt.textContent = 'Last updated: ' + toText(payload.nowLocal);
-        }
-
-        async function refreshStatus(showError) {
-          if (refreshInFlight) {
-            return;
-          }
-          refreshInFlight = true;
-          refreshButton.disabled = true;
-          try {
-            const response = await fetch(STATUS_JSON_URL, {
-              method: 'GET',
-              headers: { Accept: 'application/json' },
-              cache: 'no-store',
-            });
-            if (!response.ok) {
-              throw new Error('HTTP ' + response.status);
-            }
-            const payload = await response.json();
-            renderPayload(payload);
-            errorBox.hidden = true;
-            errorBox.textContent = '';
-          } catch (error) {
-            if (showError) {
-              errorBox.hidden = false;
-              errorBox.textContent = 'Failed to refresh status: ' + (error instanceof Error ? error.message : String(error));
-            }
-          } finally {
-            refreshButton.disabled = false;
-            refreshInFlight = false;
-          }
-        }
-
-        function setAutoRefresh(enabled) {
-          if (autoRefreshTimer !== undefined) {
-            clearInterval(autoRefreshTimer);
-            autoRefreshTimer = undefined;
-          }
-          if (enabled) {
-            autoRefreshTimer = setInterval(() => {
-              void refreshStatus(false);
-            }, AUTO_REFRESH_INTERVAL_MS);
-          }
-        }
-
-        refreshButton.addEventListener('click', () => {
-          void refreshStatus(true);
-        });
-        autoRefreshCheckbox.addEventListener('change', () => {
-          setAutoRefresh(autoRefreshCheckbox.checked);
-        });
-
-        renderPayload(initialPayload);
-        autoRefreshCheckbox.checked = true;
-        setAutoRefresh(true);
-      })();
-    </script>
-  </body>
-</html>`;
 }
 
 function respondJsonRpcResult(
@@ -2364,35 +1601,14 @@ function getSession(sessionId: string): SessionState | undefined {
   return sessions.get(sessionId);
 }
 
-function removeSessionAliasEntriesForSession(sessionId: string): void {
-  for (const [staleSessionId, activeSessionId] of sessionAliases.entries()) {
-    if (staleSessionId === sessionId || activeSessionId === sessionId) {
-      sessionAliases.delete(staleSessionId);
-    }
-  }
-}
-
 function resolveSessionByHeaderId(sessionId: string): SessionState | undefined {
-  const direct = getSession(sessionId);
-  if (direct) {
-    return direct;
-  }
-  const activeSessionId = sessionAliases.get(sessionId);
-  if (!activeSessionId) {
-    return undefined;
-  }
-  const aliased = getSession(activeSessionId);
-  if (!aliased) {
-    sessionAliases.delete(sessionId);
-    return undefined;
-  }
-  appendLog(`[session.alias.hit] stale=${sessionId} active=${activeSessionId}`);
-  return aliased;
+  return getSession(sessionId);
 }
 
-function createAndRegisterSession(): SessionState {
-  let sessionId = generateSessionId();
-  while (sessions.has(sessionId)) {
+function createAndRegisterSession(preferredSessionId?: string): SessionState {
+  const preferred = typeof preferredSessionId === 'string' ? preferredSessionId.trim() : '';
+  let sessionId = preferred.length > 0 ? preferred : generateSessionId();
+  while (sessions.has(sessionId) || sessionId.length === 0) {
     sessionId = generateSessionId();
   }
   const session = createSessionState(sessionId);
@@ -3120,7 +2336,9 @@ async function handleMcpHttpRequest(
   res: http.ServerResponse,
 ): Promise<void> {
   const requestUrl = getRequestUrl(req);
-  appendLog(`[request] ${req.method ?? 'UNKNOWN'} ${req.url ?? ''} session=${String(getSessionIdFromRequest(req) ?? '')} accept=${String(req.headers.accept ?? '')}`);
+  if (shouldLogHttpRequest(req, requestUrl)) {
+    appendLog(`[request] ${req.method ?? 'UNKNOWN'} ${req.url ?? ''} session=${String(getSessionIdFromRequest(req) ?? '')} accept=${String(req.headers.accept ?? '')}`);
+  }
   if (!requestUrl) {
     respondJson(res, 400, { error: 'Bad Request' });
     return;
@@ -3160,13 +2378,7 @@ async function handleMcpHttpRequest(
     && req.method === 'DELETE') {
     const requestedSessionId = getSessionIdFromRequest(req);
     if (requestedSessionId) {
-      const resolved = resolveSessionByHeaderId(requestedSessionId);
-      const activeSessionId = resolved?.sessionId ?? requestedSessionId;
-      const existed = sessions.delete(activeSessionId);
-      removeSessionAliasEntriesForSession(activeSessionId);
-      if (requestedSessionId !== activeSessionId) {
-        sessionAliases.delete(requestedSessionId);
-      }
+      const existed = sessions.delete(requestedSessionId);
       respondJson(
         res,
         200,
@@ -3174,7 +2386,6 @@ async function handleMcpHttpRequest(
           ok: true,
           deleted: existed,
           sessionId: requestedSessionId,
-          resolvedSessionId: activeSessionId !== requestedSessionId ? activeSessionId : undefined,
         },
       );
       return;
@@ -3258,21 +2469,13 @@ async function handleMcpHttpRequest(
     return;
   }
   const sessionId = getSessionIdFromRequest(req);
-  let session = sessionId ? resolveSessionByHeaderId(sessionId) : undefined;
+  if (!sessionId) {
+    respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Missing Mcp-Session-Id.');
+    return;
+  }
+  let session = resolveSessionByHeaderId(sessionId);
   if (!session) {
-    if (isWorkspaceHandshakeRpcMessage(rpcMessage)) {
-      const recoveredSession = createAndRegisterSession();
-      session = recoveredSession;
-      res.setHeader('Mcp-Session-Id', recoveredSession.sessionId);
-      if (sessionId) {
-        sessionAliases.set(sessionId, recoveredSession.sessionId);
-        appendLog(`[session.alias.set] stale=${sessionId} active=${recoveredSession.sessionId}`);
-      }
-      appendLog(`[session.recover] created=${recoveredSession.sessionId} reason=${sessionId ? 'unknown' : 'missing'}`);
-    } else if (!sessionId) {
-      respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Missing Mcp-Session-Id.');
-      return;
-    } else {
+    if (!isWorkspaceHandshakeRpcMessage(rpcMessage)) {
       respondJsonRpcError(
         res,
         400,
@@ -3282,9 +2485,8 @@ async function handleMcpHttpRequest(
       );
       return;
     }
-  }
-  if (sessionId && session.sessionId !== sessionId) {
-    res.setHeader('Mcp-Session-Id', session.sessionId);
+    session = createAndRegisterSession(sessionId);
+    appendLog(`[session.recover] created=${session.sessionId} reason=unknown`);
   }
   touchSession(session);
   if (isJsonRpcResponseMessage(rpcMessage)) {

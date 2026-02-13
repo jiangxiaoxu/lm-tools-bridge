@@ -689,11 +689,19 @@ async function startManagerProcess(): Promise<void> {
   }
   const pipeName = getManagerPipeName();
   const managerHttpPort = requireDeps().getConfigValue<number>(CONFIG_MANAGER_HTTP_PORT, DEFAULT_MANAGER_HTTP_PORT);
-  const child = spawn(process.execPath, [managerPath, '--pipe', pipeName, '--http-port', String(managerHttpPort)], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+  const child = spawn(
+    process.execPath,
+    [
+      managerPath,
+      '--pipe', pipeName,
+      '--http-port', String(managerHttpPort),
+    ],
+    {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    },
+  );
   child.unref();
 }
 

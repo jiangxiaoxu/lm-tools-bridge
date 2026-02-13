@@ -17,15 +17,19 @@ Maintenance rule:
 - Updated `lm_getDiagnostics` default `maxResults` from `500` to `100`.
 - Updated `lm_getDiagnostics` input behavior: unknown fields are ignored, `severities` now matches case-insensitively with normalization dedupe, and `maxResults` remains strict (`integer >= 1`).
 - Updated documentation (`README.md`, `face-ai-report.md`) to match the new diagnostics input contract and failure cases.
-- Improved manager session recovery for stale `Mcp-Session-Id`: handshake recovery now creates a temporary alias (`stale -> active`) so follow-up `resources/read` and `tools/call` can continue before client header refresh completes.
-- Added `mcpSessionId` to `lmToolsBridge.requestWorkspaceMCPServer` payload for session observability (response header remains authoritative).
+- Refactored manager session strategy to single-source IDs for handshake recovery: when `requestWorkspaceMCPServer` sees an unknown session, manager now creates the session using the client-provided `Mcp-Session-Id` instead of generating a replacement id.
+- Removed manager `session alias` and `session archive` compatibility layers, including stale-to-active mapping, archive persistence/rebind paths, and related status observability fields.
+- Removed `lmToolsBridge.manager.sessionArchiveAutoRebind` setting and manager startup flags `--state-dir` / `--session-archive-auto-rebind`.
+- Updated session header behavior: only `initialize` responses set `Mcp-Session-Id`; non-`initialize` responses no longer set this header.
+- Kept unknown-session behavior strict for non-handshake requests: manager returns `Unknown Mcp-Session-Id` and requires handshake.
+- Handshake result payload continues to include `mcpSessionId` for diagnostics.
 - Standardized roots behavior to MCP client-capability direction: manager now issues server-initiated `roots/list` requests after `notifications/initialized` and `notifications/roots/list_changed` when client declares `capabilities.roots`.
 - Added roots observability fields to `/mcp/status` (`rootsPolicy` and per-session roots sync state) and roots lifecycle logs (`roots.capability`, `roots.list.request/result/error/skip/timeout`) to `/mcp/log`.
 - Added detailed client capability snapshot to `/mcp/status` as `sessionDetails[].clientCapabilities` (captured from `initialize.params.capabilities`) for easier roots/debug compatibility diagnosis.
 - Replaced hardcoded per-capability status fields with auto-derived capability summaries in `/mcp/status`: `sessionDetails[].clientCapabilityFlags` and `sessionDetails[].clientCapabilityObjectKeys`.
 - Clarified `/mcp/status` HTML session labels: `Instances` now shows `VS Code Instance Session ID`, and `Sessions` now shows `MCP Session ID`; session target text now prefixes `vscodeInstanceSessionId=...` to reduce ambiguity.
-- Refreshed `/mcp/status` HTML readability: auto refresh is now enabled by default, layout is responsive (card-style rows on small screens), and long cell values support per-cell `Expand/Collapse`.
-- Added MCP session-alias observability to `/mcp/status`: top-level `aliasPolicy`/`aliasCount`/`aliasDetails`, plus an HTML `Session Aliases` section for stale-to-active mapping visibility.
+- Updated `/mcp/status` long-cell behavior: removed per-cell `Expand/Collapse` controls, and long values now render as full multi-line text by default.
+- Reduced manager `/mcp/log` request noise: `[request]` lines now only log MCP business ingress (`POST /mcp`, `DELETE /mcp`), while observability/probe requests (`GET /mcp/status`, `GET /mcp/log`, `/.well-known/*`, and other non-`/mcp` requests) are excluded.
 - Breaking change: removed non-standard client-driven `roots/list` behavior on manager; direct client calls now return `MethodNotFound`.
 
 ### 中文
@@ -37,15 +41,19 @@ Maintenance rule:
 - 将 `lm_getDiagnostics` 默认 `maxResults` 从 `500` 调整为 `100`.
 - 调整 `lm_getDiagnostics` 输入行为: 未定义字段改为忽略,`severities` 改为大小写不敏感并在归一化后去重,`maxResults` 继续保持严格校验(必须为 >= 1 的整数).
 - 同步更新文档(`README.md`,`face-ai-report.md`),对齐新的诊断工具输入约定与失败路径.
-- 提升 manager 对 stale `Mcp-Session-Id` 的恢复能力: 握手恢复后会建立临时 alias(`stale -> active`),客户端 header 刷新前后续 `resources/read`/`tools/call` 可继续成功.
-- 在 `lmToolsBridge.requestWorkspaceMCPServer` payload 中新增 `mcpSessionId` 便于会话观测(响应头仍是权威来源).
+- 将 manager 会话策略重构为单一 ID 来源: `requestWorkspaceMCPServer` 遇到未知会话时,直接使用客户端传入的 `Mcp-Session-Id` 建立会话,不再生成替代 id.
+- 移除 manager 的 `session alias` 与 `session archive` 兼容层,包括 stale->active 映射、archive 持久化/rebind 路径及其状态观测字段.
+- 移除 `lmToolsBridge.manager.sessionArchiveAutoRebind` 配置项,并删除 manager 启动参数 `--state-dir` 与 `--session-archive-auto-rebind`.
+- 调整会话响应头行为: 仅 `initialize` 响应返回 `Mcp-Session-Id`; 非 `initialize` 响应不再返回该 header.
+- 保持 non-handshake 请求的未知会话严格错误行为: 返回 `Unknown Mcp-Session-Id` 并要求先握手.
+- 握手结果 payload 继续返回 `mcpSessionId` 用于诊断观测.
 - 将 roots 行为标准化为 MCP 客户端能力方向: 当客户端在 `initialize` 声明 `capabilities.roots` 时,manager 会在 `notifications/initialized` 和 `notifications/roots/list_changed` 后发起 `server -> client` 的 `roots/list` 请求.
 - 为 roots 同步新增可观测性: `/mcp/status` 增加 `rootsPolicy` 与 session roots 同步字段,`/mcp/log` 增加 `roots.capability` 与 `roots.list.request/result/error/skip/timeout` 日志.
 - 为 `/mcp/status` 增加详细客户端能力快照 `sessionDetails[].clientCapabilities`(来自 `initialize.params.capabilities`),用于更直观地定位 roots/兼容性问题.
 - 将 `/mcp/status` 中按 capability 逐项硬编码的字段改为自动推导汇总: `sessionDetails[].clientCapabilityFlags` 与 `sessionDetails[].clientCapabilityObjectKeys`.
 - 明确 `/mcp/status` HTML 中的 session 标识: `Instances` 表头改为 `VS Code Instance Session ID`,`Sessions` 表头改为 `MCP Session ID`,并在 `Target` 文本前缀 `vscodeInstanceSessionId=...` 以减少歧义.
-- 提升 `/mcp/status` HTML 可读性: 自动刷新改为默认开启,布局升级为响应式(小屏卡片化行展示),并为长文本单元格增加独立 `Expand/Collapse`.
-- 为 `/mcp/status` 增加 MCP session alias 可观测性: 顶层新增 `aliasPolicy`/`aliasCount`/`aliasDetails`,并在 HTML 页面新增 `Session Aliases` 区块展示 stale->active 映射.
+- 调整 `/mcp/status` 长文本行为: 移除单元格 `Expand/Collapse` 交互,长文本默认完整多行展示.
+- 降低 manager `/mcp/log` 的 request 噪声: `[request]` 日志现在仅记录 MCP 业务入口(`POST /mcp`,`DELETE /mcp`),观测与探测请求(`GET /mcp/status`,`GET /mcp/log`,`/.well-known/*` 及其他非 `/mcp` 请求)不再输出 request 行.
 - Breaking change: 移除 manager 上非标准的 client 主动 `roots/list` 语义; 直接调用该方法现在返回 `MethodNotFound`.
 
 ## [1.0.83] - 2026-02-12

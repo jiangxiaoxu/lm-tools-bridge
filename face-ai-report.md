@@ -23,7 +23,7 @@ Output: 自定义工具固定返回 content.text + structuredContent; 上游 lm.
 
 Flow: Manager handshake 与转发
 Entry: lmToolsBridge.requestWorkspaceMCPServer
-Path: handleMcpHttpRequest -> resolveSessionByHeaderId -> (recover+alias on handshake when needed) -> handleSessionMessage -> refreshSessionTarget -> checkTargetHealth -> forwardMcpMessage
+Path: handleMcpHttpRequest -> resolveSessionByHeaderId -> (if unknown + handshake: create session with request header id) -> handleSessionMessage -> refreshSessionTarget -> checkTargetHealth -> forwardMcpMessage
 Output: 绑定成功返回 target, 失败返回错误码
 
 Flow: Roots 标准同步(client capability)
@@ -34,7 +34,12 @@ Output: roots 同步结果写入 /mcp/log,并更新 /mcp/status roots 字段; se
 Flow: Manager 状态页渲染
 Entry: GET /mcp/status (Accept: text/html)
 Path: handleMcpHttpRequest -> buildManagerStatusPayload -> renderStatusHtml
-Output: 默认开启 2s 自动刷新,小屏响应式卡片行展示,长文本单元格支持独立 Expand/Collapse,并展示 session alias 观测区块
+Output: 默认开启 2s 自动刷新,小屏响应式卡片行展示,长文本默认完整多行展示
+
+Flow: Manager 请求日志降噪
+Entry: Any HTTP request to manager
+Path: handleMcpHttpRequest -> shouldLogHttpRequest -> appendLog
+Output: `[request]` 仅记录 `/mcp` 的 `POST/DELETE`; `/mcp/status`、`/mcp/log`、`/.well-known/*` 和其他非 `/mcp` 请求不输出 request 行
 
 Flow: 自定义搜索工具
 Entry: lm_findFiles / lm_findTextInFiles
@@ -108,15 +113,9 @@ Log: "No matching VS Code instance", "Resolved MCP server is offline"
 
 Task: Unknown Mcp-Session-Id 持续出现
 Entry: resources/read or tools/call with stale session header
-Path: handleMcpHttpRequest -> resolveSessionByHeaderId -> sessionAliases (recover alias only via handshake path)
+Path: handleMcpHttpRequest -> resolveSessionByHeaderId -> (if unknown and non-handshake: return error) / (if unknown and handshake: create session by request header id)
 Files: src/manager.ts
-Log: "Unknown Mcp-Session-Id", "session.recover", "session.alias.hit"
-
-Task: 查看 session alias 映射状态
-Entry: GET /mcp/status
-Path: buildManagerStatusPayload(aliasPolicy/aliasCount/aliasDetails) -> renderStatusHtml(Session Aliases)
-Files: src/manager.ts
-Log: "session.alias.set", "session.alias.hit"
+Log: "Unknown Mcp-Session-Id", "session.recover"
 
 Task: roots 同步未触发或无结果
 Entry: notifications/initialized / notifications/roots/list_changed / response-only POST
@@ -246,9 +245,9 @@ Invariant: `lm_getDiagnostics` 的 `maxResults` 在全局诊断级别截断,并�
 Invariant: `copilot_findFiles` 与 `copilot_findTextInFiles` 属于 built-in disabled,必须始终不可 exposed/enabled/call.
 Invariant: `/mcp/status` 的 `sessionDetails[].clientCapabilities` 必须反映 initialize 入参中的 `params.capabilities` 快照(用于观测,不改变鉴权/路由决策).
 Invariant: `/mcp/status` 还需输出 capability 自动汇总字段(`clientCapabilityFlags`,`clientCapabilityObjectKeys`),避免按 capability 名称硬编码状态字段.
-Invariant: `/mcp/status` 还需输出 alias 可观测字段(`aliasPolicy`,`aliasCount`,`aliasDetails`),用于诊断 stale->active 会话映射.
+Invariant: manager request 日志按 allowlist 输出: 仅 `/mcp` 的 `POST/DELETE` 记录为 `[request]`; 观测与探测类请求不写入 request 行.
 Invariant: `/mcp/status` HTML 页自动刷新复选框默认选中,并在初次渲染后启动 2 秒轮询.
-Invariant: `/mcp/status` HTML 在 `<960px` 断点下切换为卡片化行展示,并支持长文本单元格独立 Expand/Collapse.
+Invariant: `/mcp/status` HTML 在 `<960px` 断点下切换为卡片化行展示,长文本单元格默认完整多行展示.
 Invariant: lm_clangd_* tools are hard-disabled and must never be exposed in tools/list.
 Invariant: clangd 自动启动最多触发一次 in-flight, 并发请求共享同一启动流程.
 Invariant: `lm_clangd_lspRequest` 只允许 allowlist method.
@@ -307,11 +306,7 @@ Result: ERROR_NO_MATCH
 Code: refreshSessionTarget
 
 Case: stale session id 通过握手恢复后继续调用
-Result: alias 命中后继续成功; 响应头回写 active session id
-Code: handleMcpHttpRequest -> resolveSessionByHeaderId -> sessionAliases
-
-Case: stale session id 且未经过握手恢复
-Result: Unknown Mcp-Session-Id
+Result: 使用请求头的 `Mcp-Session-Id` 直接建会话并继续握手
 Code: handleMcpHttpRequest
 
 Case: client 主动调用 roots/list
@@ -384,6 +379,7 @@ Seed: applyInputDefaultsToToolInput | Use: 输入 defaults 注入
 Seed: lmToolsBridge.requestWorkspaceMCPServer | Use: Manager handshake
 Seed: lmToolsBridge.callTool | Use: Manager 直通 tool
 Seed: /mcp/status | Use: Manager 运行状态
+Seed: shouldLogHttpRequest | Use: manager request 日志过滤入口
 Seed: dispatchRootsListRequest | Use: server 发起 roots/list 入口
 Seed: handleIncomingClientResponse | Use: 处理 roots/list 客户端响应
 Seed: notifications/roots/list_changed | Use: roots 变更触发入口

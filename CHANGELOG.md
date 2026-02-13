@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.87] - 2026-02-13
+
+### English
+
+#### Changed
+- Refactored manager status handling into dedicated modules: status types moved to `managerStatusTypes.ts`, payload assembly moved to `managerStatusService.ts`, and `manager.ts` now keeps only status route orchestration.
+- Refactored manager log handling into dedicated modules: logger state/write flow moved to `managerLogger.ts`, `/mcp/log` page rendering moved to `managerLogPage.ts`, and `manager.ts` now uses injected handlers.
+- Kept `/mcp/status` and `/mcp/log` response contracts unchanged while reducing `manager.ts` responsibility and improving maintainability.
+
+### 中文
+
+#### 变更
+- 重构 manager status 模块: 状态类型迁移到 `managerStatusTypes.ts`, payload 组装迁移到 `managerStatusService.ts`, `manager.ts` 仅保留 status 路由编排职责.
+- 重构 manager log 模块: 日志状态与写入流程迁移到 `managerLogger.ts`, `/mcp/log` 页面渲染迁移到 `managerLogPage.ts`, `manager.ts` 改为通过注入处理器调用.
+- 保持 `/mcp/status` 与 `/mcp/log` 对外响应契约不变, 同时降低 `manager.ts` 职责并提升可维护性.
+
 ## [1.0.86] - 2026-02-13
 
 ### English

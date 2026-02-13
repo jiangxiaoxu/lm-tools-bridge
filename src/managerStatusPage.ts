@@ -1,4 +1,45 @@
-import type { ManagerStatusPayload } from './manager';
+import * as http from 'node:http';
+import type { ManagerStatusBuildInput, ManagerStatusPayload } from './managerStatusTypes';
+import { buildManagerStatusPayload } from './managerStatusService';
+
+export function shouldServeHtmlStatus(
+  requestUrl: URL,
+  acceptHeader: string | string[] | undefined,
+): boolean {
+  const format = requestUrl.searchParams.get('format')?.trim().toLowerCase();
+  if (format === 'html') {
+    return true;
+  }
+  if (format === 'json') {
+    return false;
+  }
+  const accept = Array.isArray(acceptHeader) ? acceptHeader.join(',') : acceptHeader ?? '';
+  return accept.toLowerCase().includes('text/html');
+}
+
+export function handleManagerStatusRequest(args: {
+  req: http.IncomingMessage;
+  res: http.ServerResponse;
+  requestUrl: URL;
+  now: number;
+  input: Omit<ManagerStatusBuildInput, 'now'>;
+  respondJson: (res: http.ServerResponse, status: number, payload: unknown) => void;
+}): boolean {
+  const { req, res, requestUrl, now, input, respondJson } = args;
+  if ((requestUrl.pathname !== '/mcp/status' && requestUrl.pathname !== '/mcp/status/') || req.method !== 'GET') {
+    return false;
+  }
+  const payload = buildManagerStatusPayload({ ...input, now });
+  if (shouldServeHtmlStatus(requestUrl, req.headers.accept)) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(renderStatusHtml(payload));
+    return true;
+  }
+  respondJson(res, 200, payload);
+  return true;
+}
 
 function formatRootsPolicySummary(policy: ManagerStatusPayload['rootsPolicy']): string {
   return `${policy.mode}, init=${String(policy.triggerOnInitialized)}, listChanged=${String(policy.triggerOnListChanged)}`;

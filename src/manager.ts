@@ -3,7 +3,12 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { renderStatusHtml } from './managerStatusPage';
+import { handleManagerLogRequest } from './managerLogPage';
+import { createManagerLogger } from './managerLogger';
+import {
+  handleManagerStatusRequest,
+} from './managerStatusPage';
+import type { ManagerStatusRootsPolicy } from './managerStatusTypes';
 
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
 
@@ -112,78 +117,6 @@ interface HandshakeDiscoveryPayload {
   issues: HandshakeDiscoveryIssue[];
 }
 
-interface ManagerStatusInstanceDetail {
-  sessionId: string;
-  pid: number;
-  workspaceFolders: string[];
-  workspaceFile: string | null;
-  host: string;
-  port: number;
-  lastSeen: number;
-  lastSeenLocal: string;
-  lastSeenAgeSec: number;
-  startedAt: number;
-  startedAtLocal: string;
-  uptimeSec: number;
-}
-
-interface ManagerStatusSessionTarget {
-  sessionId: string;
-  host: string;
-  port: number;
-}
-
-interface ManagerStatusSessionDetail {
-  sessionId: string;
-  resolveCwd: string;
-  workspaceSetExplicitly: boolean;
-  workspaceMatched: boolean;
-  target: ManagerStatusSessionTarget | null;
-  lastSeen: number;
-  lastSeenLocal: string;
-  lastSeenAgeSec: number;
-  offlineSince: number | null;
-  offlineSinceLocal: string | null;
-  clientRootsSupported: boolean;
-  clientRootsListChangedSupported: boolean;
-  clientCapabilityFlags: Record<string, boolean>;
-  clientCapabilityObjectKeys: Record<string, string[]>;
-  clientCapabilities: Record<string, unknown>;
-  pendingRootsRequestId: string | null;
-  lastRootsSyncAt: number | null;
-  lastRootsSyncAtLocal: string | null;
-  lastRootsSyncReason: RootsSyncReason | null;
-  lastRootsCount: number | null;
-  lastRootsPreview: string[];
-  lastRootsError: string | null;
-}
-
-interface ManagerStatusRootsPolicy {
-  mode: 'server-requests-client';
-  triggerOnInitialized: boolean;
-  triggerOnListChanged: boolean;
-  source: 'client-capability-roots';
-  logging: '/mcp/log';
-}
-
-export interface ManagerStatusPayload {
-  ok: true;
-  version: string;
-  now: number;
-  nowIso: string;
-  nowLocal: string;
-  instances: number;
-  instanceDetails: ManagerStatusInstanceDetail[];
-  sessions: number;
-  sessionDetails: ManagerStatusSessionDetail[];
-  rootsPolicy: ManagerStatusRootsPolicy;
-  lastNonEmptyAt: number;
-  lastNonEmptyAtIso: string;
-  lastNonEmptyAtLocal: string;
-  lastNonEmptyAgeSec: number;
-  uptimeSec: number;
-}
-
 const TTL_MS = 2500;
 const PRUNE_INTERVAL_MS = 500;
 const IDLE_GRACE_MS = 10000;
@@ -208,9 +141,6 @@ const ERROR_MANAGER_UNREACHABLE = -32003;
 const ERROR_NO_MATCH = -32004;
 const ERROR_WORKSPACE_NOT_SET = -32005;
 const ERROR_MCP_OFFLINE = -32006;
-const LOG_ENV = 'LM_TOOLS_BRIDGE_MANAGER_LOG';
-const LOG_MAX_LINES = 200;
-const logBuffer: string[] = [];
 const ROOTS_POLICY: ManagerStatusRootsPolicy = {
   mode: 'server-requests-client',
   triggerOnInitialized: true,
@@ -222,38 +152,13 @@ const ROOTS_POLICY: ManagerStatusRootsPolicy = {
 const instances = new Map<string, InstanceRecord>();
 const reservedPorts = new Map<string, { port: number; reservedAt: number }>();
 const sessions = new Map<string, SessionState>();
+const logger = createManagerLogger({ envKey: 'LM_TOOLS_BRIDGE_MANAGER_LOG', maxLines: 200 });
 let lastNonEmptyAt = Date.now();
 let managerInternalRequestCounter = 0;
 
 function nextManagerRequestId(prefix: string): string {
   managerInternalRequestCounter += 1;
   return `${prefix}-${managerInternalRequestCounter}`;
-}
-
-function getLogPath(): string | undefined {
-  return process.env[LOG_ENV];
-}
-
-function formatLog(message: string): string {
-  const ts = new Date().toISOString();
-  return `[${ts}] ${message}`;
-}
-
-function appendLog(message: string): void {
-  const line = formatLog(message);
-  logBuffer.push(line);
-  if (logBuffer.length > LOG_MAX_LINES) {
-    logBuffer.splice(0, logBuffer.length - LOG_MAX_LINES);
-  }
-  const logPath = getLogPath();
-  if (!logPath) {
-    return;
-  }
-  try {
-    fs.appendFileSync(logPath, `${line}\n`, { encoding: 'utf8' });
-  } catch {
-    // Ignore log failures.
-  }
 }
 
 function getPipeNameFromArgs(): string | undefined {
@@ -308,7 +213,7 @@ function pruneSessions(now: number): void {
     if (session.pendingRootsRequestId
       && typeof session.pendingRootsRequestedAt === 'number'
       && now - session.pendingRootsRequestedAt > ROOTS_REQUEST_TIMEOUT_MS) {
-      appendLog(
+      logger.append(
         `[roots.list.timeout] session=${session.sessionId} id=${session.pendingRootsRequestId} reason=${session.pendingRootsReason ?? 'unknown'}`,
       );
       session.lastRootsError = 'roots/list response timeout';
@@ -750,99 +655,6 @@ function toOfflineDurationSec(startedAt?: number): number | null {
     return null;
   }
   return Math.floor((Date.now() - startedAt) / 1000);
-}
-
-function pad2(value: number): string {
-  return value < 10 ? `0${value}` : String(value);
-}
-
-function formatLocalDateTime(value: number): string {
-  const date = new Date(value);
-  const year = date.getFullYear();
-  const month = pad2(date.getMonth() + 1);
-  const day = pad2(date.getDate());
-  const hours = pad2(date.getHours());
-  const minutes = pad2(date.getMinutes());
-  const seconds = pad2(date.getSeconds());
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-}
-
-function buildManagerStatusPayload(now: number): ManagerStatusPayload {
-  const alive = getAliveRecords();
-  return {
-    ok: true,
-    version: getManagerVersion(),
-    now,
-    nowIso: new Date(now).toISOString(),
-    nowLocal: formatLocalDateTime(now),
-    instances: alive.length,
-    instanceDetails: alive.map((record) => ({
-      sessionId: record.sessionId,
-      pid: record.pid,
-      workspaceFolders: record.workspaceFolders,
-      workspaceFile: record.workspaceFile ?? null,
-      host: record.host,
-      port: record.port,
-      lastSeen: record.lastSeen,
-      lastSeenLocal: formatLocalDateTime(record.lastSeen),
-      lastSeenAgeSec: Math.floor((now - record.lastSeen) / 1000),
-      startedAt: record.startedAt,
-      startedAtLocal: formatLocalDateTime(record.startedAt),
-      uptimeSec: Math.floor((now - record.startedAt) / 1000),
-    })),
-    sessions: sessions.size,
-    sessionDetails: Array.from(sessions.values()).map((session) => ({
-      sessionId: session.sessionId,
-      resolveCwd: session.resolveCwd,
-      workspaceSetExplicitly: session.workspaceSetExplicitly,
-      workspaceMatched: session.workspaceMatched,
-      target: session.currentTarget
-        ? {
-          sessionId: session.currentTarget.sessionId,
-          host: session.currentTarget.host,
-          port: session.currentTarget.port,
-        }
-        : null,
-      lastSeen: session.lastSeen,
-      lastSeenLocal: formatLocalDateTime(session.lastSeen),
-      lastSeenAgeSec: Math.floor((now - session.lastSeen) / 1000),
-      offlineSince: session.offlineSince ?? null,
-      offlineSinceLocal: session.offlineSince ? formatLocalDateTime(session.offlineSince) : null,
-      clientRootsSupported: session.clientSupportsRoots,
-      clientRootsListChangedSupported: session.clientSupportsRootsListChanged,
-      clientCapabilityFlags: cloneBooleanRecord(session.clientCapabilityFlags),
-      clientCapabilityObjectKeys: cloneStringArrayRecord(session.clientCapabilityObjectKeys),
-      clientCapabilities: cloneJsonRecord(session.clientCapabilities),
-      pendingRootsRequestId: session.pendingRootsRequestId ?? null,
-      lastRootsSyncAt: session.lastRootsSyncAt ?? null,
-      lastRootsSyncAtLocal: session.lastRootsSyncAt ? formatLocalDateTime(session.lastRootsSyncAt) : null,
-      lastRootsSyncReason: session.lastRootsSyncReason ?? null,
-      lastRootsCount: typeof session.lastRootsCount === 'number' ? session.lastRootsCount : null,
-      lastRootsPreview: [...session.lastRootsPreview],
-      lastRootsError: session.lastRootsError ?? null,
-    })),
-    rootsPolicy: ROOTS_POLICY,
-    lastNonEmptyAt,
-    lastNonEmptyAtIso: new Date(lastNonEmptyAt).toISOString(),
-    lastNonEmptyAtLocal: formatLocalDateTime(lastNonEmptyAt),
-    lastNonEmptyAgeSec: Math.floor((now - lastNonEmptyAt) / 1000),
-    uptimeSec: Math.floor((now - STARTUP_TIME) / 1000),
-  };
-}
-
-function shouldServeHtmlStatus(
-  requestUrl: URL,
-  acceptHeader: string | string[] | undefined,
-): boolean {
-  const format = requestUrl.searchParams.get('format')?.trim().toLowerCase();
-  if (format === 'html') {
-    return true;
-  }
-  if (format === 'json') {
-    return false;
-  }
-  const accept = Array.isArray(acceptHeader) ? acceptHeader.join(',') : acceptHeader ?? '';
-  return accept.toLowerCase().includes('text/html');
 }
 
 function respondJsonRpcResult(
@@ -1653,31 +1465,31 @@ function dispatchRootsListRequest(
 ): boolean {
   const now = Date.now();
   if (!session.clientSupportsRoots) {
-    appendLog(`[roots.list.skip] session=${session.sessionId} reason=no_capability trigger=${reason}`);
+    logger.append(`[roots.list.skip] session=${session.sessionId} reason=no_capability trigger=${reason}`);
     return false;
   }
   if (session.pendingRootsRequestId && typeof session.pendingRootsRequestedAt === 'number') {
     if (now - session.pendingRootsRequestedAt <= ROOTS_REQUEST_TIMEOUT_MS) {
-      appendLog(
+      logger.append(
         `[roots.list.skip] session=${session.sessionId} reason=pending trigger=${reason} pendingId=${session.pendingRootsRequestId}`,
       );
       return false;
     }
-    appendLog(
+    logger.append(
       `[roots.list.timeout] session=${session.sessionId} id=${session.pendingRootsRequestId} reason=${session.pendingRootsReason ?? 'unknown'}`,
     );
     session.lastRootsError = 'roots/list response timeout';
     clearPendingRootsRequest(session);
   }
   if (!isSseRequest(req)) {
-    appendLog(`[roots.list.skip] session=${session.sessionId} reason=no_sse trigger=${reason}`);
+    logger.append(`[roots.list.skip] session=${session.sessionId} reason=no_sse trigger=${reason}`);
     return false;
   }
   const requestId = requestIdForSse ?? nextManagerRequestId('roots-list');
   session.pendingRootsRequestId = requestId;
   session.pendingRootsRequestedAt = now;
   session.pendingRootsReason = reason;
-  appendLog(`[roots.list.request] session=${session.sessionId} id=${requestId} reason=${reason}`);
+  logger.append(`[roots.list.request] session=${session.sessionId} id=${requestId} reason=${reason}`);
   respondSse(
     res,
     [{
@@ -1696,7 +1508,7 @@ function handleIncomingClientResponse(session: SessionState, message: JsonRpcLik
     ? String(message.id)
     : undefined;
   if (!pendingId || !responseId || responseId !== pendingId) {
-    appendLog(
+    logger.append(
       `[rpc.response] session=${session.sessionId} ignored=true id=${String(responseId ?? 'unknown')} pending=${String(pendingId ?? '')}`,
     );
     return;
@@ -1710,7 +1522,7 @@ function handleIncomingClientResponse(session: SessionState, message: JsonRpcLik
     session.lastRootsCount = undefined;
     session.lastRootsPreview = [];
     session.lastRootsError = errorText;
-    appendLog(`[roots.list.error] session=${session.sessionId} id=${responseId} reason=${reason} error=${errorText}`);
+    logger.append(`[roots.list.error] session=${session.sessionId} id=${responseId} reason=${reason} error=${errorText}`);
     return;
   }
   const normalized = normalizeRootsFromResult(message.result);
@@ -1718,14 +1530,14 @@ function handleIncomingClientResponse(session: SessionState, message: JsonRpcLik
     session.lastRootsCount = undefined;
     session.lastRootsPreview = [];
     session.lastRootsError = normalized.error;
-    appendLog(`[roots.list.error] session=${session.sessionId} id=${responseId} reason=${reason} error=${normalized.error}`);
+    logger.append(`[roots.list.error] session=${session.sessionId} id=${responseId} reason=${reason} error=${normalized.error}`);
     return;
   }
   session.lastRootsCount = normalized.roots.length;
   session.lastRootsPreview = describeRootsPreview(normalized.roots);
   session.lastRootsError = undefined;
   const previewText = session.lastRootsPreview.length > 0 ? session.lastRootsPreview.join(' | ') : '-';
-  appendLog(
+  logger.append(
     `[roots.list.result] session=${session.sessionId} id=${responseId} reason=${reason} count=${normalized.roots.length} preview=${previewText}`,
   );
 }
@@ -1917,7 +1729,7 @@ async function handleSessionMessage(
   res: http.ServerResponse,
 ): Promise<void> {
   const method = message.method ?? '';
-  appendLog(`[session] id=${session.sessionId} method=${method} matched=${String(session.workspaceMatched)} set=${String(session.workspaceSetExplicitly)} cwd=${session.resolveCwd}`);
+  logger.append(`[session] id=${session.sessionId} method=${method} matched=${String(session.workspaceMatched)} set=${String(session.workspaceSetExplicitly)} cwd=${session.resolveCwd}`);
   if (method === 'initialized' || method === 'notifications/initialized') {
     if (message.id === undefined || message.id === null) {
       const dispatched = dispatchRootsListRequest(session, req, res, 'initialized');
@@ -2016,17 +1828,17 @@ async function handleSessionMessage(
   }
   if (method === 'resources/list') {
     if (!session.workspaceMatched) {
-      appendLog('[resources.list] blocked: workspace_not_matched');
+      logger.append('[resources.list] blocked: workspace_not_matched');
       respondJsonRpcResult(res, message.id ?? null, { resources: [getHandshakeResource()] });
       return;
     }
     const target = session.currentTarget;
     if (!target) {
-      appendLog('[resources.list] blocked: no_target');
+      logger.append('[resources.list] blocked: no_target');
       respondJsonRpcResult(res, message.id ?? null, { resources: [getHandshakeResource()] });
       return;
     }
-    appendLog(`[resources.list] forwarding to ${target.host}:${target.port}`);
+    logger.append(`[resources.list] forwarding to ${target.host}:${target.port}`);
     const remote = await requestTargetJson(target, {
       jsonrpc: '2.0',
       id: message.id ?? null,
@@ -2046,7 +1858,7 @@ async function handleSessionMessage(
     const remoteResources = (remote.ok && (remote.data as { result?: { resources?: unknown[] } })?.result?.resources)
       ? (remote.data as { result: { resources: unknown[] } }).result.resources
       : [];
-    appendLog(`[resources.list] ok=${String(remote.ok)} items=${String(remoteResources.length)}`);
+    logger.append(`[resources.list] ok=${String(remote.ok)} items=${String(remoteResources.length)}`);
     const merged = [
       getHandshakeResource(),
       getCallToolResource(),
@@ -2132,11 +1944,11 @@ async function handleSessionMessage(
   if (method === 'tools/call') {
     const name = message.params?.name as string | undefined;
     const args = message.params?.arguments as { cwd?: unknown } | undefined;
-    appendLog(`[tools.call] name=${String(name ?? '')} hasCwd=${String(args?.cwd !== undefined)}`);
+    logger.append(`[tools.call] name=${String(name ?? '')} hasCwd=${String(args?.cwd !== undefined)}`);
     if (name === REQUEST_WORKSPACE_METHOD) {
       const result = await handleRequestWorkspace(session, args?.cwd);
       if (result.error) {
-        appendLog(`[handshake.error] code=${String(result.error.code)} message=${result.error.message}`);
+        logger.append(`[handshake.error] code=${String(result.error.code)} message=${result.error.message}`);
         respondToolError(res, message.id ?? null, result.error.code, result.error.message);
         return;
       }
@@ -2144,14 +1956,14 @@ async function handleSessionMessage(
         ? String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.host ?? '')
           + ':' + String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.port ?? '')
         : ':';
-      appendLog(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
+      logger.append(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
       const summaryText = formatWorkspaceHandshakeSummary(result.payload);
       respondToolCallWithNotifications(req, res, message.id ?? null, result.payload, summaryText);
       return;
     }
     if (name === DIRECT_TOOL_CALL_NAME) {
       if (!session.workspaceMatched) {
-        appendLog('[tools.call.direct] blocked: workspace_not_matched');
+        logger.append('[tools.call.direct] blocked: workspace_not_matched');
         respondToolError(
           res,
           message.id ?? null,
@@ -2229,7 +2041,7 @@ async function handleSessionMessage(
       return;
     }
     if (!session.workspaceMatched) {
-      appendLog('[tools.call] blocked: workspace_not_matched');
+      logger.append('[tools.call] blocked: workspace_not_matched');
       respondToolError(res, message.id ?? null, -32602, `Unknown tool: ${String(name)}`);
       return;
     }
@@ -2237,7 +2049,7 @@ async function handleSessionMessage(
   if (method === REQUEST_WORKSPACE_METHOD) {
     const result = await handleRequestWorkspace(session, message.params?.cwd);
     if (result.error) {
-      appendLog(`[handshake.error] code=${String(result.error.code)} message=${result.error.message}`);
+      logger.append(`[handshake.error] code=${String(result.error.code)} message=${result.error.message}`);
       respondJsonRpcError(res, 200, message.id ?? null, result.error.code, result.error.message);
       return;
     }
@@ -2245,7 +2057,7 @@ async function handleSessionMessage(
       ? String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.host ?? '')
         + ':' + String((result.payload as { target?: { host?: unknown; port?: unknown } }).target?.port ?? '')
       : ':';
-    appendLog(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
+    logger.append(`[handshake.ok] cwd=${String(result.payload?.cwd ?? '')} target=${targetSummary}`);
     respondJsonRpcResultWithNotifications(req, res, message.id ?? null, result.payload ?? {});
     return;
   }
@@ -2337,7 +2149,7 @@ async function handleMcpHttpRequest(
 ): Promise<void> {
   const requestUrl = getRequestUrl(req);
   if (shouldLogHttpRequest(req, requestUrl)) {
-    appendLog(`[request] ${req.method ?? 'UNKNOWN'} ${req.url ?? ''} session=${String(getSessionIdFromRequest(req) ?? '')} accept=${String(req.headers.accept ?? '')}`);
+    logger.append(`[request] ${req.method ?? 'UNKNOWN'} ${req.url ?? ''} session=${String(getSessionIdFromRequest(req) ?? '')} accept=${String(req.headers.accept ?? '')}`);
   }
   if (!requestUrl) {
     respondJson(res, 400, { error: 'Bad Request' });
@@ -2347,31 +2159,13 @@ async function handleMcpHttpRequest(
     respondJson(res, 200, { ok: true });
     return;
   }
-  if ((requestUrl.pathname === '/mcp/log' || requestUrl.pathname === '/mcp/log/')
-    && req.method === 'GET') {
-    const accept = Array.isArray(req.headers.accept) ? req.headers.accept.join(',') : req.headers.accept ?? '';
-    if (accept.includes('text/html')) {
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>LM Tools Bridge Manager Log</title>
-    <style>
-      body { font-family: Consolas, "Courier New", monospace; margin: 16px; }
-      h1 { font-size: 16px; margin: 0 0 12px 0; }
-      pre { white-space: pre-wrap; }
-    </style>
-  </head>
-  <body>
-    <h1>LM Tools Bridge Manager Log</h1>
-    <pre>${logBuffer.map((line) => line.replace(/&/g, '&amp;').replace(/</g, '&lt;')).join('\n')}</pre>
-  </body>
-</html>`);
-      return;
-    }
-    respondJson(res, 200, { ok: true, lines: [...logBuffer] });
+  if (handleManagerLogRequest({
+    req,
+    res,
+    requestUrl,
+    getLogLines: () => logger.getLines(),
+    respondJson,
+  })) {
     return;
   }
   if ((requestUrl.pathname === '/mcp' || requestUrl.pathname === '/mcp/')
@@ -2393,18 +2187,21 @@ async function handleMcpHttpRequest(
     respondJson(res, 200, { ok: true, deleted: false, reason: 'missing_session' });
     return;
   }
-  if ((requestUrl.pathname === '/mcp/status' || requestUrl.pathname === '/mcp/status/')
-    && req.method === 'GET') {
-    const now = Date.now();
-    const payload = buildManagerStatusPayload(now);
-    if (shouldServeHtmlStatus(requestUrl, req.headers.accept)) {
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-store');
-      res.end(renderStatusHtml(payload));
-      return;
-    }
-    respondJson(res, 200, payload);
+  if (handleManagerStatusRequest({
+    req,
+    res,
+    requestUrl,
+    now: Date.now(),
+    input: {
+      version: getManagerVersion(),
+      aliveInstances: getAliveRecords(),
+      sessions: Array.from(sessions.values()),
+      rootsPolicy: ROOTS_POLICY,
+      lastNonEmptyAt,
+      startupTime: STARTUP_TIME,
+    },
+    respondJson,
+  })) {
     return;
   }
   if (requestUrl.pathname !== '/mcp' && requestUrl.pathname !== '/mcp/') {
@@ -2420,17 +2217,17 @@ async function handleMcpHttpRequest(
   try {
     message = await readJsonBody(req);
   } catch {
-    appendLog('[error] invalid_json');
+    logger.append('[error] invalid_json');
     respondJsonRpcError(res, 400, null, -32700, 'Invalid JSON received by MCP manager.');
     return;
   }
   if (!message || typeof message !== 'object') {
-    appendLog('[error] invalid_request_body');
+    logger.append('[error] invalid_request_body');
     respondJsonRpcError(res, 400, null, -32600, 'Invalid request.');
     return;
   }
   const rpcMessage = message as JsonRpcLikeMessage;
-  appendLog(`[rpc] method=${String(rpcMessage.method ?? '')} id=${String(rpcMessage.id ?? '')} hasParams=${String(Boolean(rpcMessage.params))}`);
+  logger.append(`[rpc] method=${String(rpcMessage.method ?? '')} id=${String(rpcMessage.id ?? '')} hasParams=${String(Boolean(rpcMessage.params))}`);
   if (rpcMessage.method === 'initialize') {
     const session = createAndRegisterSession();
     const clientCapabilities = parseInitializeClientCapabilities(rpcMessage.params);
@@ -2439,7 +2236,7 @@ async function handleMcpHttpRequest(
     session.clientCapabilityFlags = cloneBooleanRecord(clientCapabilities.clientCapabilityFlags);
     session.clientCapabilityObjectKeys = cloneStringArrayRecord(clientCapabilities.clientCapabilityObjectKeys);
     session.clientCapabilities = clientCapabilities.clientCapabilities;
-    appendLog(
+    logger.append(
       `[roots.capability] session=${session.sessionId} roots=${String(session.clientSupportsRoots)} listChanged=${String(session.clientSupportsRootsListChanged)}`,
     );
     respondJsonRpcResult(
@@ -2486,7 +2283,7 @@ async function handleMcpHttpRequest(
       return;
     }
     session = createAndRegisterSession(sessionId);
-    appendLog(`[session.recover] created=${session.sessionId} reason=unknown`);
+    logger.append(`[session.recover] created=${session.sessionId} reason=unknown`);
   }
   touchSession(session);
   if (isJsonRpcResponseMessage(rpcMessage)) {
@@ -2561,11 +2358,11 @@ const pipeServer = http.createServer(async (req, res) => {
     }
     const currentVersion = getManagerVersion();
     if (expectedVersion && expectedVersion !== currentVersion) {
-      appendLog(`[shutdown] rejected expected=${String(expectedVersion)} current=${currentVersion} reason=${String(reason ?? '')}`);
+      logger.append(`[shutdown] rejected expected=${String(expectedVersion)} current=${currentVersion} reason=${String(reason ?? '')}`);
       respondJson(res, 409, { ok: false, reason: 'version_mismatch', version: currentVersion });
       return;
     }
-    appendLog(`[shutdown] reason=${String(reason ?? '')} expected=${String(expectedVersion ?? '')}`);
+    logger.append(`[shutdown] reason=${String(reason ?? '')} expected=${String(expectedVersion ?? '')}`);
     respondJson(res, 200, { ok: true });
     setTimeout(() => {
       shutdown();

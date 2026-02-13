@@ -21,7 +21,9 @@ import {
   clearUseWorkspaceSettingsFromUserSettings,
   CONFIG_SECTION,
   CONFIG_USE_WORKSPACE_SETTINGS,
+  getConfigScopeDescription,
   getConfigValue,
+  getConfigurationResource,
   setConfigurationWarningLogger,
   USE_WORKSPACE_SETTINGS_USER_SCOPE_WARNING,
 } from './configuration';
@@ -650,15 +652,20 @@ function normalizeWorkspacePath(value: string | undefined): string {
 }
 
 function getWorkspaceTooltipLines(ownerWorkspacePath: string | undefined): string[] {
+  const configScopeDescription = getConfigScopeDescription(getConfigurationResource());
   const folders = vscode.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
     return [
       'Workspace folders:',
       ...folders.map((folder) => `- ${folder.name}: ${folder.uri.fsPath}`),
+      `Config scope: ${configScopeDescription}`,
     ];
   }
   const normalized = normalizeWorkspacePath(ownerWorkspacePath);
-  return [`Workspace: ${normalized}`];
+  return [
+    `Workspace: ${normalized}`,
+    `Config scope: ${configScopeDescription}`,
+  ];
 }
 
 function shortSessionId(sessionId: string | undefined): string {

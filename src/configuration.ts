@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 
 export const CONFIG_SECTION = 'lmToolsBridge';
 export const CONFIG_USE_WORKSPACE_SETTINGS = 'useWorkspaceSettings';
@@ -57,6 +58,10 @@ export async function clearUseWorkspaceSettingsFromUserSettings(resource?: vscod
 }
 
 export async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<vscode.ConfigurationTarget> {
+  return resolveActiveConfigTarget(resource);
+}
+
+export function resolveActiveConfigTarget(resource?: vscode.Uri): vscode.ConfigurationTarget {
   if (!isWorkspaceSettingsEnabled(resource)) {
     return vscode.ConfigurationTarget.Global;
   }
@@ -64,6 +69,40 @@ export async function resolveToolsConfigTarget(resource?: vscode.Uri): Promise<v
     return vscode.ConfigurationTarget.Workspace;
   }
   return vscode.ConfigurationTarget.WorkspaceFolder;
+}
+
+function resolveWorkspaceFolderForResource(resource?: vscode.Uri): vscode.WorkspaceFolder | undefined {
+  if (resource) {
+    const matched = vscode.workspace.getWorkspaceFolder(resource);
+    if (matched) {
+      return matched;
+    }
+  }
+  return vscode.workspace.workspaceFolders?.[0];
+}
+
+export function getConfigScopeDescription(
+  resource?: vscode.Uri,
+  targetOverride?: vscode.ConfigurationTarget,
+): string {
+  const target = targetOverride ?? resolveActiveConfigTarget(resource);
+  if (target === vscode.ConfigurationTarget.Global) {
+    return 'User settings';
+  }
+  if (target === vscode.ConfigurationTarget.Workspace) {
+    const workspaceFilePath = vscode.workspace.workspaceFile?.fsPath;
+    if (workspaceFilePath) {
+      return `Workspace settings (${workspaceFilePath})`;
+    }
+    return 'Workspace settings (.code-workspace)';
+  }
+
+  const workspaceFolder = resolveWorkspaceFolderForResource(resource);
+  if (workspaceFolder) {
+    const settingsFilePath = path.join(workspaceFolder.uri.fsPath, '.vscode', 'settings.json');
+    return `Workspace folder settings (${settingsFilePath})`;
+  }
+  return 'Workspace folder settings (.vscode/settings.json)';
 }
 
 export function getConfigValue<T>(key: string, fallback: T): T {

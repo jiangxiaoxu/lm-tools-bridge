@@ -169,6 +169,7 @@ Clangd MCP tools are deprecated and hard-disabled in this extension build.
 - `lmToolsBridge.tools.schemaDefaults`
 - `lmToolsBridge.tools.schemaDefaults` entries use `tool.param=value`; examples are entry values, not JSON string literals.
 - `lmToolsBridge.debug`
+- Status bar tooltip now includes `Config scope` to show the currently effective lmToolsBridge settings read location.
 
 Recommendation:
 - If you need to change connection port, adjust `lmToolsBridge.manager.httpPort` for clients first.
@@ -361,6 +362,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `lmToolsBridge.tools.schemaDefaults`
 - `lmToolsBridge.tools.schemaDefaults` 采用 `tool.param=value` 条目格式; 示例展示的是 entry 值,不是 JSON 字符串字面量.
 - `lmToolsBridge.debug`
+- 状态栏 tooltip 新增 `Config scope`,用于显示当前生效的 lmToolsBridge 配置读取位置.
 
 建议:
 - 如需调整连接端口,优先调整 `lmToolsBridge.manager.httpPort` 供客户端连接.

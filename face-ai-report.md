@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.90`.
+- Version baseline: `1.0.91`.
 - Current build constraint: `lm_clangd_*` tools are hard-disabled and not registered.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
@@ -13,6 +13,7 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
+- Built-in `lm_*` path fields in `structuredContent` use absolute paths; `content.text` summaries prefer workspace-relative (`WorkspaceName/...`) display and fall back to absolute paths.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
 - `lm_clangd_*` tools remain disabled in current build.
 

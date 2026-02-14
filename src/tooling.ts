@@ -367,7 +367,6 @@ interface LmGetDiagnosticsNormalizedDiagnostic {
 
 interface LmGetDiagnosticsFileResult {
   absolutePath: string;
-  workspacePath: string | null;
   diagnostics: LmGetDiagnosticsNormalizedDiagnostic[];
 }
 
@@ -2346,7 +2345,9 @@ function formatFindTextInFilesSummary(payload: Record<string, unknown>): string 
       continue;
     }
     const record = entry as { path?: unknown; line?: unknown; preview?: unknown };
-    const matchPath = typeof record.path === 'string' ? record.path : '<unknown>';
+    const matchPath = typeof record.path === 'string'
+      ? toSummaryPathPreferWorkspace(record.path)
+      : '<unknown>';
     const line = typeof record.line === 'number' ? record.line : 0;
     const preview = typeof record.preview === 'string' ? record.preview.trimEnd() : '';
     lines.push('---');
@@ -2370,7 +2371,7 @@ function formatFindFilesSummary(payload: Record<string, unknown>): string {
   for (const file of files) {
     if (typeof file === 'string') {
       lines.push('---');
-      lines.push(file);
+      lines.push(toSummaryPathPreferWorkspace(file));
     }
   }
   return lines.join('\n');
@@ -2421,45 +2422,33 @@ async function collectLmGetDiagnosticsFiles(
     }
     files.push({
       absolutePath: filePath.absolutePath,
-      workspacePath: filePath.workspacePath,
       diagnostics: normalizedDiagnostics,
     });
   }
-  files.sort((left, right) => {
-    const absolutePathCompare = left.absolutePath.localeCompare(right.absolutePath);
-    if (absolutePathCompare !== 0) {
-      return absolutePathCompare;
-    }
-    return (left.workspacePath ?? '').localeCompare(right.workspacePath ?? '');
-  });
+  files.sort((left, right) => left.absolutePath.localeCompare(right.absolutePath));
   return files;
 }
 
 function resolveLmGetDiagnosticsFilePath(uri: vscode.Uri): {
   absolutePath: string;
-  workspacePath: string | null;
   readableFilePath: string | null;
 } {
   const fsPath = uri.fsPath.trim();
   if (uri.scheme === 'file' && fsPath.length > 0) {
     const absolutePath = normalizeLmGetDiagnosticsPath(path.resolve(fsPath));
-    const resolved = resolveStructuredPath(absolutePath);
     return {
-      absolutePath: resolved.absolutePath,
-      workspacePath: resolved.workspacePath,
+      absolutePath,
       readableFilePath: path.resolve(fsPath),
     };
   }
   if (fsPath.length > 0 && (path.isAbsolute(fsPath) || startsWithWindowsAbsolutePath(fsPath))) {
     return {
       absolutePath: normalizeLmGetDiagnosticsPath(path.resolve(fsPath)),
-      workspacePath: null,
       readableFilePath: path.resolve(fsPath),
     };
   }
   return {
     absolutePath: uri.toString(),
-    workspacePath: null,
     readableFilePath: null,
   };
 }
@@ -2750,7 +2739,6 @@ function applyLmGetDiagnosticsLimit(
     }
     limitedFiles.push({
       absolutePath: file.absolutePath,
-      workspacePath: file.workspacePath,
       diagnostics,
     });
     returnedDiagnostics += diagnostics.length;
@@ -2779,7 +2767,7 @@ function formatLmGetDiagnosticsSummary(payload: LmGetDiagnosticsPayload, returne
   }
   for (const file of payload.files) {
     lines.push('---');
-    lines.push(`file: ${file.workspacePath ?? file.absolutePath}`);
+    lines.push(`file: ${toSummaryPathPreferWorkspace(file.absolutePath)}`);
     for (const diagnostic of file.diagnostics) {
       const codePart = diagnostic.code ? ` code=${diagnostic.code}` : '';
       const sourcePart = diagnostic.source ? ` source=${diagnostic.source}` : '';
@@ -3166,6 +3154,11 @@ function buildPassthroughToolResult(
     ...(structuredContent !== undefined ? { structuredContent } : {}),
     ...(isError ? { isError: true } : {}),
   };
+}
+
+function toSummaryPathPreferWorkspace(absolutePath: string): string {
+  const resolved = resolveStructuredPath(absolutePath);
+  return resolved.workspacePath ?? resolved.absolutePath;
 }
 
 function isCopilotSearchCodebasePlaceholderResponse(toolName: string, outputText: string | undefined): boolean {

@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.91] - 2026-02-14
+
+### English
+
+#### Changed
+- Standardized path contract for built-in `lm_*` custom tools: `structuredContent` now uses absolute paths for path fields.
+- Updated `content.text` path rendering for `lm_findFiles`, `lm_findTextInFiles`, and `lm_getDiagnostics`: prefer workspace-style paths (`WorkspaceName/...`) and fall back to absolute paths when workspace mapping is unavailable.
+
+### 中文
+
+#### 变更
+- 统一内置 `lm_*` 自定义工具的路径约定: `structuredContent` 中的路径字段现在使用绝对路径.
+- 调整 `lm_findFiles`,`lm_findTextInFiles`,`lm_getDiagnostics` 的 `content.text` 路径展示: 优先显示工作区路径(`WorkspaceName/...`),工作区无法匹配时回退为绝对路径.
+
 ## [1.0.90] - 2026-02-13
 
 ### English

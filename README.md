@@ -82,7 +82,7 @@ User guidance:
 ### Diagnostics Tool
 - `lm_getDiagnostics` reads diagnostics from VS Code Problems data source (`vscode.languages.getDiagnostics`).
 - Inputs: optional `filePaths` (`string[]`), optional `severities` (`error|warning|information|hint`), optional `maxResults` (default `100`).
-- `filePaths` supports `WorkspaceName/...` and absolute paths. Empty `filePaths` means no file filter.
+- `filePaths` supports workspace-root relative paths, `WorkspaceName/...`, and absolute paths. Each path must exist. In multi-root workspaces, relative paths must resolve uniquely or use `WorkspaceName/...` to disambiguate. Empty `filePaths` means no file filter.
 - Duplicate `filePaths` entries are deduplicated after trim.
 - Legacy `filePath` is ignored when provided.
 - `severities` values are matched case-insensitively and deduplicated after normalization. Invalid values return an input error. Default is `error` and `warning` when omitted.
@@ -276,7 +276,7 @@ url = "http://127.0.0.1:47100/mcp"
 ### 诊断工具
 - `lm_getDiagnostics` 从 VS Code Problems 数据源(`vscode.languages.getDiagnostics`)读取诊断.
 - 输入: 可选 `filePaths`(`string[]`),可选 `severities`(`error|warning|information|hint`),可选 `maxResults`(默认 `100`).
-- `filePaths` 支持 `WorkspaceName/...` 和绝对路径. 空数组 `filePaths` 等价于不设置文件过滤.
+- `filePaths` 支持 workspace root 相对路径,`WorkspaceName/...` 和绝对路径. 每个路径都必须存在. 在 multi-root 中,相对路径必须唯一命中,否则请使用 `WorkspaceName/...` 消除歧义. 空数组 `filePaths` 等价于不设置文件过滤.
 - `filePaths` 在 trim 后会去重重复项.
 - 旧字段 `filePath` 传入时会被忽略.
 - `severities` 大小写不敏感,归一化后会自动去重; 非法值会返回输入错误. 未传时默认 `error` 和 `warning`.

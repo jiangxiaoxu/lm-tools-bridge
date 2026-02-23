@@ -1,6 +1,6 @@
 const filePathProperty = {
   type: 'string',
-  description: "File path. Supports absolute path (for example G:/Project/Source/Foo.h) or workspace-prefixed path (for example UE5/Engine/Source/... ).",
+  description: "File path. Supports workspace-root relative path (for example Source/Foo.h), workspace-prefixed path (for example UE5/Engine/Source/Foo.h), or absolute path (for example G:/Project/Source/Foo.h). Path must exist.",
 };
 
 const lspPositionSchema = {
@@ -81,7 +81,7 @@ export const symbolSearchToolSchema: Record<string, unknown> = {
     },
     scopePath: {
       type: 'string',
-      description: 'Optional path scope. Supports absolute or workspace-prefixed path.',
+      description: 'Optional path scope. Supports workspace-root relative, workspace-prefixed, or absolute path. Path must exist.',
     },
     limit: {
       type: 'number',
@@ -109,7 +109,7 @@ export const symbolBundleToolSchema: Record<string, unknown> = {
     },
     scopePath: {
       type: 'string',
-      description: 'Optional path scope used by query mode. Supports absolute or workspace-prefixed path.',
+      description: 'Optional path scope used by query mode. Supports workspace-root relative, workspace-prefixed, or absolute path. Path must exist.',
     },
     candidateLimit: {
       type: 'number',

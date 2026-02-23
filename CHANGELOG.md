@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.92] - 2026-02-23
+
+### English
+
+#### Changed
+- `resolveInputFilePath` now supports workspace-root relative paths in addition to `WorkspaceName/...` and absolute paths.
+- Enforced path existence checks for resolved paths and added multi-root ambiguity handling for relative inputs.
+- Updated `lm_getDiagnostics` input schema/docs to describe relative path support and disambiguation guidance.
+
+### 中文
+
+#### 变更
+- `resolveInputFilePath` 现在除 `WorkspaceName/...` 与绝对路径外,还支持 workspace root 相对路径.
+- 对解析后的路径统一增加存在性校验,并为多根 workspace 的相对路径加入歧义处理.
+- 更新 `lm_getDiagnostics` 的 input schema 与文档说明,补充相对路径支持与消歧指引.
+
 ## [1.0.91] - 2026-02-14
 
 ### English

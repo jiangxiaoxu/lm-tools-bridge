@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.91`.
+- Version baseline: `1.0.92`.
 - Current build constraint: `lm_clangd_*` tools are hard-disabled and not registered.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
@@ -13,6 +13,7 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
+- `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths; `content.text` summaries prefer workspace-relative (`WorkspaceName/...`) display and fall back to absolute paths.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
 - `lm_clangd_*` tools remain disabled in current build.
@@ -35,7 +36,7 @@
 - [Tool not found or disabled] Read: `src/tooling.ts -> getEnabledExposedToolsSnapshot | invokeExposedTool`; Decide: exposure first, enabled second; Verify: target appears in effective set and call succeeds.
 - [Tool selection config mismatch] Read: `src/tooling.ts -> setExposedTools | setEnabledTools | pruneBuiltInDisabledFromDeltas | pruneEnabledDeltasByExposed`; Decide: required/built-in-disabled/exposed-first rules apply; Verify: deltas normalize and intended tool state persists.
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
-- [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool`; Decide: validate `maxResults`/`severities` and inspect `capped` before suspecting data loss; Verify: payload contains `scope/files/preview` and expected counts after retry.
+- [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool`; Decide: validate `filePaths` resolution (absolute/`WorkspaceName/...`/relative + unique existing match), `maxResults`, and `severities` before suspecting data loss; Verify: payload contains `scope/files/preview` and expected counts after retry.
 - [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
 - [Roots sync not triggered] Read: `src/manager.ts -> dispatchRootsListRequest`; Decide: requires client roots capability + trigger events; Verify: logs contain `roots.list.request/result/error/skip/timeout`.
 

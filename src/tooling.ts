@@ -239,7 +239,7 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   required: ['query', 'isRegexp'],
 };
 
-const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for specific files or across all files. Use this tool to inspect the same Problems diagnostics the user sees, analyze all current issues when no file is specified, and validate changes after edits. The optional filePaths parameter filters diagnostics to specific files and supports WorkspaceName/... and absolute paths.';
+const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for specific files or across all files. Use this tool to inspect the same Problems diagnostics the user sees, analyze all current issues when no file is specified, and validate changes after edits. The optional filePaths parameter filters diagnostics to specific files and supports workspace-root relative paths, WorkspaceName/... paths, and absolute paths. In multi-root workspaces, relative paths must resolve to a unique existing match or use WorkspaceName/... to disambiguate.';
 
 const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -252,7 +252,7 @@ const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
         minLength: 1,
         pattern: '\\S',
       },
-      description: 'Optional file path filters. Supports WorkspaceName/... and absolute paths. Empty array means no file filter.',
+      description: 'Optional file path filters. Supports workspace-root relative paths, WorkspaceName/... paths, and absolute paths. Paths must exist. In multi-root workspaces, relative paths must resolve uniquely; otherwise use WorkspaceName/... to disambiguate. Empty array means no file filter.',
     },
     severities: {
       type: 'array',

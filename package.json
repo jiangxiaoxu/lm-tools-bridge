@@ -44,6 +44,18 @@
       {
         "command": "lm-tools-bridge.openHelp",
         "title": "LM Tools Bridge: Open Help"
+      },
+      {
+        "command": "lm-tools-bridge.qgrepInitAllWorkspaces",
+        "title": "LM Tools Bridge: Qgrep Init All Workspaces"
+      },
+      {
+        "command": "lm-tools-bridge.qgrepRebuildIndexes",
+        "title": "LM Tools Bridge: Qgrep Rebuild Indexes"
+      },
+      {
+        "command": "lm-tools-bridge.qgrepStopAndClearIndexes",
+        "title": "LM Tools Bridge: Qgrep Stop And Clear Indexes"
       }
     ],
     "configuration": {

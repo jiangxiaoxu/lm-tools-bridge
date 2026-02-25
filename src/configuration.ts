@@ -18,7 +18,14 @@ export function setConfigurationWarningLogger(logger: (message: string) => void)
 }
 
 export function getConfigurationResource(): vscode.Uri | undefined {
-  return vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  if (activeUri) {
+    const activeWorkspace = vscode.workspace.getWorkspaceFolder(activeUri);
+    if (activeWorkspace) {
+      return activeUri;
+    }
+  }
+  return vscode.workspace.workspaceFolders?.[0]?.uri;
 }
 
 function isWorkspaceFileContext(): boolean {

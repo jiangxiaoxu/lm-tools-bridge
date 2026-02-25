@@ -41,6 +41,16 @@ import {
   showEnabledToolsDump,
   toolInfoPayload,
 } from './tooling';
+import {
+  activateQgrepService,
+  getQgrepStatusSummary,
+  runQgrepInitAllWorkspacesCommand,
+  runQgrepRebuildIndexesCommand,
+  runQgrepStopAndClearCommand,
+  setQgrepStatusChangeHandler,
+  setQgrepLogger,
+  type QgrepStatusSummary,
+} from './qgrep';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
@@ -49,6 +59,9 @@ const CONFIGURE_EXPOSURE_COMMAND_ID = 'lm-tools-bridge.configureExposure';
 const CONFIGURE_ENABLED_COMMAND_ID = 'lm-tools-bridge.configureEnabled';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
 const HELP_COMMAND_ID = 'lm-tools-bridge.openHelp';
+const QGREP_INIT_ALL_COMMAND_ID = 'lm-tools-bridge.qgrepInitAllWorkspaces';
+const QGREP_REBUILD_COMMAND_ID = 'lm-tools-bridge.qgrepRebuildIndexes';
+const QGREP_STOP_CLEAR_COMMAND_ID = 'lm-tools-bridge.qgrepStopAndClearIndexes';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 48123;
 const HEALTH_PATH = '/mcp/health';
@@ -67,6 +80,7 @@ const MANAGER_TOOLTIP_SESSION_ID_PREFIX_LENGTH = 8;
 const MANAGER_TOOLTIP_WORKSPACE_MAX_LENGTH = 48;
 const MANAGER_RESTART_SUCCESS_SETTLE_MS = 1000;
 const MANAGER_RESTART_FAILED_SETTLE_MS = 8000;
+const QGREP_STATUS_REFRESH_DEBOUNCE_MS = 120;
 
 interface ServerConfig {
   autoStart: boolean;
@@ -89,6 +103,7 @@ interface ServerStatusInfo {
   host?: string;
   port?: number;
   managerTooltipModel?: ManagerTooltipModel;
+  qgrepStatus?: QgrepStatusSummary;
 }
 
 type ManagerOwnership = 'current' | 'other' | 'unknown';
@@ -106,11 +121,21 @@ interface ManagerTooltipLine {
   priority: number;
 }
 
+interface QgrepAggregateProgress {
+  filesKnown: boolean;
+  percent?: number;
+  indexedFiles?: number;
+  totalFiles?: number;
+  remainingFiles?: number;
+}
+
 let serverState: McpServerState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
+let qgrepStatusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
 let helpUrl: string | undefined;
 let statusRefreshTimer: NodeJS.Timeout | undefined;
+let qgrepStatusRefreshTimer: NodeJS.Timeout | undefined;
 let lastServerStatus: ServerStatusState | undefined;
 let lastOwnerWorkspacePath: string | undefined;
 let lastStatusLogMessage: string | undefined;
@@ -129,6 +154,11 @@ export function activate(context: vscode.ExtensionContext): void {
     warn: logWarn,
     error: logError,
   });
+  setQgrepLogger({
+    info: logInfo,
+    warn: logWarn,
+    error: logError,
+  });
   void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
   void normalizeToolSelectionState();
@@ -143,6 +173,13 @@ export function activate(context: vscode.ExtensionContext): void {
     onManagerRestartUiEvent: handleManagerRestartUiEvent,
   });
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
+  qgrepStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  setQgrepStatusChangeHandler(() => {
+    scheduleQgrepStatusBarRefresh();
+  });
+  const qgrepStatusChangeHandlerDisposable = new vscode.Disposable(() => {
+    setQgrepStatusChangeHandler(undefined);
+  });
   helpUrl = resolveHelpUrl(context);
   const startCommand = vscode.commands.registerCommand(START_COMMAND_ID, () => {
     void startMcpServer(outputChannel);
@@ -159,9 +196,19 @@ export function activate(context: vscode.ExtensionContext): void {
   const helpCommand = vscode.commands.registerCommand(HELP_COMMAND_ID, () => {
     void openHelpDoc();
   });
+  const qgrepInitAllCommand = vscode.commands.registerCommand(QGREP_INIT_ALL_COMMAND_ID, () => {
+    void runQgrepInitAllCommand();
+  });
+  const qgrepRebuildCommand = vscode.commands.registerCommand(QGREP_REBUILD_COMMAND_ID, () => {
+    void runQgrepRebuildCommand();
+  });
+  const qgrepStopClearCommand = vscode.commands.registerCommand(QGREP_STOP_CLEAR_COMMAND_ID, () => {
+    void runQgrepStopAndClearIndexesCommand();
+  });
   const statusMenuCommand = vscode.commands.registerCommand(STATUS_MENU_COMMAND_ID, () => {
     void showStatusMenu(outputChannel);
   });
+  const qgrepService = activateQgrepService(context);
   const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration(CONFIG_SECTION)) {
       return;
@@ -189,14 +236,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     outputChannel,
     statusBarItem,
+    qgrepStatusBarItem,
     startCommand,
     stopCommand,
     configureExposureCommand,
     configureEnabledCommand,
     helpCommand,
+    qgrepInitAllCommand,
+    qgrepRebuildCommand,
+    qgrepStopClearCommand,
     statusMenuCommand,
     configWatcher,
     workspaceWatcher,
+    qgrepService,
+    qgrepStatusChangeHandlerDisposable,
     { dispose: () => { void stopMcpServer(outputChannel); } },
   );
 
@@ -221,6 +274,11 @@ export function deactivate(): void {
     clearInterval(statusRefreshTimer);
     statusRefreshTimer = undefined;
   }
+  if (qgrepStatusRefreshTimer) {
+    clearTimeout(qgrepStatusRefreshTimer);
+    qgrepStatusRefreshTimer = undefined;
+  }
+  setQgrepStatusChangeHandler(undefined);
   clearManagerRestartSettleTimer();
   managerRestartUiState = undefined;
   void stopManagerHeartbeat();
@@ -940,6 +998,7 @@ function resourceJson(uri: string, payload: unknown) {
 
 async function getServerStatus(): Promise<ServerStatusInfo> {
   const managerTooltipModel = await fetchManagerTooltipModel();
+  const qgrepStatus = getQgrepStatusSummary();
   if (serverState) {
     return {
       state: 'running',
@@ -947,12 +1006,14 @@ async function getServerStatus(): Promise<ServerStatusInfo> {
       host: serverState.host,
       port: serverState.port,
       managerTooltipModel,
+      qgrepStatus,
     };
   }
-  return { state: 'off', managerTooltipModel };
+  return { state: 'off', managerTooltipModel, qgrepStatus };
 }
 
 function updateStatusBar(info: ServerStatusInfo): void {
+  updateQgrepStatusBar(info.qgrepStatus ?? getQgrepStatusSummary());
   if (!statusBarItem) {
     return;
   }
@@ -1031,8 +1092,177 @@ function updateStatusBar(info: ServerStatusInfo): void {
   statusBarItem.show();
 }
 
+function scheduleQgrepStatusBarRefresh(): void {
+  if (qgrepStatusRefreshTimer) {
+    return;
+  }
+  qgrepStatusRefreshTimer = setTimeout(() => {
+    qgrepStatusRefreshTimer = undefined;
+    updateQgrepStatusBar(getQgrepStatusSummary());
+  }, QGREP_STATUS_REFRESH_DEBOUNCE_MS);
+}
+
+function updateQgrepStatusBar(status: QgrepStatusSummary): void {
+  if (!qgrepStatusBarItem) {
+    return;
+  }
+
+  qgrepStatusBarItem.command = STATUS_MENU_COMMAND_ID;
+  if (!status.binaryAvailable) {
+    qgrepStatusBarItem.text = '$(warning) qgrep bin missing';
+    qgrepStatusBarItem.tooltip = formatQgrepStatusLines(status).join('\n');
+    qgrepStatusBarItem.color = undefined;
+    qgrepStatusBarItem.show();
+    return;
+  }
+  if (status.initializedWorkspaces === 0) {
+    qgrepStatusBarItem.text = '$(search) qgrep not init';
+    qgrepStatusBarItem.tooltip = formatQgrepStatusLines(status).join('\n');
+    qgrepStatusBarItem.color = undefined;
+    qgrepStatusBarItem.show();
+    return;
+  }
+
+  const aggregate = computeQgrepAggregateProgress(status);
+  const percentText = aggregate.percent === undefined ? '--%' : `${aggregate.percent}%`;
+  const filesText = aggregate.filesKnown && aggregate.indexedFiles !== undefined && aggregate.totalFiles !== undefined
+    ? `${aggregate.indexedFiles}/${aggregate.totalFiles}`
+    : '--/--';
+  const circle = getQgrepProgressCircle(aggregate.percent);
+  qgrepStatusBarItem.text = `$(search) qgrep ${circle} ${percentText} ${filesText}`;
+  qgrepStatusBarItem.tooltip = formatQgrepStatusLines(status).join('\n');
+  qgrepStatusBarItem.color = undefined;
+  qgrepStatusBarItem.show();
+}
+
+function computeQgrepAggregateProgress(status: QgrepStatusSummary): QgrepAggregateProgress {
+  const initialized = status.workspaceStatuses.filter((entry) => entry.initialized);
+  if (initialized.length === 0) {
+    return {
+      filesKnown: false,
+    };
+  }
+
+  const allTotalsKnown = initialized.every((entry) => entry.progressKnown && typeof entry.totalFiles === 'number' && entry.totalFiles >= 0);
+  if (allTotalsKnown) {
+    let indexedFiles = 0;
+    let totalFiles = 0;
+    for (const entry of initialized) {
+      const total = entry.totalFiles ?? 0;
+      const indexed = Math.max(0, Math.min(entry.indexedFiles ?? 0, total));
+      indexedFiles += indexed;
+      totalFiles += total;
+    }
+    const percent = totalFiles > 0 ? Math.round((indexedFiles / totalFiles) * 100) : 100;
+    return {
+      filesKnown: true,
+      percent,
+      indexedFiles,
+      totalFiles,
+      remainingFiles: Math.max(totalFiles - indexedFiles, 0),
+    };
+  }
+
+  const sampledPercents = initialized
+    .map((entry) => entry.progressPercent)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (sampledPercents.length === 0) {
+    return {
+      filesKnown: false,
+    };
+  }
+
+  const percent = Math.round(
+    sampledPercents.reduce((sum, value) => sum + value, 0) / sampledPercents.length,
+  );
+  return {
+    filesKnown: false,
+    percent: Math.max(0, Math.min(100, percent)),
+  };
+}
+
+function formatQgrepStatusLines(status: QgrepStatusSummary): string[] {
+  const lines: string[] = [];
+
+  lines.push('Qgrep:');
+  lines.push(`- bin: ${status.binaryAvailable ? 'ok' : 'missing'}`);
+  lines.push(`- ws: ${status.initializedWorkspaces}/${status.totalWorkspaces} idx, ${status.watchingWorkspaces} watch`);
+
+  if (status.initializedWorkspaces === 0) {
+    lines.push('- sum: not initialized');
+  } else {
+    const aggregate = computeQgrepAggregateProgress(status);
+    if (aggregate.filesKnown && aggregate.indexedFiles !== undefined && aggregate.totalFiles !== undefined) {
+      lines.push(`- sum: ${aggregate.indexedFiles}/${aggregate.totalFiles} (${aggregate.percent ?? 0}%)`);
+    } else if (aggregate.percent !== undefined) {
+      lines.push(`- sum: --/-- (${aggregate.percent}%)`);
+    } else {
+      lines.push('- sum: --/-- (--%)');
+    }
+  }
+
+  if (status.workspaceStatuses.length === 0) {
+    lines.push('- per ws: none');
+    return lines;
+  }
+
+  lines.push('- per ws:');
+  for (const workspaceStatus of status.workspaceStatuses) {
+    lines.push(`  - ${formatQgrepWorkspaceLine(workspaceStatus)}`);
+  }
+  return lines;
+}
+
+function formatQgrepWorkspaceLine(status: QgrepStatusSummary['workspaceStatuses'][number]): string {
+  if (!status.initialized) {
+    return `${status.workspaceName}: not initialized`;
+  }
+
+  if (status.progressKnown && typeof status.indexedFiles === 'number' && typeof status.totalFiles === 'number') {
+    const percent = status.progressPercent ?? (status.totalFiles > 0 ? Math.round((status.indexedFiles / status.totalFiles) * 100) : 100);
+    return `${status.workspaceName}: ${status.indexedFiles}/${status.totalFiles} (${percent}%)`;
+  }
+
+  if (typeof status.progressPercent === 'number') {
+    return `${status.workspaceName}: --/-- (${status.progressPercent}%)`;
+  }
+
+  return `${status.workspaceName}: --/-- (--%)`;
+}
+
+function getQgrepProgressCircle(percent: number | undefined): string {
+  if (percent === undefined) {
+    return '○';
+  }
+  if (percent >= 100) {
+    return '●';
+  }
+  if (percent >= 75) {
+    return '◕';
+  }
+  if (percent >= 50) {
+    return '◑';
+  }
+  if (percent >= 25) {
+    return '◔';
+  }
+  return '○';
+}
+
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & { action?: 'configureExposure' | 'configureEnabled' | 'dump' | 'help' | 'restartManager' | 'openSettings' | 'openExtensionPage' }> = [
+  const items: Array<vscode.QuickPickItem & {
+    action?:
+      | 'configureExposure'
+      | 'configureEnabled'
+      | 'dump'
+      | 'help'
+      | 'restartManager'
+      | 'openSettings'
+      | 'openExtensionPage'
+      | 'qgrepInitAll'
+      | 'qgrepRebuild'
+      | 'qgrepStopClear';
+  }> = [
     {
       label: '$(settings-gear) Configure Exposure Tools',
       description: 'Choose tools available for MCP enablement',
@@ -1052,6 +1282,22 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       label: '$(sync) Restart Manager',
       description: 'Restart the manager process',
       action: 'restartManager',
+    },
+    { label: 'Qgrep', kind: vscode.QuickPickItemKind.Separator },
+    {
+      label: '$(database) Qgrep Init All Workspaces',
+      description: 'Initialize qgrep index in each workspace and enable background watch',
+      action: 'qgrepInitAll',
+    },
+    {
+      label: '$(tools) Qgrep Rebuild Indexes',
+      description: 'Rebuild qgrep index for initialized workspaces',
+      action: 'qgrepRebuild',
+    },
+    {
+      label: '$(trash) Qgrep Stop And Clear Indexes',
+      description: 'Stop watch and remove .vscode/qgrep in initialized workspaces',
+      action: 'qgrepStopClear',
     },
     {
       label: '$(settings) Open Settings',
@@ -1110,6 +1356,21 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
     return;
   }
 
+  if (selection.action === 'qgrepInitAll') {
+    await runQgrepInitAllCommand();
+    return;
+  }
+
+  if (selection.action === 'qgrepRebuild') {
+    await runQgrepRebuildCommand();
+    return;
+  }
+
+  if (selection.action === 'qgrepStopClear') {
+    await runQgrepStopAndClearIndexesCommand();
+    return;
+  }
+
   if (selection.action === 'openSettings') {
     await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:jiangxiaoxu.lm-tools-bridge');
     return;
@@ -1117,6 +1378,78 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 
   if (selection.action === 'openExtensionPage') {
     await openExtensionPage();
+  }
+}
+
+async function runQgrepInitAllCommand(): Promise<void> {
+  try {
+    const summary = await runQgrepInitAllWorkspacesCommand();
+    for (const failure of summary.failures) {
+      logStatusWarn(`[qgrep.init] ${failure}`);
+    }
+    if (summary.failed > 0) {
+      void vscode.window.showWarningMessage(summary.message);
+      await refreshStatusBar();
+      return;
+    }
+    void vscode.window.showInformationMessage(summary.message);
+    await refreshStatusBar();
+  } catch (error) {
+    const message = `Qgrep init failed: ${String(error)}`;
+    logStatusError(message);
+    void vscode.window.showErrorMessage(message);
+    await refreshStatusBar();
+  }
+}
+
+async function runQgrepRebuildCommand(): Promise<void> {
+  try {
+    const summary = await runQgrepRebuildIndexesCommand();
+    for (const failure of summary.failures) {
+      logStatusWarn(`[qgrep.rebuild] ${failure}`);
+    }
+    if (summary.failed > 0) {
+      void vscode.window.showWarningMessage(summary.message);
+      await refreshStatusBar();
+      return;
+    }
+    void vscode.window.showInformationMessage(summary.message);
+    await refreshStatusBar();
+  } catch (error) {
+    const message = `Qgrep rebuild failed: ${String(error)}`;
+    logStatusError(message);
+    void vscode.window.showErrorMessage(message);
+    await refreshStatusBar();
+  }
+}
+
+async function runQgrepStopAndClearIndexesCommand(): Promise<void> {
+  const answer = await vscode.window.showWarningMessage(
+    'Stop qgrep watch and delete .vscode/qgrep index directories in initialized workspaces?',
+    { modal: true },
+    'Stop And Clear',
+  );
+  if (answer !== 'Stop And Clear') {
+    return;
+  }
+
+  try {
+    const summary = await runQgrepStopAndClearCommand();
+    for (const failure of summary.failures) {
+      logStatusWarn(`[qgrep.stop-clear] ${failure}`);
+    }
+    if (summary.failed > 0) {
+      void vscode.window.showWarningMessage(summary.message);
+      await refreshStatusBar();
+      return;
+    }
+    void vscode.window.showInformationMessage(summary.message);
+    await refreshStatusBar();
+  } catch (error) {
+    const message = `Qgrep stop and clear failed: ${String(error)}`;
+    logStatusError(message);
+    void vscode.window.showErrorMessage(message);
+    await refreshStatusBar();
   }
 }
 

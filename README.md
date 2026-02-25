@@ -73,6 +73,12 @@ User guidance:
 ### Daily Usage
 - `Configure Exposure Tools`: choose tools that can be selected.
 - `Configure Enabled Tools`: choose active tools within exposed set.
+- `Status Menu -> Qgrep Init All Workspaces`: initialize `.vscode/qgrep/workspace.cfg` per workspace and start qgrep watch.
+- `Status Menu -> Qgrep Rebuild Indexes`: run qgrep clean rebuild for initialized workspaces.
+- `Status Menu -> Qgrep Stop And Clear Indexes`: stop qgrep watch and remove `.vscode/qgrep` for initialized workspaces.
+- Status bar is split into two items: `LM Tools Bridge` (server state) and `qgrep` (index progress).
+- `qgrep` item shows circular progress + percent + aggregate `A/B`; if no workspace is initialized it shows `qgrep not init`.
+- `qgrep` tooltip lists one line per workspace in `A/B (percent)` format; unknown values use `--/-- (--%)`.
 - `Status Menu -> Open Settings`: jump directly to this extension's settings page.
 - `Status Menu -> Open Extension Page`: open this extension page in VS Code Extensions.
 - Built-in disabled tools are always blocked and never callable.
@@ -91,6 +97,17 @@ User guidance:
 - Structured diagnostics no longer include `uri`; each diagnostic includes `preview`, `previewUnavailable`, and `previewTruncated`.
 - `preview` returns source code lines from `startLine` to `endLine`, capped at 10 lines.
 - `copilot_getErrors` is still available for compatibility, but `lm_getDiagnostics` provides stable structured output.
+
+### Qgrep Tool
+- `lm_qgrepSearch` performs regex-only text search using the extension bundled binary at `bin/qgrep.exe`.
+- Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `200`).
+- `searchPath` supports absolute paths, `WorkspaceName/...`, and workspace-relative paths. Paths must exist and stay inside current workspace folders.
+- If `searchPath` is omitted, search runs across all initialized workspaces in the current multi-root session.
+- Workspace initialization is manual: run `Status Menu -> Qgrep Init All Workspaces` once before search. After init, background `qgrep watch` keeps indexes fresh.
+- Multi-root indexes are isolated per workspace under `<workspace>/.vscode/qgrep`.
+- qgrep progress is parsed from qgrep stdout frames (`[xx%] N files`). File-weighted aggregate `A/B` is shown only after all initialized workspaces have known totals.
+- If no initialized workspace is available, or `searchPath` is outside current workspaces, the tool returns an error.
+- Default policy: `lm_qgrepSearch` is exposed by default, but not enabled by default.
 
 ### Tasks And Debug Tools
 - `lm_tasks_runBuild`: starts a build task via `vscode.tasks` without interactive pickers.
@@ -122,6 +139,7 @@ User guidance:
   - Re-run handshake.
 - Status bar tooltip:
   - Hover `LM Tools Bridge` to view a compact manager ownership summary (manager online/offline, current instance match, and a capped list of other instances/workspaces).
+  - Tooltip also includes qgrep binary/index/watch status and indexed workspace names.
   - Tooltip output is line/length capped for readability and is not a full raw dump of `/mcp/status`.
 - `Restart Manager` fails:
   - The restart flow is single-instance priority: stale locks are cleaned automatically, but valid locks owned by another VS Code instance are not forcefully preempted.
@@ -137,6 +155,12 @@ User guidance:
 - manager idle auto-shutdown:
   - Manager now waits about 10 seconds of idle grace before self-shutdown after all active instances are gone.
   - Instance liveness TTL is 2.5 seconds to tolerate short heartbeat jitter.
+- `lm_qgrepSearch` fails with init required:
+  - Run `Status Menu -> Qgrep Init All Workspaces`.
+  - Make sure at least one workspace still has `.vscode/qgrep/workspace.cfg`.
+- `lm_qgrepSearch` path scope rejected:
+  - Ensure `searchPath` points to an existing path inside current workspace folders.
+  - In multi-root with ambiguous relative paths, use `WorkspaceName/...`.
 - Client stops working after port change:
   - Connect to Manager `/mcp` instead of old workspace runtime port.
 - `Tool not found or disabled`:
@@ -181,6 +205,9 @@ Recommendation:
 - `lm-tools-bridge.configureEnabled`
 - `lm-tools-bridge.statusMenu`
 - `lm-tools-bridge.openHelp`
+- `lm-tools-bridge.qgrepInitAllWorkspaces`
+- `lm-tools-bridge.qgrepRebuildIndexes`
+- `lm-tools-bridge.qgrepStopAndClearIndexes`
 
 ### Logs
 Open Output panel and select `LM Tools Bridge`.
@@ -267,6 +294,12 @@ url = "http://127.0.0.1:47100/mcp"
 ### 日常使用
 - `Configure Exposure Tools`: 选择可进入候选集的工具.
 - `Configure Enabled Tools`: 在已暴露集合内选择真正启用的工具.
+- `Status Menu -> Qgrep Init All Workspaces`: 为每个 workspace 初始化 `.vscode/qgrep/workspace.cfg` 并启动 qgrep watch.
+- `Status Menu -> Qgrep Rebuild Indexes`: 对已初始化 workspace 执行 qgrep 全量重建.
+- `Status Menu -> Qgrep Stop And Clear Indexes`: 停止 qgrep watch 并删除已初始化 workspace 的 `.vscode/qgrep`.
+- 状态栏拆分为两个条目: `LM Tools Bridge`(server 状态) 与 `qgrep`(索引进度).
+- `qgrep` 条目显示圆形进度 + 百分比 + 聚合 `A/B`; 如果没有任何已初始化 workspace,会显示 `qgrep not init`.
+- `qgrep` tooltip 按 workspace 逐行显示 `A/B (percent)` 格式; 未知值使用 `--/-- (--%)`.
 - `Status Menu -> Open Settings`: 直接跳转到扩展设置页.
 - `Status Menu -> Open Extension Page`: 在 VS Code Extensions 中打开本扩展页面.
 - Built-in disabled 工具始终被拦截,不可调用.
@@ -285,6 +318,17 @@ url = "http://127.0.0.1:47100/mcp"
 - structured diagnostics 不再包含 `uri`; 每条诊断包含 `preview`,`previewUnavailable`,`previewTruncated`.
 - `preview` 返回 `startLine` 到 `endLine` 的源码预览,最多 10 行.
 - `copilot_getErrors` 仍保留兼容,但 `lm_getDiagnostics` 提供更稳定的 structured 输出.
+
+### Qgrep 工具
+- `lm_qgrepSearch` 使用扩展内置二进制 `bin/qgrep.exe` 执行 regex 文本搜索.
+- 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
+- `searchPath` 支持绝对路径,`WorkspaceName/...` 和 workspace 相对路径. 路径必须存在且必须位于当前 workspace 内.
+- 未传 `searchPath` 时,会在当前会话中所有已初始化的 workspace 上聚合搜索.
+- workspace 初始化是手动门禁: 先执行 `Status Menu -> Qgrep Init All Workspaces`. 初始化后后台 `qgrep watch` 会自动维护索引.
+- multi-root 下每个 workspace 独立维护 `<workspace>/.vscode/qgrep` 索引目录.
+- qgrep 进度来自 qgrep stdout 帧(`[xx%] N files`). 只有在所有已初始化 workspace 都拿到总文件数后,才显示按文件加权聚合的 `A/B`.
+- 若没有任何已初始化 workspace,或 `searchPath` 不在当前 workspace 内,工具会返回错误.
+- 默认策略: `lm_qgrepSearch` 默认 exposed,默认不 enabled.
 
 ### Tasks 与 Debug 工具
 - `lm_tasks_runBuild`: 通过 `vscode.tasks` 启动 build task,不使用交互式选择器.
@@ -316,6 +360,7 @@ url = "http://127.0.0.1:47100/mcp"
   - 重新执行握手.
 - 状态栏 tooltip:
   - 鼠标悬停 `LM Tools Bridge` 可查看精简的 manager 归属摘要(manager 在线状态,当前实例是否匹配,以及限量展示的其他实例/工作区).
+  - tooltip 同时展示 qgrep binary/index/watch 状态以及已索引 workspace 名称.
   - tooltip 输出采用行数和长度限额,不会原样透传 `/mcp/status` 全量字段.
 - `Restart Manager` 失败:
   - 重启流程采用单实例优先策略: 会自动清理陈旧锁,但不会强制抢占其他 VS Code 实例持有的有效锁.
@@ -331,6 +376,12 @@ url = "http://127.0.0.1:47100/mcp"
 - manager 空闲自动退出:
   - 当所有活跃实例都消失后,manager 会先等待约 10 秒空闲窗口再自退出.
   - 实例存活 TTL 调整为 2.5 秒,用于容忍短暂 heartbeat 抖动.
+- `lm_qgrepSearch` 提示需要初始化:
+  - 先执行 `Status Menu -> Qgrep Init All Workspaces`.
+  - 确认至少一个 workspace 仍存在 `.vscode/qgrep/workspace.cfg`.
+- `lm_qgrepSearch` 路径范围被拒绝:
+  - 确认 `searchPath` 指向当前 workspace 内存在的路径.
+  - multi-root 下相对路径有歧义时,请使用 `WorkspaceName/...`.
 - 端口变化后客户端不可用:
   - 改连 Manager `/mcp`,不要继续使用旧 workspace runtime 端口.
 - `Tool not found or disabled`:
@@ -374,6 +425,9 @@ url = "http://127.0.0.1:47100/mcp"
 - `lm-tools-bridge.configureEnabled`
 - `lm-tools-bridge.statusMenu`
 - `lm-tools-bridge.openHelp`
+- `lm-tools-bridge.qgrepInitAllWorkspaces`
+- `lm-tools-bridge.qgrepRebuildIndexes`
+- `lm-tools-bridge.qgrepStopAndClearIndexes`
 
 ### 日志
 打开 Output 面板并选择 `LM Tools Bridge`.

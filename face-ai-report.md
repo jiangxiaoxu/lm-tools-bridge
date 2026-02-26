@@ -3,8 +3,8 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.93`.
-- Current build constraint: `lm_clangd_*` tools are hard-disabled and not registered.
+- Version baseline: `1.0.94`.
+- Current build constraint: clangd MCP implementation is removed and `lm_clangd_*` tools are not registered.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -15,6 +15,7 @@
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
 - `lm_qgrepSearch` is regex-only and always executes the bundled binary at `bin/qgrep.exe`.
 - `lm_qgrepFiles` uses qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns file paths only (no fuzzy score field).
+- `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init.
 - qgrep indexing is opt-in: only workspaces with `<workspace>/.vscode/qgrep/workspace.cfg` are auto-maintained by background watch plus create/delete-triggered auto `qgrep update`.
 - qgrep initialized `workspace.cfg` files include an extension-managed `search.exclude` block (`true` entries only) and always include fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`; `.gitignore` is not synced.
 - Generated qgrep regexes written into `workspace.cfg` are validated to avoid non-capturing groups (`(?:...)`) and other Perl-style `(?...)` constructs because qgrep rejects that syntax.
@@ -29,12 +30,12 @@
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths; `content.text` summaries prefer workspace-relative (`WorkspaceName/...`) display and fall back to absolute paths.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
-- `lm_clangd_*` tools remain disabled in current build.
+- No `lm_clangd_*` runtime implementation is present in current build.
 
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
-- `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepSearchTool | runQgrepFilesTool`
+- `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
 - `src/manager.ts -> handleMcpHttpRequest | dispatchRootsListRequest`
 
@@ -52,6 +53,7 @@
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
 - [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool`; Decide: validate `filePaths` resolution (absolute/`WorkspaceName/...`/relative + unique existing match), `maxResults`, and `severities` before suspecting data loss; Verify: payload contains `scope/files/preview` and expected counts after retry.
 - [qgrep init/watch lifecycle] Read: `src/qgrep.ts -> initAllWorkspaces | startWatchForInitializedWorkspaces | startAutoUpdateWatchersForInitializedWorkspaces | stopAndClearAllInitializedWorkspaces | updateWorkspaceProgress`; Decide: init command gates auto-maintenance, qgrep `watch` covers existing-file content changes, create/delete events trigger debounced `qgrep update`, `search.exclude=true` rules sync into managed `workspace.cfg` excludes (plus fixed `.git` exclude), and clear command disables by deleting `.vscode/qgrep`; Verify: `workspace.cfg` presence controls watch/auto-update startup and status updates on progress frames.
+- [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools to inspect binary readiness/init/progress; Verify: payload includes `binaryAvailable`, `workspaceStatuses`, and aggregate progress summary.
 - [qgrep search path rejected] Read: `src/qgrep.ts -> resolveSearchPath`; Decide: path must be inside current workspace folders and resolve uniquely in multi-root; Verify: outside/ambiguous path returns tool error with `WorkspaceName/...` hint.
 - [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
 - [Roots sync not triggered] Read: `src/manager.ts -> dispatchRootsListRequest`; Decide: requires client roots capability + trigger events; Verify: logs contain `roots.list.request/result/error/skip/timeout`.
@@ -69,7 +71,7 @@
 
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
-- Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep search call + one qgrep files call.
+- Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).
 - qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearch` sees expected changes without manual rebuild.
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
@@ -78,6 +80,5 @@
 - Docs: verify update triggers against `AGENTS.md`.
 
 ## Section E: Historical or Unreachable Appendix
-- Clangd snapshot is empty in current build and legacy `lm_clangd_*` symbols are not registered.
-- Clangd startup/request chains (`ensureClangdRunning`, `sendRequestWithAutoStart`, related path resolvers) are historical and unreachable from exposed tools.
+- Clangd MCP implementation was removed from source; historical release notes may still reference legacy `lm_clangd_*` tools.
 - Historical notes stay in appendix only and must not be described as current runtime mainline.

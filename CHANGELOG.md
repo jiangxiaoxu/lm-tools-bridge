@@ -6,6 +6,30 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.94] - 2026-02-26
+
+### English
+
+#### Added
+- Added `lm_qgrepGetStatus` tool to inspect qgrep binary readiness, workspace init/watch state, and indexing progress (including aggregate progress) without requiring qgrep init.
+
+#### Changed
+- `lm_qgrepGetStatus` is now exposed and enabled by default so clients can check qgrep status before calling qgrep search tools.
+
+#### Removed
+- Removed deprecated clangd MCP implementation source (`src/clangd/**`) and the default `Clangd` tool grouping rule (`^lm_clangd_`).
+
+### 中文
+
+#### Added
+- 新增 `lm_qgrepGetStatus` 工具,用于查看 qgrep binary 就绪状态、workspace 初始化/监听状态以及索引进度(含聚合进度),且不要求先完成 qgrep init.
+
+#### Changed
+- `lm_qgrepGetStatus` 现在默认 exposed 且默认 enabled,客户端可以在调用 qgrep 搜索工具前先检查 qgrep 状态.
+
+#### Removed
+- 移除已弃用的 clangd MCP 实现源码(`src/clangd/**`)以及默认 `Clangd` 工具分组规则(`^lm_clangd_`).
+
 ## [1.0.93] - 2026-02-26
 
 ### English

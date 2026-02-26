@@ -99,6 +99,8 @@ User guidance:
 - `copilot_getErrors` is still available for compatibility, but `lm_getDiagnostics` provides stable structured output.
 
 ### Qgrep Tool
+- `lm_qgrepGetStatus` returns qgrep binary availability, workspace init/watch status, per-workspace indexing progress, and aggregate progress snapshot.
+- `lm_qgrepGetStatus` input: no arguments.
 - `lm_qgrepSearch` performs regex-only text search using the extension bundled binary at `bin/qgrep.exe`.
 - `lm_qgrepFiles` searches indexed file paths using qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns path results only.
 - Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `200`).
@@ -110,7 +112,7 @@ User guidance:
 - Multi-root indexes are isolated per workspace under `<workspace>/.vscode/qgrep`.
 - qgrep progress is parsed from qgrep stdout frames (`[xx%] N files`). File-weighted aggregate `A/B` is shown only after all initialized workspaces have known totals.
 - If no initialized workspace is available, or `searchPath` is outside current workspaces, the qgrep tools return an error.
-- Default policy: `lm_qgrepSearch` and `lm_qgrepFiles` are exposed by default, but not enabled by default.
+- Default policy: `lm_qgrepGetStatus` is exposed and enabled by default; `lm_qgrepSearch` and `lm_qgrepFiles` are exposed by default, but not enabled by default.
 
 ### Tasks And Debug Tools
 - `lm_tasks_runBuild`: starts a build task via `vscode.tasks` without interactive pickers.
@@ -323,6 +325,8 @@ url = "http://127.0.0.1:47100/mcp"
 - `copilot_getErrors` 仍保留兼容,但 `lm_getDiagnostics` 提供更稳定的 structured 输出.
 
 ### Qgrep 工具
+- `lm_qgrepGetStatus` 返回 qgrep binary 可用性、workspace 初始化/监听状态、每个 workspace 的索引进度以及聚合进度快照.
+- `lm_qgrepGetStatus` 输入: 无参数.
 - `lm_qgrepSearch` 使用扩展内置二进制 `bin/qgrep.exe` 执行 regex 文本搜索.
 - `lm_qgrepFiles` 使用 qgrep `files` 模式(`fp`/`fn`/`fs`/`ff`)搜索已索引文件路径,仅返回路径结果.
 - 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
@@ -334,7 +338,7 @@ url = "http://127.0.0.1:47100/mcp"
 - multi-root 下每个 workspace 独立维护 `<workspace>/.vscode/qgrep` 索引目录.
 - qgrep 进度来自 qgrep stdout 帧(`[xx%] N files`). 只有在所有已初始化 workspace 都拿到总文件数后,才显示按文件加权聚合的 `A/B`.
 - 若没有任何已初始化 workspace,或 `searchPath` 不在当前 workspace 内,qgrep 工具会返回错误.
-- 默认策略: `lm_qgrepSearch` 与 `lm_qgrepFiles` 默认 exposed,默认不 enabled.
+- 默认策略: `lm_qgrepGetStatus` 默认 exposed 且默认 enabled; `lm_qgrepSearch` 与 `lm_qgrepFiles` 默认 exposed,默认不 enabled.
 
 ### Tasks 与 Debug 工具
 - `lm_tasks_runBuild`: 通过 `vscode.tasks` 启动 build task,不使用交互式选择器.

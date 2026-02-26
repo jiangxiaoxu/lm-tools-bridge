@@ -10,5 +10,4 @@ This folder is organized by responsibility to keep the extension entrypoint smal
 - qgrep.ts: qgrep binary integration, workspace index lifecycle, and custom qgrep search backend.
 - toolGrouping.ts: Source-based tool grouping helpers for the configuration UI.
 - toolConfigPanel.ts: Webview-based tree configuration panel for exposure/enabled tool selection.
-- clangd/: Isolated clangd MCP tool layer (client bootstrap, transport, schemas, and tool implementations).
 - searchTools.ts: Workspace search helpers used by custom find tools.

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.93",
+  "version": "1.0.94",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -124,11 +124,6 @@
               "id": "angelscript",
               "label": "AngelScript",
               "pattern": "^angelscript_"
-            },
-            {
-              "id": "clangd",
-              "label": "Clangd",
-              "pattern": "^lm_clangd_"
             }
           ],
           "items": {

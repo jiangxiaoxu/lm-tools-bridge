@@ -4,11 +4,15 @@ import { TextDecoder } from 'node:util';
 import * as path from 'node:path';
 import * as z from 'zod';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
-import { getClangdToolsSnapshot } from './clangd';
-import { resolveInputFilePath, resolveStructuredPath } from './clangd/workspacePath';
+import { resolveInputFilePath, resolveStructuredPath } from './workspacePath';
 import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
 import { showToolConfigPanel, type ToolConfigPanelResult } from './toolConfigPanel';
-import { executeQgrepFilesSearch, executeQgrepSearch } from './qgrep';
+import {
+  executeQgrepFilesSearch,
+  executeQgrepSearch,
+  getQgrepStatusSummary,
+  type QgrepStatusSummary,
+} from './qgrep';
 import {
   CONFIG_SECTION,
   getConfigValue,
@@ -47,6 +51,7 @@ const LM_TASKS_RUN_BUILD_TOOL_NAME = 'lm_tasks_runBuild';
 const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
 const LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME = 'lm_debug_listLaunchConfigs';
 const LM_DEBUG_START_TOOL_NAME = 'lm_debug_start';
+const LM_QGREP_GET_STATUS_TOOL_NAME = 'lm_qgrepGetStatus';
 const LM_QGREP_SEARCH_TOOL_NAME = 'lm_qgrepSearch';
 const LM_QGREP_FILES_TOOL_NAME = 'lm_qgrepFiles';
 const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 100;
@@ -55,21 +60,6 @@ const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
 const LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
 type LmGetDiagnosticsSeverity = typeof LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES[number];
 const LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES: readonly LmGetDiagnosticsSeverity[] = ['error', 'warning'];
-// Deprecated clangd default exposed list (kept for reference only):
-// const DEFAULT_CLANGD_EXPOSED_TOOL_NAMES = [
-//   'lm_clangd_status',
-//   'lm_clangd_switchSourceHeader',
-//   'lm_clangd_typeHierarchy',
-//   'lm_clangd_symbolSearch',
-//   'lm_clangd_symbolBundle',
-//   'lm_clangd_symbolInfo',
-//   'lm_clangd_symbolReferences',
-//   'lm_clangd_symbolImplementations',
-//   'lm_clangd_callHierarchy',
-//   'lm_clangd_lspRequest',
-// ];
-const DEFAULT_CLANGD_EXPOSED_TOOL_NAMES: readonly string[] = [];
-
 const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
@@ -77,6 +67,7 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_findFiles',
   'lm_findTextInFiles',
   'lm_getDiagnostics',
+  LM_QGREP_GET_STATUS_TOOL_NAME,
 ];
 const DEFAULT_EXPOSED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_TOOL_NAMES,
@@ -86,7 +77,6 @@ const DEFAULT_EXPOSED_TOOL_NAMES = [
   LM_DEBUG_START_TOOL_NAME,
   LM_QGREP_SEARCH_TOOL_NAME,
   LM_QGREP_FILES_TOOL_NAME,
-  ...DEFAULT_CLANGD_EXPOSED_TOOL_NAMES,
 ];
 const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
 const BUILTIN_DISABLED_TOOL_NAMES = [
@@ -136,11 +126,6 @@ const DEFAULT_TOOL_GROUPING_RULES: ToolGroupingRuleConfig[] = [
     id: 'angelscript',
     label: 'AngelScript',
     pattern: '^angelscript_',
-  },
-  {
-    id: 'clangd',
-    label: 'Clangd',
-    pattern: '^lm_clangd_',
   },
 ];
 const TOOL_GROUPING_RULE_MAX_COUNT = 100;
@@ -364,6 +349,18 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'searchPath must resolve inside the current workspace folders; external paths are rejected.',
 ].join('\n');
 
+const LM_QGREP_GET_STATUS_DESCRIPTION = [
+  'Get qgrep binary availability, workspace initialization/watch status, and indexing progress snapshot.',
+  'Returns status even when qgrep is not initialized yet.',
+  'Use this tool to inspect qgrep readiness before calling qgrep search tools.',
+].join('\n');
+
+const LM_QGREP_GET_STATUS_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
+
 const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
@@ -446,6 +443,14 @@ interface LmGetDiagnosticsNormalizedDiagnostic {
   preview: string;
   previewUnavailable: boolean;
   previewTruncated: boolean;
+}
+
+interface QgrepToolAggregateProgress {
+  filesKnown: boolean;
+  percent?: number;
+  indexedFiles?: number;
+  totalFiles?: number;
+  remainingFiles?: number;
 }
 
 interface LmGetDiagnosticsFileResult {
@@ -1948,6 +1953,17 @@ function buildQgrepSearchToolDefinition(): CustomToolDefinition {
   };
 }
 
+function buildQgrepGetStatusToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_QGREP_GET_STATUS_TOOL_NAME,
+    description: LM_QGREP_GET_STATUS_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_QGREP_GET_STATUS_SCHEMA,
+    isCustom: true,
+    invoke: runQgrepGetStatusTool,
+  };
+}
+
 function buildQgrepFilesToolDefinition(): CustomToolDefinition {
   return {
     name: LM_QGREP_FILES_TOOL_NAME,
@@ -2094,6 +2110,12 @@ async function runDebugStartTool(input: Record<string, unknown>): Promise<vscode
 async function runQgrepSearchTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeQgrepSearch(input);
   return buildCustomToolResult(formatQgrepSearchSummary(payload), payload);
+}
+
+async function runQgrepGetStatusTool(_input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const status = getQgrepStatusSummary();
+  const payload = buildQgrepGetStatusPayload(status);
+  return buildCustomToolResult(formatQgrepGetStatusSummary(payload), payload);
 }
 
 async function runQgrepFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
@@ -2517,6 +2539,138 @@ function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
     lines.push('---');
     lines.push(`// ${matchPath}:${line}`);
     lines.push(preview);
+  }
+  return lines.join('\n');
+}
+
+function computeQgrepAggregateProgressForTool(status: QgrepStatusSummary): QgrepToolAggregateProgress {
+  const initialized = status.workspaceStatuses.filter((entry) => entry.initialized);
+  if (initialized.length === 0) {
+    return {
+      filesKnown: false,
+    };
+  }
+
+  const allTotalsKnown = initialized.every((entry) => {
+    return entry.progressKnown && typeof entry.totalFiles === 'number' && entry.totalFiles >= 0;
+  });
+  if (allTotalsKnown) {
+    let indexedFiles = 0;
+    let totalFiles = 0;
+    for (const entry of initialized) {
+      const total = entry.totalFiles ?? 0;
+      const indexed = Math.max(0, Math.min(entry.indexedFiles ?? 0, total));
+      indexedFiles += indexed;
+      totalFiles += total;
+    }
+    const percent = totalFiles > 0 ? Math.round((indexedFiles / totalFiles) * 100) : 100;
+    return {
+      filesKnown: true,
+      percent,
+      indexedFiles,
+      totalFiles,
+      remainingFiles: Math.max(totalFiles - indexedFiles, 0),
+    };
+  }
+
+  const sampledPercents = initialized
+    .map((entry) => entry.progressPercent)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (sampledPercents.length === 0) {
+    return {
+      filesKnown: false,
+    };
+  }
+
+  const percent = Math.round(
+    sampledPercents.reduce((sum, value) => sum + value, 0) / sampledPercents.length,
+  );
+  return {
+    filesKnown: false,
+    percent: Math.max(0, Math.min(100, percent)),
+  };
+}
+
+function buildQgrepGetStatusPayload(status: QgrepStatusSummary): Record<string, unknown> {
+  return {
+    ...status,
+    aggregate: computeQgrepAggregateProgressForTool(status),
+  };
+}
+
+function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
+  const binaryAvailable = payload.binaryAvailable === true;
+  const binaryPath = typeof payload.binaryPath === 'string' && payload.binaryPath.length > 0
+    ? payload.binaryPath
+    : '<none>';
+  const totalWorkspaces = typeof payload.totalWorkspaces === 'number' ? payload.totalWorkspaces : 0;
+  const initializedWorkspaces = typeof payload.initializedWorkspaces === 'number' ? payload.initializedWorkspaces : 0;
+  const watchingWorkspaces = typeof payload.watchingWorkspaces === 'number' ? payload.watchingWorkspaces : 0;
+  const aggregate = isPlainObject(payload.aggregate)
+    ? payload.aggregate as Record<string, unknown>
+    : undefined;
+  const workspaceStatuses = Array.isArray(payload.workspaceStatuses) ? payload.workspaceStatuses : [];
+  const lines: string[] = [
+    'Qgrep status summary',
+    `binary: ${binaryAvailable ? 'ok' : 'missing'}`,
+    `binaryPath: ${binaryPath}`,
+    `workspaces: total=${totalWorkspaces}, initialized=${initializedWorkspaces}, watching=${watchingWorkspaces}`,
+  ];
+
+  if (!aggregate) {
+    lines.push('aggregate: unavailable');
+  } else {
+    const filesKnown = aggregate.filesKnown === true;
+    const indexedFiles = typeof aggregate.indexedFiles === 'number' ? aggregate.indexedFiles : undefined;
+    const totalFiles = typeof aggregate.totalFiles === 'number' ? aggregate.totalFiles : undefined;
+    const remainingFiles = typeof aggregate.remainingFiles === 'number' ? aggregate.remainingFiles : undefined;
+    const percent = typeof aggregate.percent === 'number' ? aggregate.percent : undefined;
+    if (filesKnown && indexedFiles !== undefined && totalFiles !== undefined) {
+      const remainingText = remainingFiles !== undefined ? `, remaining=${remainingFiles}` : '';
+      lines.push(`aggregate: ${indexedFiles}/${totalFiles} (${percent ?? 0}%)${remainingText}`);
+    } else if (percent !== undefined) {
+      lines.push(`aggregate: --/-- (${percent}%)`);
+    } else if (initializedWorkspaces === 0) {
+      lines.push('aggregate: not initialized');
+    } else {
+      lines.push('aggregate: --/-- (--%)');
+    }
+  }
+
+  if (workspaceStatuses.length === 0) {
+    lines.push('No workspace folders.');
+    return lines.join('\n');
+  }
+
+  for (const entry of workspaceStatuses) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const workspaceName = typeof record.workspaceName === 'string' ? record.workspaceName : '<unknown>';
+    const initialized = record.initialized === true;
+    const watching = record.watching === true;
+    const indexing = record.indexing === true;
+    const progressKnown = record.progressKnown === true;
+    const indexedFiles = typeof record.indexedFiles === 'number' ? record.indexedFiles : undefined;
+    const totalFiles = typeof record.totalFiles === 'number' ? record.totalFiles : undefined;
+    const percent = typeof record.progressPercent === 'number' ? record.progressPercent : undefined;
+    lines.push('---');
+    if (!initialized) {
+      lines.push(`${workspaceName}: not initialized`);
+      continue;
+    }
+    if (progressKnown && indexedFiles !== undefined && totalFiles !== undefined) {
+      lines.push(
+        `${workspaceName}: ${indexedFiles}/${totalFiles} (${percent ?? 0}%), watching=${watching}, indexing=${indexing}`,
+      );
+      continue;
+    }
+    if (percent !== undefined) {
+      lines.push(`${workspaceName}: --/-- (${percent}%), watching=${watching}, indexing=${indexing}`);
+      continue;
+    }
+    lines.push(`${workspaceName}: --/-- (--%), watching=${watching}, indexing=${indexing}`);
   }
   return lines.join('\n');
 }
@@ -3223,9 +3377,9 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
     buildTasksRunTestToolDefinition(),
     buildDebugListLaunchConfigsToolDefinition(),
     buildDebugStartToolDefinition(),
+    buildQgrepGetStatusToolDefinition(),
     buildQgrepSearchToolDefinition(),
     buildQgrepFilesToolDefinition(),
-    ...getClangdToolsSnapshot(),
   ];
 }
 

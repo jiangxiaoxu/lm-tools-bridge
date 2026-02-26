@@ -1,7 +1,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { ClangdToolError } from './errors';
+
+class WorkspacePathError extends Error {
+  public readonly code: 'INVALID_INPUT';
+  public readonly details?: unknown;
+
+  constructor(code: 'INVALID_INPUT', message: string, details?: unknown) {
+    super(message);
+    this.code = code;
+    this.details = details;
+  }
+}
 
 export interface ResolvedInputFilePath {
   absoluteFilePath: string;
@@ -76,7 +86,7 @@ function ensurePathExists(targetPath: string, inputPath: string): void {
   if (pathExists(targetPath)) {
     return;
   }
-  throw new ClangdToolError(
+  throw new WorkspacePathError(
     'INVALID_INPUT',
     `Path '${inputPath}' does not exist.`,
   );
@@ -90,7 +100,7 @@ function ensurePathInsideWorkspaceRoot(
   if (isPathInsideWorkspaceRoot(workspaceFolder.uri.fsPath, targetPath)) {
     return;
   }
-  throw new ClangdToolError(
+  throw new WorkspacePathError(
     'INVALID_INPUT',
     `Path '${inputPath}' resolves outside workspace '${workspaceFolder.name}'. Use '${workspaceFolder.name}/...'.`,
   );
@@ -122,13 +132,13 @@ function resolveWorkspacePrefixedPath(
 function resolveWorkspaceRootRelativePath(inputPath: string): string {
   const folders = getWorkspaceFolders();
   if (folders.length === 0) {
-    throw new ClangdToolError(
+    throw new WorkspacePathError(
       'INVALID_INPUT',
       `Cannot resolve relative path '${inputPath}' because no workspace folders are open.`,
     );
   }
   if (containsRelativeTraversal(inputPath)) {
-    throw new ClangdToolError(
+    throw new WorkspacePathError(
       'INVALID_INPUT',
       `Relative path '${inputPath}' must stay inside workspace root and cannot escape with '..'.`,
     );
@@ -154,7 +164,7 @@ function resolveWorkspaceRootRelativePath(inputPath: string): string {
   }
   if (matches.length === 0) {
     const workspaceNames = getWorkspaceNames();
-    throw new ClangdToolError(
+    throw new WorkspacePathError(
       'INVALID_INPUT',
       `Relative path '${inputPath}' was not found in any workspace folder. Known workspaces: ${workspaceNames || '(none)'}.`,
     );
@@ -164,7 +174,7 @@ function resolveWorkspaceRootRelativePath(inputPath: string): string {
     .map((match) => `${match.folder.name} (${normalizeSlash(match.folder.uri.fsPath)})`)
     .join(', ');
   const hintPath = normalizeRelativePathHint(inputPath);
-  throw new ClangdToolError(
+  throw new WorkspacePathError(
     'INVALID_INPUT',
     `Relative path '${inputPath}' is ambiguous across workspace folders: ${ambiguousTargets}. Use 'WorkspaceName/${hintPath}'.`,
   );
@@ -173,10 +183,10 @@ function resolveWorkspaceRootRelativePath(inputPath: string): string {
 export function resolveInputFilePath(filePath: string): ResolvedInputFilePath {
   const raw = filePath.trim();
   if (!raw) {
-    throw new ClangdToolError('INVALID_INPUT', "Expected 'filePath' to be a non-empty string.");
+    throw new WorkspacePathError('INVALID_INPUT', "Expected 'filePath' to be a non-empty string.");
   }
   if (/^file:\/\//iu.test(raw)) {
-    throw new ClangdToolError('INVALID_INPUT', "Input no longer accepts URI. Use 'filePath' instead of 'uri'.");
+    throw new WorkspacePathError('INVALID_INPUT', "Input no longer accepts URI. Use 'filePath' instead of 'uri'.");
   }
 
   let absoluteFilePath: string;

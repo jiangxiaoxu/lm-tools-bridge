@@ -28,7 +28,7 @@ npm version patch --no-git-tag-version
 
 ## Build verification
 
-- After code changes, run `npm run compile` to verify compilation.
+- After code changes, run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` to verify packaging and overwrite the previous VSIX artifact only after a successful package.
 
 ## Documentation maintenance
 

@@ -19,6 +19,7 @@
 - qgrep initialized `workspace.cfg` files include an extension-managed `search.exclude` block (`true` entries only) and always include fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`; `.gitignore` is not synced.
 - Generated qgrep regexes written into `workspace.cfg` are validated to avoid non-capturing groups (`(?:...)`) and other Perl-style `(?...)` constructs because qgrep rejects that syntax.
 - qgrep multi-root storage is per-workspace under `<workspace>/.vscode/qgrep`; `Qgrep Stop And Clear Indexes` removes that directory and disables maintenance until re-init.
+- qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server/manager logs remain in `lm-tools-bridge`.
 - `lm_qgrepSearch.searchPath` must resolve to an existing path inside current workspace folders; outside paths are rejected.
 - `lm_qgrepFiles.searchPath` follows the same path resolution/containment rules as `lm_qgrepSearch.searchPath`.
 - Status bar is split: server item (`LM Tools Bridge`) and dedicated qgrep item (`qgrep <circle> <percent> <A/B>`).
@@ -67,7 +68,7 @@
 - Version bump only -> `CHANGELOG.md`.
 
 ## Section D: Verification Checklist
-- Compile: run `npm run compile`.
+- Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
 - Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep search call + one qgrep files call.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).
 - qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearch` sees expected changes without manual rebuild.

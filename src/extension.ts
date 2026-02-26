@@ -53,6 +53,8 @@ import {
 } from './qgrep';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
+const TOOLS_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-tools';
+const QGREP_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-qgrep';
 const START_COMMAND_ID = 'lm-tools-bridge.start';
 const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
 const CONFIGURE_EXPOSURE_COMMAND_ID = 'lm-tools-bridge.configureExposure';
@@ -133,6 +135,8 @@ let serverState: McpServerState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let qgrepStatusBarItem: vscode.StatusBarItem | undefined;
 let logChannel: vscode.LogOutputChannel | undefined;
+let toolsLogChannel: vscode.LogOutputChannel | undefined;
+let qgrepLogChannel: vscode.LogOutputChannel | undefined;
 let helpUrl: string | undefined;
 let statusRefreshTimer: NodeJS.Timeout | undefined;
 let qgrepStatusRefreshTimer: NodeJS.Timeout | undefined;
@@ -147,17 +151,21 @@ let managerRestartSettleTimer: NodeJS.Timeout | undefined;
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
   const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME, { log: true });
+  const toolsOutputChannel = vscode.window.createOutputChannel(TOOLS_OUTPUT_CHANNEL_NAME, { log: true });
+  const qgrepOutputChannel = vscode.window.createOutputChannel(QGREP_OUTPUT_CHANNEL_NAME, { log: true });
   logChannel = outputChannel as vscode.LogOutputChannel;
+  toolsLogChannel = toolsOutputChannel as vscode.LogOutputChannel;
+  qgrepLogChannel = qgrepOutputChannel as vscode.LogOutputChannel;
   setConfigurationWarningLogger(logWarn);
   setToolingLogger({
-    info: logInfo,
-    warn: logWarn,
-    error: logError,
+    info: logToolingInfo,
+    warn: logToolingWarn,
+    error: logToolingError,
   });
   setQgrepLogger({
-    info: logInfo,
-    warn: logWarn,
-    error: logError,
+    info: logQgrepInfo,
+    warn: logQgrepWarn,
+    error: logQgrepError,
   });
   void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
@@ -235,6 +243,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     outputChannel,
+    toolsOutputChannel,
+    qgrepOutputChannel,
     statusBarItem,
     qgrepStatusBarItem,
     startCommand,
@@ -1461,12 +1471,44 @@ function logInfo(message: string): void {
   console.info(message);
 }
 
+function logToolingInfo(message: string): void {
+  if (toolsLogChannel) {
+    toolsLogChannel.info(message);
+    return;
+  }
+  logInfo(message);
+}
+
+function logQgrepInfo(message: string): void {
+  if (qgrepLogChannel) {
+    qgrepLogChannel.info(message);
+    return;
+  }
+  logInfo(message);
+}
+
 function logWarn(message: string): void {
   if (logChannel) {
     logChannel.warn(message);
     return;
   }
   console.warn(message);
+}
+
+function logToolingWarn(message: string): void {
+  if (toolsLogChannel) {
+    toolsLogChannel.warn(message);
+    return;
+  }
+  logWarn(message);
+}
+
+function logQgrepWarn(message: string): void {
+  if (qgrepLogChannel) {
+    qgrepLogChannel.warn(message);
+    return;
+  }
+  logWarn(message);
 }
 
 function logError(message: string): void {
@@ -1476,6 +1518,24 @@ function logError(message: string): void {
     return;
   }
   console.error(message);
+}
+
+function logToolingError(message: string): void {
+  if (toolsLogChannel) {
+    toolsLogChannel.error(message);
+    toolsLogChannel.show(true);
+    return;
+  }
+  logError(message);
+}
+
+function logQgrepError(message: string): void {
+  if (qgrepLogChannel) {
+    qgrepLogChannel.error(message);
+    qgrepLogChannel.show(true);
+    return;
+  }
+  logError(message);
 }
 
 function logStatusInfo(message: string): void {

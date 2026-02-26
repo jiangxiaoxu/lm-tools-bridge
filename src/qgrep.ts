@@ -8,6 +8,8 @@ const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
 const WATCH_RESTART_DELAY_MS = 1000;
 const AUTO_UPDATE_DEBOUNCE_MS = 2000;
 const SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS = 500;
+const TOOL_SEARCH_READY_TIMEOUT_MS = 150_000;
+const TOOL_SEARCH_READY_POLL_INTERVAL_MS = 200;
 const DEFAULT_MAX_RESULTS = 200;
 const MIN_MAX_RESULTS = 1;
 const INIT_COMMAND_HINT = 'Run "LM Tools Bridge: Qgrep Init All Workspaces" first.';
@@ -90,8 +92,14 @@ interface WorkspaceQgrepState {
   autoUpdateInFlight: boolean;
   autoUpdateDirty: boolean;
   pendingCreateDeleteCount: number;
+  pendingIndexOperationCount: number;
   managedSearchExcludeDirty: boolean;
   restartOnExit: boolean;
+  indexOperationChain?: Promise<void>;
+  toolEnsureReadyPromise?: Promise<void>;
+  activeIndexCommandProcess?: ChildProcessWithoutNullStreams;
+  activeIndexCommandKind?: QgrepIndexCommandKind;
+  activeIndexCommandCancelledProcess?: ChildProcessWithoutNullStreams;
 }
 
 interface WorkspaceIndexProgress {
@@ -112,6 +120,15 @@ interface QgrepCommandResult {
 interface QgrepCommandOptions {
   progressState?: WorkspaceQgrepState;
 }
+
+type QgrepIndexCommandKind = 'init' | 'update' | 'build';
+
+interface WorkspaceIndexCommandResult {
+  command: QgrepCommandResult;
+  cancelledByClear: boolean;
+}
+
+type IndexCommandLogScope = 'autoupdate' | 'init' | 'rebuild';
 
 interface QgrepSearchTarget {
   state: WorkspaceQgrepState;
@@ -147,6 +164,7 @@ class QgrepService implements vscode.Disposable {
     this.startWatchForInitializedWorkspaces();
     this.startAutoUpdateWatchersForInitializedWorkspaces();
     this.notifyStatusChanged();
+    this.queueStartupRefreshForInitializedWorkspaces();
 
     const folderWatcher = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
       this.handleWorkspaceFolderChanges(event);
@@ -166,6 +184,7 @@ class QgrepService implements vscode.Disposable {
     for (const state of this.states.values()) {
       this.stopWatch(state);
       this.stopAutoUpdateWatcher(state);
+      this.cancelWorkspaceIndexCommandForClear(state);
     }
     this.states.clear();
     this.notifyStatusChanged();
@@ -254,8 +273,10 @@ class QgrepService implements vscode.Disposable {
       try {
         this.stopWatch(state);
         this.stopAutoUpdateWatcher(state);
+        this.cancelWorkspaceIndexCommandForClear(state);
         await fs.promises.rm(state.qgrepDirPath, { recursive: true, force: true });
         this.resetWorkspaceProgress(state);
+        this.setWorkspaceIndexing(state, false);
         processed += 1;
       } catch (error) {
         failures.push(`${state.folder.name}: ${String(error)}`);
@@ -277,6 +298,8 @@ class QgrepService implements vscode.Disposable {
     const query = this.parseQuery(input);
     const searchPath = this.parseOptionalSearchPath(input);
     const maxResults = this.parseMaxResults(input);
+    const useCaseInsensitiveSearch = this.shouldUseCaseInsensitiveSearchForQuery(query);
+    await this.ensureToolSearchReady();
     const targets = this.resolveSearchTargets(searchPath);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
@@ -292,7 +315,7 @@ class QgrepService implements vscode.Disposable {
         break;
       }
 
-      const targetMatches = await this.searchInWorkspace(target, query, remaining);
+      const targetMatches = await this.searchInWorkspace(target, query, useCaseInsensitiveSearch, remaining);
       if (targetMatches.length >= remaining) {
         capped = true;
       }
@@ -320,9 +343,9 @@ class QgrepService implements vscode.Disposable {
   public async files(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const query = this.parseFilesQuery(input);
     const mode = this.parseFilesMode(input);
-    const caseInsensitive = this.parseOptionalBooleanInput(input.caseInsensitive, 'caseInsensitive') === true;
     const searchPath = this.parseOptionalSearchPath(input);
     const maxResults = this.parseMaxResults(input);
+    await this.ensureToolSearchReady();
     const targets = this.resolveSearchTargets(searchPath);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
@@ -338,7 +361,7 @@ class QgrepService implements vscode.Disposable {
         break;
       }
 
-      const targetFiles = await this.searchFilesInWorkspace(target, query, mode, caseInsensitive, remaining);
+      const targetFiles = await this.searchFilesInWorkspace(target, query, mode, remaining);
       if (targetFiles.length >= remaining) {
         capped = true;
       }
@@ -358,7 +381,6 @@ class QgrepService implements vscode.Disposable {
       mode,
       searchPath: searchPath ?? null,
       maxResults,
-      caseInsensitive,
       count: files.length,
       capped,
       sort: 'qgrep-native',
@@ -437,6 +459,29 @@ class QgrepService implements vscode.Disposable {
   private resetWorkspaceProgress(state: WorkspaceQgrepState): void {
     state.progress = this.createEmptyProgress();
     this.notifyStatusChanged();
+  }
+
+  private queueStartupRefreshForInitializedWorkspaces(): void {
+    const initializedStates = [...this.states.values()].filter((state) => this.isWorkspaceInitialized(state));
+    if (initializedStates.length === 0) {
+      return;
+    }
+    qgrepLogger.info(`[qgrep.startup-update] queueing startup refresh for ${String(initializedStates.length)} workspace(s)`);
+    for (const state of initializedStates) {
+      this.queueWorkspaceStartupAutoUpdate(state);
+    }
+  }
+
+  private queueWorkspaceStartupAutoUpdate(state: WorkspaceQgrepState): void {
+    if (this.disposed || this.states.get(state.key) !== state) {
+      return;
+    }
+    if (!this.isWorkspaceInitialized(state)) {
+      return;
+    }
+    state.autoUpdateDirty = true;
+    qgrepLogger.info(`[qgrep.startup-update:${state.folder.name}] queued startup refresh`);
+    this.scheduleWorkspaceAutoUpdate(state, 0);
   }
 
   private markWorkspaceIndexingFailed(state: WorkspaceQgrepState): void {
@@ -566,6 +611,38 @@ class QgrepService implements vscode.Disposable {
     return trimmed;
   }
 
+  private logIndexCommandCancelledDuringClear(
+    state: WorkspaceQgrepState,
+    scope: IndexCommandLogScope,
+    commandKind: QgrepIndexCommandKind,
+  ): void {
+    qgrepLogger.info(`[qgrep.${scope}:${state.folder.name}] ${commandKind} cancelled during clear`);
+  }
+
+  private classifyWatchLogLineLevel(line: string): 'info' | 'warn' {
+    const normalized = line.toLowerCase();
+    if (
+      normalized.includes('error')
+      || normalized.includes('failed')
+      || normalized.includes('fatal')
+      || normalized.includes('cannot')
+      || normalized.includes('unable')
+      || normalized.includes('panic')
+    ) {
+      return 'warn';
+    }
+    return 'info';
+  }
+
+  private logWatchLine(state: WorkspaceQgrepState, line: string): void {
+    const level = this.classifyWatchLogLineLevel(line);
+    if (level === 'warn') {
+      qgrepLogger.warn(`[qgrep.watch:${state.folder.name}] ${line}`);
+      return;
+    }
+    qgrepLogger.info(`[qgrep.watch:${state.folder.name}] ${line}`);
+  }
+
   private parseFilesQuery(input: Record<string, unknown>): string {
     const value = input.query;
     if (typeof value !== 'string') {
@@ -634,6 +711,138 @@ class QgrepService implements vscode.Disposable {
       throw new Error(`maxResults must be an integer >= ${MIN_MAX_RESULTS}.`);
     }
     return rounded;
+  }
+
+  private async ensureToolSearchReady(): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      throw new Error('No workspace folders are open.');
+    }
+    this.syncWorkspaceStates(folders);
+
+    const readyPromise = Promise.all(folders.map(async (folder) => {
+      const state = this.getStateForFolder(folder);
+      if (!state) {
+        throw new Error(`Failed to allocate qgrep state for workspace '${folder.name}'.`);
+      }
+      await this.ensureWorkspaceReadyForToolSearch(state);
+    }));
+
+    try {
+      await this.waitWithTimeout(readyPromise, TOOL_SEARCH_READY_TIMEOUT_MS);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Timed out') {
+        throw this.buildToolSearchReadyTimeoutError();
+      }
+      throw error;
+    }
+  }
+
+  private async ensureWorkspaceReadyForToolSearch(state: WorkspaceQgrepState): Promise<void> {
+    if (this.isWorkspaceReadyForToolSearch(state)) {
+      return;
+    }
+    if (state.toolEnsureReadyPromise) {
+      await state.toolEnsureReadyPromise;
+      return;
+    }
+
+    const promise = this.ensureWorkspaceReadyForToolSearchInternal(state);
+    state.toolEnsureReadyPromise = promise;
+    this.notifyStatusChanged();
+    try {
+      await promise;
+    } finally {
+      if (state.toolEnsureReadyPromise === promise) {
+        state.toolEnsureReadyPromise = undefined;
+        this.notifyStatusChanged();
+      }
+    }
+  }
+
+  private async ensureWorkspaceReadyForToolSearchInternal(state: WorkspaceQgrepState): Promise<void> {
+    while (true) {
+      if (this.disposed) {
+        throw new Error('Qgrep service is disposed.');
+      }
+      if (this.states.get(state.key) !== state) {
+        throw new Error(`Workspace '${state.folder.name}' is no longer available.`);
+      }
+
+      if (!this.isWorkspaceInitialized(state)) {
+        await this.initWorkspace(state);
+        continue;
+      }
+      if (this.isWorkspaceReadyForToolSearch(state)) {
+        return;
+      }
+
+      await delayMs(TOOL_SEARCH_READY_POLL_INTERVAL_MS);
+    }
+  }
+
+  private isWorkspaceReadyForToolSearch(state: WorkspaceQgrepState): boolean {
+    if (!this.isWorkspaceInitialized(state)) {
+      return false;
+    }
+    if (state.pendingIndexOperationCount > 0) {
+      return false;
+    }
+    if (state.autoUpdateInFlight) {
+      return false;
+    }
+    if (state.progress.indexing) {
+      return false;
+    }
+    if (state.progress.progressKnown) {
+      const percent = state.progress.progressPercent ?? 0;
+      return percent >= 100;
+    }
+    return true;
+  }
+
+  private async waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error('Timed out'));
+          }, Math.max(0, timeoutMs));
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private buildToolSearchReadyTimeoutError(): Error {
+    const waitingStates = [...this.states.values()].filter((state) => !this.isWorkspaceReadyForToolSearch(state));
+    const details = waitingStates.length > 0
+      ? waitingStates
+        .map((state) => `${state.folder.name}(${this.describeWorkspaceToolReadiness(state)})`)
+        .join('; ')
+      : 'unknown workspace state';
+    return new Error(
+      `Timed out after ${String(Math.floor(TOOL_SEARCH_READY_TIMEOUT_MS / 1000))}s waiting for qgrep indexing to become ready. `
+      + `Use lm_qgrepGetStatus to inspect progress. Pending: ${details}.`,
+    );
+  }
+
+  private describeWorkspaceToolReadiness(state: WorkspaceQgrepState): string {
+    const parts: string[] = [];
+    parts.push(`initialized=${String(this.isWorkspaceInitialized(state))}`);
+    parts.push(`pendingOps=${String(state.pendingIndexOperationCount)}`);
+    parts.push(`autoUpdateInFlight=${String(state.autoUpdateInFlight)}`);
+    parts.push(`indexing=${String(state.progress.indexing)}`);
+    parts.push(`progressKnown=${String(state.progress.progressKnown)}`);
+    if (state.progress.progressPercent !== undefined) {
+      parts.push(`progressPercent=${String(state.progress.progressPercent)}`);
+    }
+    return parts.join(', ');
   }
 
   private resolveSearchTargets(searchPath: string | undefined): QgrepSearchTarget[] {
@@ -751,9 +960,13 @@ class QgrepService implements vscode.Disposable {
   private async searchInWorkspace(
     target: QgrepSearchTarget,
     query: string,
+    useCaseInsensitiveSearch: boolean,
     maxResults: number,
   ): Promise<ParsedQgrepMatch[]> {
     const args: string[] = ['search', target.state.configPath, `L${maxResults}`];
+    if (useCaseInsensitiveSearch) {
+      args.push('i');
+    }
     if (target.filterRegex) {
       args.push(`fi${target.filterRegex}`);
     }
@@ -767,15 +980,18 @@ class QgrepService implements vscode.Disposable {
     return this.parseSearchOutput(result.stdout, target.state.folder);
   }
 
+  private shouldUseCaseInsensitiveSearchForQuery(query: string): boolean {
+    return !/[A-Z]/u.test(query);
+  }
+
   private async searchFilesInWorkspace(
     target: QgrepSearchTarget,
     query: string,
     mode: QgrepFilesMode,
-    caseInsensitive: boolean,
     maxResults: number,
   ): Promise<ParsedQgrepFile[]> {
     const args: string[] = ['files', target.state.configPath];
-    if (caseInsensitive) {
+    if (process.platform === 'win32') {
       args.push('i');
     }
     args.push(mode);
@@ -1053,6 +1269,7 @@ class QgrepService implements vscode.Disposable {
       autoUpdateInFlight: false,
       autoUpdateDirty: false,
       pendingCreateDeleteCount: 0,
+      pendingIndexOperationCount: 0,
       managedSearchExcludeDirty: false,
       restartOnExit: false,
     };
@@ -1075,12 +1292,56 @@ class QgrepService implements vscode.Disposable {
     return fs.existsSync(state.configPath);
   }
 
+  private async runWorkspaceIndexOperationExclusive(
+    state: WorkspaceQgrepState,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    state.pendingIndexOperationCount += 1;
+    this.notifyStatusChanged();
+
+    const previousChain = state.indexOperationChain;
+    const nextChain = (previousChain ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        await operation();
+      });
+
+    state.indexOperationChain = nextChain;
+
+    try {
+      await nextChain;
+    } finally {
+      state.pendingIndexOperationCount = Math.max(0, state.pendingIndexOperationCount - 1);
+      if (state.indexOperationChain === nextChain) {
+        state.indexOperationChain = undefined;
+      }
+      this.notifyStatusChanged();
+    }
+  }
+
   private startWatchForInitializedWorkspaces(): void {
     for (const state of this.states.values()) {
       if (!this.isWorkspaceInitialized(state)) {
         continue;
       }
       this.startWatch(state);
+    }
+  }
+
+  private cancelWorkspaceIndexCommandForClear(state: WorkspaceQgrepState): void {
+    const child = state.activeIndexCommandProcess;
+    const kind = state.activeIndexCommandKind;
+    if (!child) {
+      return;
+    }
+    state.activeIndexCommandCancelledProcess = child;
+    qgrepLogger.info(
+      `[qgrep.clear:${state.folder.name}] cancelling active ${kind ?? 'index'} command before clearing indexes`,
+    );
+    try {
+      child.kill();
+    } catch (error) {
+      qgrepLogger.warn(`[qgrep.clear:${state.folder.name}] failed to cancel index command: ${String(error)}`);
     }
   }
 
@@ -1138,7 +1399,7 @@ class QgrepService implements vscode.Disposable {
       for (const rawLine of parsed.lines) {
         const line = rawLine.trim();
         if (line.length > 0) {
-          qgrepLogger.warn(`[qgrep.watch:${state.folder.name}] ${line}`);
+          this.logWatchLine(state, line);
         }
       }
     });
@@ -1152,7 +1413,7 @@ class QgrepService implements vscode.Disposable {
         qgrepLogger.info(`[qgrep.watch:${state.folder.name}] ${stdoutLogLines.pendingText.trim()}`);
       }
       if (stderrLines.pendingText.trim().length > 0) {
-        qgrepLogger.warn(`[qgrep.watch:${state.folder.name}] ${stderrLines.pendingText.trim()}`);
+        this.logWatchLine(state, stderrLines.pendingText.trim());
       }
       if (state.watchProcess !== child) {
         return;
@@ -1282,9 +1543,12 @@ class QgrepService implements vscode.Disposable {
   }
 
   private queueWorkspaceAutoUpdate(state: WorkspaceQgrepState, reason: 'create' | 'delete'): void {
+    const shouldLogQueuedReason = state.pendingCreateDeleteCount === 0;
     state.autoUpdateDirty = true;
     state.pendingCreateDeleteCount += 1;
-    qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] queued ${reason}`);
+    if (shouldLogQueuedReason) {
+      qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] queued ${reason}`);
+    }
     this.scheduleWorkspaceAutoUpdate(state, AUTO_UPDATE_DEBOUNCE_MS);
   }
 
@@ -1347,11 +1611,10 @@ class QgrepService implements vscode.Disposable {
     );
 
     try {
-      if (shouldSyncManagedSearchExclude) {
-        await this.syncManagedSearchExcludeBlock(state);
+      const outcome = await this.autoUpdateWorkspace(state, shouldSyncManagedSearchExclude);
+      if (outcome === 'done') {
+        qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update done`);
       }
-      await this.autoUpdateWorkspace(state);
-      qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update done`);
     } catch (error) {
       qgrepLogger.warn(`[qgrep.autoupdate:${state.folder.name}] update failed: ${String(error)}`);
     } finally {
@@ -1363,31 +1626,48 @@ class QgrepService implements vscode.Disposable {
     }
   }
 
-  private async autoUpdateWorkspace(state: WorkspaceQgrepState): Promise<void> {
-    if (this.disposed || !this.isWorkspaceInitialized(state)) {
-      return;
-    }
-
-    qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update start`);
-    this.stopWatch(state);
-    this.setWorkspaceIndexing(state, true);
-
-    try {
-      const updateResult = await this.runQgrepCommand(
-        ['update', state.configPath],
-        state.folder.uri.fsPath,
-        { progressState: state },
-      );
-      const updateError = this.extractCommandError(updateResult, `Auto update failed for workspace '${state.folder.name}'.`);
-      if (updateError) {
-        throw new Error(updateError);
+  private async autoUpdateWorkspace(
+    state: WorkspaceQgrepState,
+    shouldSyncManagedSearchExclude = false,
+  ): Promise<'done' | 'cancelled'> {
+    let cancelledByClear = false;
+    await this.runWorkspaceIndexOperationExclusive(state, async () => {
+      if (this.disposed || !this.isWorkspaceInitialized(state)) {
+        return;
       }
-    } finally {
-      this.setWorkspaceIndexing(state, false);
-      if (!this.disposed && this.isWorkspaceInitialized(state)) {
-        this.startWatch(state);
+
+      qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update start`);
+      this.stopWatch(state);
+      this.setWorkspaceIndexing(state, true);
+
+      try {
+        if (shouldSyncManagedSearchExclude) {
+          await this.syncManagedSearchExcludeBlock(state);
+        }
+        const updateResult = await this.runWorkspaceIndexCommand(
+          state,
+          'update',
+          ['update', state.configPath],
+          state.folder.uri.fsPath,
+          { progressState: state },
+        );
+        if (updateResult.cancelledByClear) {
+          this.logIndexCommandCancelledDuringClear(state, 'autoupdate', 'update');
+          cancelledByClear = true;
+          return;
+        }
+        const updateError = this.extractCommandError(updateResult.command, `Auto update failed for workspace '${state.folder.name}'.`);
+        if (updateError) {
+          throw new Error(updateError);
+        }
+      } finally {
+        this.setWorkspaceIndexing(state, false);
+        if (!this.disposed && this.isWorkspaceInitialized(state)) {
+          this.startWatch(state);
+        }
       }
-    }
+    });
+    return cancelledByClear ? 'cancelled' : 'done';
   }
 
   private async syncManagedSearchExcludeBlock(state: WorkspaceQgrepState): Promise<void> {
@@ -1513,18 +1793,30 @@ class QgrepService implements vscode.Disposable {
   }
 
   private async initWorkspace(state: WorkspaceQgrepState): Promise<void> {
+    await this.runWorkspaceIndexOperationExclusive(state, async () => {
+      await this.initWorkspaceInternal(state);
+    });
+  }
+
+  private async initWorkspaceInternal(state: WorkspaceQgrepState): Promise<void> {
     this.requireBinaryPath();
     await fs.promises.mkdir(state.qgrepDirPath, { recursive: true });
     this.setWorkspaceIndexing(state, true);
 
     try {
       if (!this.isWorkspaceInitialized(state)) {
-        const initResult = await this.runQgrepCommand(
+        const initResult = await this.runWorkspaceIndexCommand(
+          state,
+          'init',
           ['init', state.configPath, state.folder.uri.fsPath],
           state.folder.uri.fsPath,
           { progressState: state },
         );
-        const initError = this.extractCommandError(initResult, `Init failed for workspace '${state.folder.name}'.`);
+        if (initResult.cancelledByClear) {
+          this.logIndexCommandCancelledDuringClear(state, 'init', 'init');
+          return;
+        }
+        const initError = this.extractCommandError(initResult.command, `Init failed for workspace '${state.folder.name}'.`);
         if (initError) {
           throw new Error(initError);
         }
@@ -1532,12 +1824,18 @@ class QgrepService implements vscode.Disposable {
 
       await this.syncManagedSearchExcludeBlock(state);
 
-      const updateResult = await this.runQgrepCommand(
+      const updateResult = await this.runWorkspaceIndexCommand(
+        state,
+        'update',
         ['update', state.configPath],
         state.folder.uri.fsPath,
         { progressState: state },
       );
-      const updateError = this.extractCommandError(updateResult, `Update failed for workspace '${state.folder.name}'.`);
+      if (updateResult.cancelledByClear) {
+        this.logIndexCommandCancelledDuringClear(state, 'init', 'update');
+        return;
+      }
+      const updateError = this.extractCommandError(updateResult.command, `Update failed for workspace '${state.folder.name}'.`);
       if (updateError) {
         throw new Error(updateError);
       }
@@ -1554,6 +1852,12 @@ class QgrepService implements vscode.Disposable {
   }
 
   private async rebuildWorkspace(state: WorkspaceQgrepState): Promise<void> {
+    await this.runWorkspaceIndexOperationExclusive(state, async () => {
+      await this.rebuildWorkspaceInternal(state);
+    });
+  }
+
+  private async rebuildWorkspaceInternal(state: WorkspaceQgrepState): Promise<void> {
     this.requireBinaryPath();
     this.stopWatch(state);
     this.setWorkspaceIndexing(state, true);
@@ -1561,12 +1865,18 @@ class QgrepService implements vscode.Disposable {
     try {
       await this.syncManagedSearchExcludeBlock(state);
 
-      const buildResult = await this.runQgrepCommand(
+      const buildResult = await this.runWorkspaceIndexCommand(
+        state,
+        'build',
         ['build', state.configPath],
         state.folder.uri.fsPath,
         { progressState: state },
       );
-      const buildError = this.extractCommandError(buildResult, `Build failed for workspace '${state.folder.name}'.`);
+      if (buildResult.cancelledByClear) {
+        this.logIndexCommandCancelledDuringClear(state, 'rebuild', 'build');
+        return;
+      }
+      const buildError = this.extractCommandError(buildResult.command, `Build failed for workspace '${state.folder.name}'.`);
       if (buildError) {
         throw new Error(buildError);
       }
@@ -1624,6 +1934,77 @@ class QgrepService implements vscode.Disposable {
           exitCode: code,
           stdout: Buffer.concat(stdoutChunks).toString('utf8'),
           stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        });
+      });
+    });
+  }
+
+  private async runWorkspaceIndexCommand(
+    state: WorkspaceQgrepState,
+    kind: QgrepIndexCommandKind,
+    args: string[],
+    cwd: string,
+    options?: QgrepCommandOptions,
+  ): Promise<WorkspaceIndexCommandResult> {
+    const binaryPath = this.requireBinaryPath();
+    return new Promise<WorkspaceIndexCommandResult>((resolve, reject) => {
+      const child = spawn(binaryPath, args, {
+        cwd,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      state.activeIndexCommandProcess = child;
+      state.activeIndexCommandKind = kind;
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      const stdoutProgress = { pendingText: '' };
+      let settled = false;
+
+      const clearTracking = (): void => {
+        if (state.activeIndexCommandProcess === child) {
+          state.activeIndexCommandProcess = undefined;
+          state.activeIndexCommandKind = undefined;
+        }
+        if (state.activeIndexCommandCancelledProcess === child) {
+          state.activeIndexCommandCancelledProcess = undefined;
+        }
+      };
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutChunks.push(chunk);
+        if (options?.progressState) {
+          this.consumeProgressStream(options.progressState, stdoutProgress, chunk.toString('utf8'));
+        }
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrChunks.push(chunk);
+      });
+      child.on('error', (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTracking();
+        reject(error);
+      });
+      child.on('close', (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (options?.progressState) {
+          this.flushProgressStream(options.progressState, stdoutProgress);
+        }
+        const cancelledByClear = state.activeIndexCommandCancelledProcess === child;
+        const command: QgrepCommandResult = {
+          exitCode: code,
+          stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        };
+        clearTracking();
+        resolve({
+          command,
+          cancelledByClear,
         });
       });
     });
@@ -1790,6 +2171,12 @@ function restoreLineEndings(textNormalized: string, lineEnding: '\r\n' | '\n'): 
     return textNormalized;
   }
   return textNormalized.replace(/\n/g, '\r\n');
+}
+
+function delayMs(durationMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, durationMs));
+  });
 }
 
 function normalizeSearchExcludeGlob(pattern: string): string | undefined {

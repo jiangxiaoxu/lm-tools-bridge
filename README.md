@@ -85,6 +85,10 @@ User guidance:
 - `copilot_findFiles` and `copilot_findTextInFiles` are built-in disabled and cannot be exposed or enabled.
 - Some default tools are policy-required exposure items.
 
+### Search Tools
+- `lm_findFiles` uses VS Code workspace file search (ripgrep-based backend) for glob-based file discovery.
+- `lm_findTextInFiles` uses VS Code workspace text search (ripgrep-based backend) for exact-text or regex search.
+
 ### Diagnostics Tool
 - `lm_getDiagnostics` reads diagnostics from VS Code Problems data source (`vscode.languages.getDiagnostics`).
 - Inputs: optional `filePaths` (`string[]`), optional `severities` (`error|warning|information|hint`), optional `maxResults` (default `100`).
@@ -100,19 +104,28 @@ User guidance:
 
 ### Qgrep Tool
 - `lm_qgrepGetStatus` returns qgrep binary availability, workspace init/watch status, per-workspace indexing progress, and aggregate progress snapshot.
+- When no workspace qgrep index is initialized yet, `lm_qgrepGetStatus` also includes an auto-initialization hint stating that `lm_qgrepSearch` and `lm_qgrepFiles` will auto-initialize indexes on actual query calls.
 - `lm_qgrepGetStatus` input: no arguments.
 - `lm_qgrepSearch` performs regex-only text search using the extension bundled binary at `bin/qgrep.exe`.
+- `lm_qgrepSearch` uses default smart-case matching: all-lowercase queries run case-insensitive, while queries containing uppercase letters run case-sensitive.
+- On indexed workspaces, `lm_qgrepSearch` is typically much faster than ripgrep for repeated searches.
 - `lm_qgrepFiles` searches indexed file paths using qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns path results only.
+- On indexed workspaces, `lm_qgrepFiles` is typically much faster than ripgrep for repeated file searches.
 - Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `200`).
-- `lm_qgrepFiles` inputs: required `query`, optional `mode` (`fp` default), optional `caseInsensitive`, optional `searchPath`, optional `maxResults` (default `200`).
+- `lm_qgrepFiles` inputs: required `query`, optional `mode` (`fp` default), optional `searchPath`, optional `maxResults` (default `200`).
 - `searchPath` supports absolute paths, `WorkspaceName/...`, and workspace-relative paths. Paths must exist and stay inside current workspace folders.
+- qgrep indexing/search is workspace-only. External folders cannot be indexed or searched.
 - If `searchPath` is omitted, search runs across all initialized workspaces in the current multi-root session.
-- Workspace initialization is manual: run `Status Menu -> Qgrep Init All Workspaces` once before search. After init, background `qgrep watch` keeps existing-file content changes fresh, and extension-side create/delete watchers trigger debounced `qgrep update` to refresh file-list changes.
+- `lm_qgrepSearch` and `lm_qgrepFiles` auto-initialize qgrep indexes for all current workspaces on demand and block until indexing/update becomes ready (or timeout after 150s).
+- If qgrep is already updating (index progress below 100%), qgrep search tools block until indexing is ready before returning results.
+- On extension startup, workspaces that already have qgrep initialized (`.vscode/qgrep/workspace.cfg`) automatically queue one background `qgrep update` to refresh progress/file totals for the current session.
+- Background `qgrep watch` keeps existing-file content changes fresh, and extension-side create/delete watchers trigger debounced `qgrep update` to refresh file-list changes.
+- `Qgrep Stop And Clear Indexes` cancels in-flight qgrep index commands (`init`/`update`/`build`) before deleting `.vscode/qgrep`, which reduces misleading qgrep `workspace.cfg` read errors during clear.
 - On qgrep init/rebuild and `search.exclude` configuration changes, the extension syncs `search.exclude=true` patterns into a managed `exclude ...` block inside each initialized `workspace.cfg` and always writes fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`. `.gitignore` is not synced yet.
 - Multi-root indexes are isolated per workspace under `<workspace>/.vscode/qgrep`.
 - qgrep progress is parsed from qgrep stdout frames (`[xx%] N files`). File-weighted aggregate `A/B` is shown only after all initialized workspaces have known totals.
-- If no initialized workspace is available, or `searchPath` is outside current workspaces, the qgrep tools return an error.
-- Default policy: `lm_qgrepGetStatus` is exposed and enabled by default; `lm_qgrepSearch` and `lm_qgrepFiles` are exposed by default, but not enabled by default.
+- If auto-initialization fails or times out, qgrep search tools return an error. `searchPath` outside current workspaces is still rejected.
+- Default policy: `lm_qgrepGetStatus`, `lm_qgrepSearch`, and `lm_qgrepFiles` are exposed and enabled by default (`lm_qgrepSearch`/`lm_qgrepFiles` are also always-exposed built-ins).
 
 ### Tasks And Debug Tools
 - `lm_tasks_runBuild`: starts a build task via `vscode.tasks` without interactive pickers.
@@ -160,9 +173,9 @@ User guidance:
 - manager idle auto-shutdown:
   - Manager now waits about 10 seconds of idle grace before self-shutdown after all active instances are gone.
   - Instance liveness TTL is 2.5 seconds to tolerate short heartbeat jitter.
-- `lm_qgrepSearch` fails with init required:
-  - Run `Status Menu -> Qgrep Init All Workspaces`.
-  - Make sure at least one workspace still has `.vscode/qgrep/workspace.cfg`.
+- `lm_qgrepSearch` or `lm_qgrepFiles` waits too long / times out:
+  - Check `lm_qgrepGetStatus` for indexing progress and workspace readiness.
+  - You can still run `Status Menu -> Qgrep Init All Workspaces` manually to prebuild indexes.
 - `lm_qgrepSearch` or `lm_qgrepFiles` path scope rejected:
   - Ensure `searchPath` points to an existing path inside current workspace folders.
   - In multi-root with ambiguous relative paths, use `WorkspaceName/...`.
@@ -311,6 +324,10 @@ url = "http://127.0.0.1:47100/mcp"
 - `copilot_findFiles` 与 `copilot_findTextInFiles` 属于 built-in disabled,不可 exposed 或 enabled.
 - 部分默认工具属于策略要求,必须保持暴露.
 
+### 搜索工具
+- `lm_findFiles` 使用 VS Code workspace 文件搜索(基于 `ripgrep` 后端)执行 glob 文件发现.
+- `lm_findTextInFiles` 使用 VS Code workspace 文本搜索(基于 `ripgrep` 后端)执行精确文本或 regex 搜索.
+
 ### 诊断工具
 - `lm_getDiagnostics` 从 VS Code Problems 数据源(`vscode.languages.getDiagnostics`)读取诊断.
 - 输入: 可选 `filePaths`(`string[]`),可选 `severities`(`error|warning|information|hint`),可选 `maxResults`(默认 `100`).
@@ -326,19 +343,28 @@ url = "http://127.0.0.1:47100/mcp"
 
 ### Qgrep 工具
 - `lm_qgrepGetStatus` 返回 qgrep binary 可用性、workspace 初始化/监听状态、每个 workspace 的索引进度以及聚合进度快照.
+- 当还没有任何 workspace 建立 qgrep 索引时,`lm_qgrepGetStatus` 还会返回自动初始化提示,说明调用 `lm_qgrepSearch` 和 `lm_qgrepFiles` 这类实际查询工具时会自动创建索引.
 - `lm_qgrepGetStatus` 输入: 无参数.
 - `lm_qgrepSearch` 使用扩展内置二进制 `bin/qgrep.exe` 执行 regex 文本搜索.
+- `lm_qgrepSearch` 默认使用 smart-case: query 全小写时按大小写不敏感搜索, query 中包含大写字母时按大小写敏感搜索.
+- 在已建立索引的 workspace 上,`lm_qgrepSearch` 对重复搜索通常明显快于 `ripgrep`.
 - `lm_qgrepFiles` 使用 qgrep `files` 模式(`fp`/`fn`/`fs`/`ff`)搜索已索引文件路径,仅返回路径结果.
+- 在已建立索引的 workspace 上,`lm_qgrepFiles` 对重复文件搜索通常明显快于 `ripgrep`.
 - 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
-- `lm_qgrepFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `caseInsensitive`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
+- `lm_qgrepFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
 - `searchPath` 支持绝对路径,`WorkspaceName/...` 和 workspace 相对路径. 路径必须存在且必须位于当前 workspace 内.
+- qgrep 索引和搜索仅限当前 workspace,不能用于工作区外文件夹.
 - 未传 `searchPath` 时,会在当前会话中所有已初始化的 workspace 上聚合搜索.
-- workspace 初始化是手动门禁: 先执行 `Status Menu -> Qgrep Init All Workspaces`. 初始化后后台 `qgrep watch` 负责已有文件内容变更,扩展侧会监听 create/delete 并防抖触发 `qgrep update` 来刷新文件列表变化.
+- `lm_qgrepSearch` 与 `lm_qgrepFiles` 会按需自动初始化当前所有 workspace 的 qgrep 索引,并阻塞等待到索引/更新就绪(超时 150s).
+- 如果 qgrep 正在更新(索引进度低于 100%), qgrep 搜索工具会等待索引就绪后再返回结果.
+- 扩展启动时,对于已经初始化过 qgrep(存在 `.vscode/qgrep/workspace.cfg`)的 workspace,会自动排队执行一次后台 `qgrep update`,用于补足当前会话的进度/文件总数显示.
+- 初始化后后台 `qgrep watch` 负责已有文件内容变更,扩展侧会监听 create/delete 并防抖触发 `qgrep update` 来刷新文件列表变化.
+- `Qgrep Stop And Clear Indexes` 在删除 `.vscode/qgrep` 前会先取消进行中的 qgrep 索引命令(`init`/`update`/`build`),以减少清理过程中的误导性 `workspace.cfg` 读取报错.
 - 在 qgrep init/rebuild 和 `search.exclude` 配置变更时,扩展会把 `search.exclude=true` 规则同步到每个已初始化 `workspace.cfg` 的受管 `exclude ...` 区块,并固定写入 `.git`、`Intermediate`、`DerivedDataCache`、`Saved`、`.vs`、`.vscode` 排除规则. 当前还不会同步 `.gitignore`.
 - multi-root 下每个 workspace 独立维护 `<workspace>/.vscode/qgrep` 索引目录.
 - qgrep 进度来自 qgrep stdout 帧(`[xx%] N files`). 只有在所有已初始化 workspace 都拿到总文件数后,才显示按文件加权聚合的 `A/B`.
-- 若没有任何已初始化 workspace,或 `searchPath` 不在当前 workspace 内,qgrep 工具会返回错误.
-- 默认策略: `lm_qgrepGetStatus` 默认 exposed 且默认 enabled; `lm_qgrepSearch` 与 `lm_qgrepFiles` 默认 exposed,默认不 enabled.
+- 如果自动初始化失败或超时,qgrep 搜索工具会返回错误; `searchPath` 不在当前 workspace 内仍会被拒绝.
+- 默认策略: `lm_qgrepGetStatus`、`lm_qgrepSearch`、`lm_qgrepFiles` 默认 exposed 且默认 enabled (`lm_qgrepSearch`/`lm_qgrepFiles` 还属于始终暴露的内置工具).
 
 ### Tasks 与 Debug 工具
 - `lm_tasks_runBuild`: 通过 `vscode.tasks` 启动 build task,不使用交互式选择器.

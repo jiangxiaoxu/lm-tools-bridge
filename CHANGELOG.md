@@ -6,6 +6,32 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.95] - 2026-02-26
+
+### English
+
+#### Added
+- Added startup qgrep refresh behavior: already-initialized workspaces now queue one background `qgrep update` on extension startup to restore progress/file totals for the current session.
+- Added `lm_qgrepSearch` smart-case default behavior (all-lowercase query => case-insensitive, query containing uppercase => case-sensitive) without changing the tool input schema.
+
+#### Changed
+- `Qgrep Stop And Clear Indexes` now cancels in-flight qgrep index commands (`init`/`update`/`build`) before deleting `.vscode/qgrep`, reducing misleading `workspace.cfg` read errors during clear.
+- Improved qgrep runtime log signal quality by reducing expected-control-flow noise (including clear-cancel paths) and de-duplicating auto-update queue logs.
+- `lm_qgrepFiles` no longer exposes the `caseInsensitive` input field; on Windows, file search now always passes qgrep `files` option `i` (case-insensitive).
+- Updated tool descriptions/docs to clarify ripgrep-backed `lm_findFiles` / `lm_findTextInFiles` and qgrep performance positioning on indexed workspaces.
+
+### 中文
+
+#### Added
+- 新增 qgrep 启动补刷新行为: 对已初始化的 workspace,扩展启动后会自动排队一次后台 `qgrep update`,用于恢复当前会话的进度/文件总数显示.
+- 新增 `lm_qgrepSearch` 默认 smart-case 行为(全小写 query => 大小写不敏感,包含大写字母 => 大小写敏感),且不修改工具 input schema.
+
+#### Changed
+- `Qgrep Stop And Clear Indexes` 在删除 `.vscode/qgrep` 前会先取消进行中的 qgrep 索引命令(`init`/`update`/`build`),减少清理时误导性的 `workspace.cfg` 读取报错.
+- 优化 qgrep 运行日志信噪比,降低预期控制流(包括 clear-cancel 路径)噪音,并减少 auto-update 排队日志重复输出.
+- `lm_qgrepFiles` 不再暴露 `caseInsensitive` 输入字段; 在 Windows 平台下文件搜索会固定传入 qgrep `files` 的 `i` 选项(大小写不敏感).
+- 更新工具描述与文档,明确 `lm_findFiles` / `lm_findTextInFiles` 基于 ripgrep 后端,以及 qgrep 在已索引 workspace 上的性能定位.
+
 ## [1.0.94] - 2026-02-26
 
 ### English

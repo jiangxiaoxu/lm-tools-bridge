@@ -68,6 +68,8 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'lm_findTextInFiles',
   'lm_getDiagnostics',
   LM_QGREP_GET_STATUS_TOOL_NAME,
+  LM_QGREP_SEARCH_TOOL_NAME,
+  LM_QGREP_FILES_TOOL_NAME,
 ];
 const DEFAULT_EXPOSED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_TOOL_NAMES,
@@ -75,8 +77,6 @@ const DEFAULT_EXPOSED_TOOL_NAMES = [
   LM_TASKS_RUN_TEST_TOOL_NAME,
   LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME,
   LM_DEBUG_START_TOOL_NAME,
-  LM_QGREP_SEARCH_TOOL_NAME,
-  LM_QGREP_FILES_TOOL_NAME,
 ];
 const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
 const BUILTIN_DISABLED_TOOL_NAMES = [
@@ -152,6 +152,7 @@ const BUILTIN_SCHEMA_DEFAULT_OVERRIDES: string[] = [
 
 const LM_FIND_FILES_DESCRIPTION = [
   'Search for files in the workspace by glob pattern. This only returns the paths of matching files.',
+  'Backend uses VS Code workspace file search (ripgrep-based).',
   'Use this tool when you know the exact filename pattern of the files you\'re searching for.',
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
@@ -183,6 +184,7 @@ const LM_FIND_FILES_SCHEMA: Record<string, unknown> = {
 
 const LM_FIND_TEXT_IN_FILES_DESCRIPTION = [
   'Do a fast text search in the workspace. Use this tool when you want to search with an exact string or regex.',
+  'Backend uses VS Code workspace text search (ripgrep-based).',
   'If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.',
   'For example, use \'function|method|procedure\' to look for all of those words at once.',
   'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
@@ -342,8 +344,14 @@ const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep regular expressions.',
+  'Prefer this tool first for workspace text search whenever possible: qgrep is usually very fast on indexed workspaces.',
+  'On indexed workspaces, qgrep is typically much faster than ripgrep for repeated searches.',
   'qgrep only supports regex search in this tool.',
-  'Before first use, run "LM Tools Bridge: Qgrep Init All Workspaces" from the status menu.',
+  'Default behavior uses smart-case: all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive.',
+  'qgrep indexing and search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
+  'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
+  'If qgrep is currently updating (indexing progress below 100%), this tool blocks until indexing is ready or times out (150s).',
+  'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If searchPath is omitted, search runs across all initialized workspace folders.',
   'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
   'searchPath must resolve inside the current workspace folders; external paths are rejected.',
@@ -352,6 +360,7 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
 const LM_QGREP_GET_STATUS_DESCRIPTION = [
   'Get qgrep binary availability, workspace initialization/watch status, and indexing progress snapshot.',
   'Returns status even when qgrep is not initialized yet.',
+  'When no workspace qgrep index is initialized, the returned status includes an auto-initialization hint explaining that lm_qgrepSearch and lm_qgrepFiles will auto-initialize indexes on actual query calls.',
   'Use this tool to inspect qgrep readiness before calling qgrep search tools.',
 ].join('\n');
 
@@ -384,8 +393,13 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep file search modes.',
+  'Prefer this tool first for workspace file search whenever possible: qgrep is usually very fast on indexed workspaces.',
+  'On indexed workspaces, qgrep is typically much faster than ripgrep for repeated file searches.',
   'Supports qgrep files modes: fp (path regex), fn (file name regex), fs (space-delimited literal components), ff (fuzzy path).',
-  'Before first use, run "LM Tools Bridge: Qgrep Init All Workspaces" from the status menu.',
+  'qgrep indexing and file search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
+  'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
+  'If qgrep is currently updating (indexing progress below 100%), this tool blocks until indexing is ready or times out (150s).',
+  'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If searchPath is omitted, search runs across all initialized workspace folders.',
   'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
   'searchPath must resolve inside the current workspace folders; external paths are rejected.',
@@ -395,7 +409,7 @@ const LM_QGREP_FILES_DESCRIPTION = [
   '{"query":"src/r/lmanager","mode":"ff","maxResults":20}',
   '{"query":"render manager.c","mode":"fs","searchPath":"WorkspaceName/src"}',
   '{"query":"src/.*controller","mode":"fp","searchPath":"C:/repo/project/src","maxResults":50}',
-  '{"query":"src/.*test","mode":"fp","caseInsensitive":true}',
+  '{"query":"src/.*test","mode":"fp"}',
 ].join('\n');
 
 const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
@@ -420,11 +434,6 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
       default: 200,
       minimum: 1,
       description: 'Maximum number of file results across all searched workspaces.',
-    },
-    caseInsensitive: {
-      type: 'boolean',
-      default: false,
-      description: 'Optional case-insensitive match flag (`i` option in qgrep files).',
     },
   },
   required: ['query'],
@@ -2592,9 +2601,19 @@ function computeQgrepAggregateProgressForTool(status: QgrepStatusSummary): Qgrep
 }
 
 function buildQgrepGetStatusPayload(status: QgrepStatusSummary): Record<string, unknown> {
+  const showAutoInitializationHint = status.totalWorkspaces > 0 && status.initializedWorkspaces === 0;
   return {
     ...status,
     aggregate: computeQgrepAggregateProgressForTool(status),
+    autoInitialization: {
+      hintActive: showAutoInitializationHint,
+      appliesWhen: 'no workspace qgrep index is initialized',
+      triggerTools: ['lm_qgrepSearch', 'lm_qgrepFiles'],
+      behavior: 'These query tools auto-initialize qgrep indexes for current workspaces on first use and wait until indexing is ready or timeout.',
+      message: showAutoInitializationHint
+        ? 'No qgrep indexes are initialized yet. Calling lm_qgrepSearch or lm_qgrepFiles will auto-initialize indexes for current workspaces and wait until indexing is ready (or timeout).'
+        : undefined,
+    },
   };
 }
 
@@ -2634,6 +2653,16 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
       lines.push('aggregate: not initialized');
     } else {
       lines.push('aggregate: --/-- (--%)');
+    }
+  }
+
+  const autoInitialization = isPlainObject(payload.autoInitialization)
+    ? payload.autoInitialization as Record<string, unknown>
+    : undefined;
+  if (autoInitialization?.hintActive === true) {
+    const message = typeof autoInitialization.message === 'string' ? autoInitialization.message : undefined;
+    if (message && message.length > 0) {
+      lines.push(`autoInitialization: ${message}`);
     }
   }
 

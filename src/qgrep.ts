@@ -6,10 +6,32 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
 const WATCH_RESTART_DELAY_MS = 1000;
+const AUTO_UPDATE_DEBOUNCE_MS = 2000;
+const SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS = 500;
 const DEFAULT_MAX_RESULTS = 200;
 const MIN_MAX_RESULTS = 1;
 const INIT_COMMAND_HINT = 'Run "LM Tools Bridge: Qgrep Init All Workspaces" first.';
 const QGREP_PROGRESS_FRAME_PATTERN = /\[\s*(\d{1,3})%\]\s+(\d+)\s+files\b/u;
+const QGREP_FILES_MODE_VALUES = ['fp', 'fn', 'fs', 'ff'] as const;
+/**
+ * These patterns run in Node.js only while parsing qgrep command output.
+ * They are not written into qgrep workspace.cfg, so JS regex syntax features
+ * such as non-capturing groups are allowed here.
+ */
+const QGREP_FILES_SCORE_PREFIX_TAB_PATTERN = /^([+-]?\d+(?:\.\d+)?)\t(.+)$/u;
+const QGREP_FILES_SCORE_PREFIX_SPACE_PATTERN = /^([+-]?\d+(?:\.\d+)?)\s+(.+)$/u;
+const QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_BEGIN = '# BEGIN lm-tools-bridge managed search.exclude';
+const QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_END = '# END lm-tools-bridge managed search.exclude';
+const QGREP_MANAGED_SEARCH_EXCLUDE_SOURCE_COMMENT = '# source: VS Code search.exclude (true entries only)';
+const QGREP_MANAGED_SEARCH_EXCLUDE_EMPTY_COMMENT = '# no eligible search.exclude=true patterns';
+const QGREP_FIXED_EXCLUDE_REGEXES: readonly string[] = [
+  '(^|.*/)\\.git/',
+  '(^|.*/)Intermediate/',
+  '(^|.*/)DerivedDataCache/',
+  '(^|.*/)Saved/',
+  '(^|.*/)\\.vs/',
+  '(^|.*/)\\.vscode/',
+];
 
 type QgrepLogger = {
   info: (message: string) => void;
@@ -63,6 +85,12 @@ interface WorkspaceQgrepState {
   progress: WorkspaceIndexProgress;
   watchProcess?: ChildProcessWithoutNullStreams;
   restartTimer?: NodeJS.Timeout;
+  fsWatcher?: vscode.FileSystemWatcher;
+  autoUpdateTimer?: NodeJS.Timeout;
+  autoUpdateInFlight: boolean;
+  autoUpdateDirty: boolean;
+  pendingCreateDeleteCount: number;
+  managedSearchExcludeDirty: boolean;
   restartOnExit: boolean;
 }
 
@@ -101,6 +129,12 @@ interface ParsedQgrepMatch {
   preview: string;
 }
 
+type QgrepFilesMode = typeof QGREP_FILES_MODE_VALUES[number];
+
+interface ParsedQgrepFile {
+  absolutePath: string;
+}
+
 class QgrepService implements vscode.Disposable {
   private readonly states = new Map<string, WorkspaceQgrepState>();
   private readonly subscriptions: vscode.Disposable[] = [];
@@ -111,12 +145,16 @@ class QgrepService implements vscode.Disposable {
   public activate(): void {
     this.syncWorkspaceStates(vscode.workspace.workspaceFolders ?? []);
     this.startWatchForInitializedWorkspaces();
+    this.startAutoUpdateWatchersForInitializedWorkspaces();
     this.notifyStatusChanged();
 
     const folderWatcher = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
       this.handleWorkspaceFolderChanges(event);
     });
-    this.subscriptions.push(folderWatcher);
+    const searchExcludeWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
+      this.handleSearchExcludeConfigurationChanges(event);
+    });
+    this.subscriptions.push(folderWatcher, searchExcludeWatcher);
   }
 
   public dispose(): void {
@@ -127,6 +165,7 @@ class QgrepService implements vscode.Disposable {
 
     for (const state of this.states.values()) {
       this.stopWatch(state);
+      this.stopAutoUpdateWatcher(state);
     }
     this.states.clear();
     this.notifyStatusChanged();
@@ -214,6 +253,7 @@ class QgrepService implements vscode.Disposable {
     for (const state of initializedStates) {
       try {
         this.stopWatch(state);
+        this.stopAutoUpdateWatcher(state);
         await fs.promises.rm(state.qgrepDirPath, { recursive: true, force: true });
         this.resetWorkspaceProgress(state);
         processed += 1;
@@ -274,6 +314,55 @@ class QgrepService implements vscode.Disposable {
       count: matches.length,
       capped,
       matches,
+    };
+  }
+
+  public async files(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const query = this.parseFilesQuery(input);
+    const mode = this.parseFilesMode(input);
+    const caseInsensitive = this.parseOptionalBooleanInput(input.caseInsensitive, 'caseInsensitive') === true;
+    const searchPath = this.parseOptionalSearchPath(input);
+    const maxResults = this.parseMaxResults(input);
+    const targets = this.resolveSearchTargets(searchPath);
+    if (targets.length === 0) {
+      throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
+    }
+
+    const files: Array<Record<string, unknown>> = [];
+    let remaining = maxResults;
+    let capped = false;
+
+    for (const target of targets) {
+      if (remaining <= 0) {
+        capped = true;
+        break;
+      }
+
+      const targetFiles = await this.searchFilesInWorkspace(target, query, mode, caseInsensitive, remaining);
+      if (targetFiles.length >= remaining) {
+        capped = true;
+      }
+
+      for (const file of targetFiles) {
+        if (remaining <= 0) {
+          capped = true;
+          break;
+        }
+        files.push(this.toFilePayload(target.state.folder, file));
+        remaining -= 1;
+      }
+    }
+
+    return {
+      query,
+      mode,
+      searchPath: searchPath ?? null,
+      maxResults,
+      caseInsensitive,
+      count: files.length,
+      capped,
+      sort: 'qgrep-native',
+      files,
     };
   }
 
@@ -477,6 +566,46 @@ class QgrepService implements vscode.Disposable {
     return trimmed;
   }
 
+  private parseFilesQuery(input: Record<string, unknown>): string {
+    const value = input.query;
+    if (typeof value !== 'string') {
+      throw new Error('query must be a string.');
+    }
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      throw new Error('query must be a non-empty string.');
+    }
+    return trimmed;
+  }
+
+  private parseFilesMode(input: Record<string, unknown>): QgrepFilesMode {
+    const value = input.mode;
+    if (value === undefined || value === null) {
+      return 'fp';
+    }
+    if (typeof value !== 'string') {
+      throw new Error(`mode must be one of: ${QGREP_FILES_MODE_VALUES.join(', ')}.`);
+    }
+    const normalized = value.trim().toLowerCase();
+    if (normalized.length === 0) {
+      throw new Error(`mode must be one of: ${QGREP_FILES_MODE_VALUES.join(', ')}.`);
+    }
+    if (!QGREP_FILES_MODE_VALUES.includes(normalized as QgrepFilesMode)) {
+      throw new Error(`mode must be one of: ${QGREP_FILES_MODE_VALUES.join(', ')}.`);
+    }
+    return normalized as QgrepFilesMode;
+  }
+
+  private parseOptionalBooleanInput(value: unknown, key: string): boolean | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    if (typeof value !== 'boolean') {
+      throw new Error(`${key} must be a boolean when provided.`);
+    }
+    return value;
+  }
+
   private parseOptionalSearchPath(input: Record<string, unknown>): string | undefined {
     const value = input.searchPath;
     if (value === undefined || value === null) {
@@ -614,7 +743,7 @@ class QgrepService implements vscode.Disposable {
     const normalizedTargetPath = normalizeSlash(resolvedTargetPath);
     const escaped = escapeRegex(normalizedTargetPath);
     if (stats.isDirectory()) {
-      return `^${escaped}(?:/|$)`;
+      return `^${escaped}(/|$)`;
     }
     return `^${escaped}$`;
   }
@@ -636,6 +765,32 @@ class QgrepService implements vscode.Disposable {
       throw new Error(commandError);
     }
     return this.parseSearchOutput(result.stdout, target.state.folder);
+  }
+
+  private async searchFilesInWorkspace(
+    target: QgrepSearchTarget,
+    query: string,
+    mode: QgrepFilesMode,
+    caseInsensitive: boolean,
+    maxResults: number,
+  ): Promise<ParsedQgrepFile[]> {
+    const args: string[] = ['files', target.state.configPath];
+    if (caseInsensitive) {
+      args.push('i');
+    }
+    args.push(mode);
+    if (target.filterRegex) {
+      args.push(`fi${target.filterRegex}`);
+    }
+    args.push(`L${maxResults}`);
+    args.push(query);
+
+    const result = await this.runQgrepCommand(args, target.state.folder.uri.fsPath);
+    const commandError = this.extractCommandError(result, `File search failed for workspace '${target.state.folder.name}'.`);
+    if (commandError) {
+      throw new Error(commandError);
+    }
+    return this.parseFilesOutput(result.stdout, target.state.folder, mode);
   }
 
   private parseSearchOutput(stdout: string, folder: vscode.WorkspaceFolder): ParsedQgrepMatch[] {
@@ -679,6 +834,85 @@ class QgrepService implements vscode.Disposable {
     return matches;
   }
 
+  private parseFilesOutput(
+    stdout: string,
+    folder: vscode.WorkspaceFolder,
+    mode: QgrepFilesMode,
+  ): ParsedQgrepFile[] {
+    const lines = stdout.split(/\r?\n/u);
+    const files: ParsedQgrepFile[] = [];
+    const seen = new Set<string>();
+
+    for (const rawLine of lines) {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+      const parsed = this.tryParseFilesOutputLine(line, folder, mode);
+      if (!parsed) {
+        continue;
+      }
+      const key = normalizeForComparison(parsed.absolutePath);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      files.push(parsed);
+    }
+
+    return files;
+  }
+
+  private tryParseFilesOutputLine(
+    rawLine: string,
+    folder: vscode.WorkspaceFolder,
+    mode: QgrepFilesMode,
+  ): ParsedQgrepFile | undefined {
+    const line = rawLine.trimEnd();
+    if (line.length === 0) {
+      return undefined;
+    }
+
+    const direct = this.tryResolveFileOutputPath(folder, line);
+    if (direct) {
+      return { absolutePath: direct };
+    }
+
+    if (mode !== 'ff') {
+      return undefined;
+    }
+
+    const tabScoreMatch = QGREP_FILES_SCORE_PREFIX_TAB_PATTERN.exec(line);
+    if (tabScoreMatch) {
+      const fromTabScore = this.tryResolveFileOutputPath(folder, tabScoreMatch[2].trimStart());
+      if (fromTabScore) {
+        return { absolutePath: fromTabScore };
+      }
+    }
+
+    const spaceScoreMatch = QGREP_FILES_SCORE_PREFIX_SPACE_PATTERN.exec(line);
+    if (spaceScoreMatch) {
+      const fromSpaceScore = this.tryResolveFileOutputPath(folder, spaceScoreMatch[2].trimStart());
+      if (fromSpaceScore) {
+        return { absolutePath: fromSpaceScore };
+      }
+    }
+
+    qgrepLogger.warn(`[qgrep.files:${folder.name}] Unparsed ff output line: ${line}`);
+    return undefined;
+  }
+
+  private tryResolveFileOutputPath(folder: vscode.WorkspaceFolder, rawPath: string): string | undefined {
+    const trimmed = rawPath.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+    const absolutePath = isAbsolutePath(trimmed)
+      ? path.resolve(trimmed)
+      : path.resolve(folder.uri.fsPath, trimmed);
+    if (!isPathInsideRoot(folder.uri.fsPath, absolutePath)) {
+      return undefined;
+    }
+    return absolutePath;
+  }
+
   private toMatchPayload(folder: vscode.WorkspaceFolder, match: ParsedQgrepMatch): Record<string, unknown> {
     const absolutePath = normalizeSlash(path.resolve(match.absolutePath));
     const relativePath = normalizeSlash(path.relative(folder.uri.fsPath, match.absolutePath));
@@ -689,6 +923,17 @@ class QgrepService implements vscode.Disposable {
       workspaceFolder: folder.name,
       line: match.line,
       preview: match.preview,
+    };
+  }
+
+  private toFilePayload(folder: vscode.WorkspaceFolder, file: ParsedQgrepFile): Record<string, unknown> {
+    const absolutePath = normalizeSlash(path.resolve(file.absolutePath));
+    const relativePath = normalizeSlash(path.relative(folder.uri.fsPath, file.absolutePath));
+    const workspacePath = relativePath.length > 0 ? `${folder.name}/${relativePath}` : folder.name;
+    return {
+      absolutePath,
+      workspacePath,
+      workspaceFolder: folder.name,
     };
   }
 
@@ -740,6 +985,7 @@ class QgrepService implements vscode.Disposable {
         continue;
       }
       this.stopWatch(state);
+      this.stopAutoUpdateWatcher(state);
       this.states.delete(key);
       changed = true;
     }
@@ -753,6 +999,7 @@ class QgrepService implements vscode.Disposable {
       this.states.set(key, state);
       if (this.isWorkspaceInitialized(state)) {
         this.startWatch(state);
+        this.ensureAutoUpdateWatcher(state);
       }
       changed = true;
     }
@@ -784,6 +1031,7 @@ class QgrepService implements vscode.Disposable {
         continue;
       }
       this.stopWatch(state);
+      this.stopAutoUpdateWatcher(state);
       this.states.delete(key);
       changed = true;
     }
@@ -802,6 +1050,10 @@ class QgrepService implements vscode.Disposable {
       qgrepDirPath,
       configPath,
       progress: this.createEmptyProgress(),
+      autoUpdateInFlight: false,
+      autoUpdateDirty: false,
+      pendingCreateDeleteCount: 0,
+      managedSearchExcludeDirty: false,
       restartOnExit: false,
     };
   }
@@ -829,6 +1081,15 @@ class QgrepService implements vscode.Disposable {
         continue;
       }
       this.startWatch(state);
+    }
+  }
+
+  private startAutoUpdateWatchersForInitializedWorkspaces(): void {
+    for (const state of this.states.values()) {
+      if (!this.isWorkspaceInitialized(state)) {
+        continue;
+      }
+      this.ensureAutoUpdateWatcher(state);
     }
   }
 
@@ -893,6 +1154,9 @@ class QgrepService implements vscode.Disposable {
       if (stderrLines.pendingText.trim().length > 0) {
         qgrepLogger.warn(`[qgrep.watch:${state.folder.name}] ${stderrLines.pendingText.trim()}`);
       }
+      if (state.watchProcess !== child) {
+        return;
+      }
       state.watchProcess = undefined;
       this.notifyStatusChanged();
       if (!state.restartOnExit || this.disposed || !this.isWorkspaceInitialized(state)) {
@@ -927,6 +1191,327 @@ class QgrepService implements vscode.Disposable {
     }
   }
 
+  private ensureAutoUpdateWatcher(state: WorkspaceQgrepState): void {
+    if (this.disposed || state.fsWatcher) {
+      return;
+    }
+    if (!this.isWorkspaceInitialized(state)) {
+      return;
+    }
+
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(state.folder, '**/*'));
+    state.fsWatcher = watcher;
+    watcher.onDidCreate((uri) => {
+      this.handleAutoUpdateFileSystemEvent(state, uri, 'create');
+    });
+    watcher.onDidDelete((uri) => {
+      this.handleAutoUpdateFileSystemEvent(state, uri, 'delete');
+    });
+  }
+
+  private stopAutoUpdateWatcher(state: WorkspaceQgrepState): void {
+    if (state.autoUpdateTimer) {
+      clearTimeout(state.autoUpdateTimer);
+      state.autoUpdateTimer = undefined;
+    }
+    state.autoUpdateDirty = false;
+    state.pendingCreateDeleteCount = 0;
+    state.managedSearchExcludeDirty = false;
+
+    const watcher = state.fsWatcher;
+    if (!watcher) {
+      return;
+    }
+    state.fsWatcher = undefined;
+    try {
+      watcher.dispose();
+    } catch {
+      // Ignore dispose failures.
+    }
+  }
+
+  private handleAutoUpdateFileSystemEvent(
+    state: WorkspaceQgrepState,
+    uri: vscode.Uri,
+    reason: 'create' | 'delete',
+  ): void {
+    if (!this.shouldQueueAutoUpdateForUri(state, uri)) {
+      return;
+    }
+    this.queueWorkspaceAutoUpdate(state, reason);
+  }
+
+  private handleSearchExcludeConfigurationChanges(event: vscode.ConfigurationChangeEvent): void {
+    if (!event.affectsConfiguration('search.exclude')) {
+      return;
+    }
+
+    for (const state of this.states.values()) {
+      if (!this.isWorkspaceInitialized(state)) {
+        continue;
+      }
+      if (!event.affectsConfiguration('search.exclude', state.folder.uri)) {
+        continue;
+      }
+      this.queueWorkspaceSearchExcludeSync(state);
+    }
+  }
+
+  private shouldQueueAutoUpdateForUri(state: WorkspaceQgrepState, uri: vscode.Uri): boolean {
+    if (this.disposed) {
+      return false;
+    }
+    if (this.states.get(state.key) !== state) {
+      return false;
+    }
+    if (!state.fsWatcher) {
+      return false;
+    }
+    if (!this.isWorkspaceInitialized(state)) {
+      return false;
+    }
+
+    const targetPath = path.resolve(uri.fsPath);
+    if (!isPathInsideRoot(state.folder.uri.fsPath, targetPath)) {
+      return false;
+    }
+    if (isPathInsideRoot(state.qgrepDirPath, targetPath)) {
+      return false;
+    }
+    return true;
+  }
+
+  private queueWorkspaceAutoUpdate(state: WorkspaceQgrepState, reason: 'create' | 'delete'): void {
+    state.autoUpdateDirty = true;
+    state.pendingCreateDeleteCount += 1;
+    qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] queued ${reason}`);
+    this.scheduleWorkspaceAutoUpdate(state, AUTO_UPDATE_DEBOUNCE_MS);
+  }
+
+  private queueWorkspaceSearchExcludeSync(state: WorkspaceQgrepState): void {
+    if (this.disposed || this.states.get(state.key) !== state) {
+      return;
+    }
+    if (!this.isWorkspaceInitialized(state)) {
+      return;
+    }
+    state.managedSearchExcludeDirty = true;
+    state.autoUpdateDirty = true;
+    qgrepLogger.info(`[qgrep.exclude-sync:${state.folder.name}] queued search.exclude sync`);
+    this.scheduleWorkspaceAutoUpdate(state, SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS);
+  }
+
+  private scheduleWorkspaceAutoUpdate(state: WorkspaceQgrepState, delayMs: number): void {
+    if (this.disposed || this.states.get(state.key) !== state) {
+      return;
+    }
+    if (state.autoUpdateTimer) {
+      clearTimeout(state.autoUpdateTimer);
+    }
+    state.autoUpdateTimer = setTimeout(() => {
+      state.autoUpdateTimer = undefined;
+      void this.runQueuedWorkspaceAutoUpdate(state);
+    }, Math.max(0, delayMs));
+  }
+
+  private async runQueuedWorkspaceAutoUpdate(state: WorkspaceQgrepState): Promise<void> {
+    if (this.disposed || this.states.get(state.key) !== state) {
+      return;
+    }
+    if (!state.autoUpdateDirty && !state.managedSearchExcludeDirty) {
+      return;
+    }
+    if (state.autoUpdateInFlight) {
+      return;
+    }
+    if (!this.isWorkspaceInitialized(state)) {
+      state.autoUpdateDirty = false;
+      state.pendingCreateDeleteCount = 0;
+      state.managedSearchExcludeDirty = false;
+      return;
+    }
+    if (state.progress.indexing) {
+      this.scheduleWorkspaceAutoUpdate(state, AUTO_UPDATE_DEBOUNCE_MS);
+      return;
+    }
+
+    const queuedCount = state.pendingCreateDeleteCount;
+    const shouldSyncManagedSearchExclude = state.managedSearchExcludeDirty;
+    state.pendingCreateDeleteCount = 0;
+    state.autoUpdateDirty = false;
+    state.managedSearchExcludeDirty = false;
+    state.autoUpdateInFlight = true;
+    qgrepLogger.info(
+      `[qgrep.autoupdate:${state.folder.name}] queued ${queuedCount} event(s)`
+      + (shouldSyncManagedSearchExclude ? ' + search.exclude sync' : ''),
+    );
+
+    try {
+      if (shouldSyncManagedSearchExclude) {
+        await this.syncManagedSearchExcludeBlock(state);
+      }
+      await this.autoUpdateWorkspace(state);
+      qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update done`);
+    } catch (error) {
+      qgrepLogger.warn(`[qgrep.autoupdate:${state.folder.name}] update failed: ${String(error)}`);
+    } finally {
+      state.autoUpdateInFlight = false;
+    }
+
+    if ((state.autoUpdateDirty || state.managedSearchExcludeDirty) && !this.disposed) {
+      this.scheduleWorkspaceAutoUpdate(state, 0);
+    }
+  }
+
+  private async autoUpdateWorkspace(state: WorkspaceQgrepState): Promise<void> {
+    if (this.disposed || !this.isWorkspaceInitialized(state)) {
+      return;
+    }
+
+    qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update start`);
+    this.stopWatch(state);
+    this.setWorkspaceIndexing(state, true);
+
+    try {
+      const updateResult = await this.runQgrepCommand(
+        ['update', state.configPath],
+        state.folder.uri.fsPath,
+        { progressState: state },
+      );
+      const updateError = this.extractCommandError(updateResult, `Auto update failed for workspace '${state.folder.name}'.`);
+      if (updateError) {
+        throw new Error(updateError);
+      }
+    } finally {
+      this.setWorkspaceIndexing(state, false);
+      if (!this.disposed && this.isWorkspaceInitialized(state)) {
+        this.startWatch(state);
+      }
+    }
+  }
+
+  private async syncManagedSearchExcludeBlock(state: WorkspaceQgrepState): Promise<void> {
+    if (this.disposed || !this.isWorkspaceInitialized(state)) {
+      return;
+    }
+
+    let rawConfigText: string;
+    try {
+      rawConfigText = await fs.promises.readFile(state.configPath, 'utf8');
+    } catch (error) {
+      throw new Error(`Failed to read qgrep config '${state.configPath}': ${String(error)}`);
+    }
+
+    const buildResult = this.buildManagedSearchExcludeBlock(state.folder);
+    for (const warning of buildResult.warnings) {
+      qgrepLogger.warn(`[qgrep.exclude-sync:${state.folder.name}] ${warning}`);
+    }
+
+    const normalizedInput = normalizeLineEndings(rawConfigText);
+    const upsertResult = upsertManagedSearchExcludeBlock(
+      normalizedInput,
+      buildResult.blockTextNormalized,
+    );
+    if (upsertResult.malformedBlockDetected) {
+      qgrepLogger.warn(
+        `[qgrep.exclude-sync:${state.folder.name}] malformed managed search.exclude block markers detected; appended a new managed block at file end.`,
+      );
+    }
+    if (upsertResult.textNormalized === normalizedInput) {
+      return;
+    }
+
+    const lineEnding = detectLineEnding(rawConfigText);
+    const outputText = restoreLineEndings(upsertResult.textNormalized, lineEnding);
+    qgrepLogger.info(`[qgrep.exclude-sync:${state.folder.name}] writing managed search.exclude block`);
+    try {
+      await fs.promises.writeFile(state.configPath, outputText, 'utf8');
+    } catch (error) {
+      throw new Error(`Failed to write qgrep config '${state.configPath}': ${String(error)}`);
+    }
+    qgrepLogger.info(
+      `[qgrep.exclude-sync:${state.folder.name}] wrote ${String(buildResult.excludeRuleCount)} exclude rule(s)`,
+    );
+  }
+
+  private buildManagedSearchExcludeBlock(folder: vscode.WorkspaceFolder): {
+    blockTextNormalized: string;
+    warnings: string[];
+    excludeRuleCount: number;
+  } {
+    const warnings: string[] = [];
+    const patterns = this.readEffectiveSearchExcludeTruePatterns(folder);
+    const convertedRules: string[] = [];
+    for (const pattern of patterns) {
+      const converted = convertSearchExcludeGlobToQgrepExcludeRegex(pattern);
+      if (!converted) {
+        warnings.push(`unsupported search.exclude pattern skipped: ${pattern}`);
+        continue;
+      }
+      convertedRules.push(converted);
+    }
+
+    convertedRules.sort((left, right) => left.localeCompare(right));
+    const seenRules = new Set<string>();
+    const orderedRules: string[] = [];
+    for (const fixedRule of QGREP_FIXED_EXCLUDE_REGEXES) {
+      seenRules.add(fixedRule);
+      orderedRules.push(fixedRule);
+    }
+    for (const convertedRule of convertedRules) {
+      if (seenRules.has(convertedRule)) {
+        continue;
+      }
+      seenRules.add(convertedRule);
+      orderedRules.push(convertedRule);
+    }
+
+    const lines: string[] = [
+      QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_BEGIN,
+      QGREP_MANAGED_SEARCH_EXCLUDE_SOURCE_COMMENT,
+    ];
+    if (orderedRules.length === 0) {
+      lines.push(QGREP_MANAGED_SEARCH_EXCLUDE_EMPTY_COMMENT);
+    } else {
+      for (const rule of orderedRules) {
+        lines.push(`exclude ${rule}`);
+      }
+    }
+    lines.push(QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_END);
+
+    return {
+      blockTextNormalized: lines.join('\n'),
+      warnings,
+      excludeRuleCount: orderedRules.length,
+    };
+  }
+
+  private readEffectiveSearchExcludeTruePatterns(folder: vscode.WorkspaceFolder): string[] {
+    const workspaceConfig = vscode.workspace.getConfiguration('search');
+    const workspaceExclude = workspaceConfig.get<Record<string, unknown>>('exclude', {});
+    const folderConfig = vscode.workspace.getConfiguration('search', folder.uri);
+    const folderExclude = folderConfig.get<Record<string, unknown>>('exclude', {});
+    const merged = {
+      ...(isPlainRecord(workspaceExclude) ? workspaceExclude : {}),
+      ...(isPlainRecord(folderExclude) ? folderExclude : {}),
+    };
+
+    const patterns: string[] = [];
+    for (const [rawPattern, value] of Object.entries(merged)) {
+      if (value !== true) {
+        continue;
+      }
+      const normalized = normalizeSearchExcludeGlob(rawPattern);
+      if (!normalized) {
+        continue;
+      }
+      patterns.push(normalized);
+    }
+
+    patterns.sort((left, right) => left.localeCompare(right));
+    return patterns;
+  }
+
   private async initWorkspace(state: WorkspaceQgrepState): Promise<void> {
     this.requireBinaryPath();
     await fs.promises.mkdir(state.qgrepDirPath, { recursive: true });
@@ -945,6 +1530,8 @@ class QgrepService implements vscode.Disposable {
         }
       }
 
+      await this.syncManagedSearchExcludeBlock(state);
+
       const updateResult = await this.runQgrepCommand(
         ['update', state.configPath],
         state.folder.uri.fsPath,
@@ -957,6 +1544,7 @@ class QgrepService implements vscode.Disposable {
 
       this.stopWatch(state);
       this.startWatch(state);
+      this.ensureAutoUpdateWatcher(state);
     } catch (error) {
       this.markWorkspaceIndexingFailed(state);
       throw error;
@@ -971,6 +1559,8 @@ class QgrepService implements vscode.Disposable {
     this.setWorkspaceIndexing(state, true);
 
     try {
+      await this.syncManagedSearchExcludeBlock(state);
+
       const buildResult = await this.runQgrepCommand(
         ['build', state.configPath],
         state.folder.uri.fsPath,
@@ -982,6 +1572,7 @@ class QgrepService implements vscode.Disposable {
       }
 
       this.startWatch(state);
+      this.ensureAutoUpdateWatcher(state);
     } catch (error) {
       this.markWorkspaceIndexingFailed(state);
       throw error;
@@ -1101,6 +1692,10 @@ export async function executeQgrepSearch(input: Record<string, unknown>): Promis
   return requireQgrepService().search(input);
 }
 
+export async function executeQgrepFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return requireQgrepService().files(input);
+}
+
 export function getQgrepStatusSummary(): QgrepStatusSummary {
   if (activeService) {
     return activeService.getStatusSummary();
@@ -1176,4 +1771,203 @@ function isPathInsideRoot(rootPath: string, targetPath: string): boolean {
 
 function escapeRegex(value: string): string {
   return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function detectLineEnding(text: string): '\r\n' | '\n' {
+  return text.includes('\r\n') ? '\r\n' : '\n';
+}
+
+function restoreLineEndings(textNormalized: string, lineEnding: '\r\n' | '\n'): string {
+  if (lineEnding === '\n') {
+    return textNormalized;
+  }
+  return textNormalized.replace(/\n/g, '\r\n');
+}
+
+function normalizeSearchExcludeGlob(pattern: string): string | undefined {
+  const trimmed = pattern.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  const normalized = normalizeSlash(trimmed)
+    .replace(/^\.\//u, '')
+    .replace(/\/{2,}/g, '/');
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
+ * Validates regex syntax intended for qgrep workspace.cfg include/exclude rules.
+ * qgrep uses RE2 with POSIX syntax restrictions for project config regexes, so
+ * Perl-style look-around and non-capturing groups must not be emitted.
+ *
+ * @param regexSource Regex source string that will be written to workspace.cfg.
+ * @returns An error reason when unsupported syntax is detected; otherwise undefined.
+ */
+function validateQgrepConfigRegexSyntax(regexSource: string): string | undefined {
+  if (regexSource.includes('(?:')) {
+    return 'non-capturing groups (?:...) are not supported';
+  }
+  if (regexSource.includes('(?=')) {
+    return 'positive look-ahead (?=...) is not supported';
+  }
+  if (regexSource.includes('(?!')) {
+    return 'negative look-ahead (?!...) is not supported';
+  }
+  if (regexSource.includes('(?<=')) {
+    return 'positive look-behind (?<=...) is not supported';
+  }
+  if (regexSource.includes('(?<!')) {
+    return 'negative look-behind (?<!...) is not supported';
+  }
+  if (regexSource.includes('(?<')) {
+    return 'named groups or extended (?<...) syntax is not supported';
+  }
+  return undefined;
+}
+
+/**
+ * Converts a VS Code search.exclude glob pattern into a qgrep-safe exclude regex.
+ * The supported glob subset is intentionally limited to *, ?, **, and / so the
+ * generated regex stays compatible with qgrep workspace.cfg parsing.
+ * Unsupported patterns are skipped by returning undefined.
+ *
+ * @param pattern VS Code search.exclude glob pattern.
+ * @returns qgrep-safe regex source for workspace.cfg exclude rules, or undefined when unsupported.
+ */
+function convertSearchExcludeGlobToQgrepExcludeRegex(pattern: string): string | undefined {
+  const normalized = normalizeSearchExcludeGlob(pattern);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.startsWith('!')) {
+    return undefined;
+  }
+  if (/[{}\[\]]/u.test(normalized)) {
+    return undefined;
+  }
+
+  const anchored = normalized.startsWith('/');
+  let glob = anchored ? normalized.slice(1) : normalized;
+  if (glob.length === 0) {
+    return undefined;
+  }
+  if (glob.endsWith('/')) {
+    glob = `${glob}**`;
+  }
+
+  const hasSlash = glob.includes('/');
+  const regexSource = compileSimpleGlobToRegexSource(glob);
+  if (!regexSource) {
+    return undefined;
+  }
+  const finalRegex = !hasSlash && !anchored
+    ? `(^|.*/)${regexSource}(/.*)?$`
+    : `^${regexSource}(/.*)?$`;
+  if (validateQgrepConfigRegexSyntax(finalRegex)) {
+    return undefined;
+  }
+  return finalRegex;
+}
+
+/**
+ * Compiles a restricted glob subset into a regex source fragment used by qgrep
+ * workspace.cfg exclude rules. This function must not emit qgrep-incompatible
+ * constructs such as non-capturing groups or look-around.
+ *
+ * @param glob Normalized glob pattern using '/' separators.
+ * @returns Regex source fragment, or undefined when the input is empty.
+ */
+function compileSimpleGlobToRegexSource(glob: string): string | undefined {
+  if (glob.length === 0) {
+    return undefined;
+  }
+
+  let result = '';
+  for (let index = 0; index < glob.length; index += 1) {
+    const char = glob[index];
+    if (char === '*') {
+      if (glob[index + 1] === '*') {
+        let endIndex = index + 1;
+        while (glob[endIndex + 1] === '*') {
+          endIndex += 1;
+        }
+        index = endIndex;
+        if (glob[index + 1] === '/') {
+          result += '(.*/)?';
+          index += 1;
+        } else {
+          result += '.*';
+        }
+        continue;
+      }
+      result += '[^/]*';
+      continue;
+    }
+    if (char === '?') {
+      result += '[^/]';
+      continue;
+    }
+    result += escapeRegex(char);
+  }
+
+  return result;
+}
+
+function upsertManagedSearchExcludeBlock(
+  textNormalized: string,
+  blockTextNormalized: string,
+): { textNormalized: string; malformedBlockDetected: boolean } {
+  const hasFinalNewline = textNormalized.endsWith('\n');
+  const body = hasFinalNewline ? textNormalized.slice(0, -1) : textNormalized;
+  const lines = body.length > 0 ? body.split('\n') : [];
+
+  const beginIndexes = findLineIndexes(lines, QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_BEGIN);
+  const endIndexes = findLineIndexes(lines, QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_END);
+  const blockLines = blockTextNormalized.split('\n');
+  let malformedBlockDetected = false;
+
+  if (beginIndexes.length > 0 && endIndexes.length > 0) {
+    const beginIndex = beginIndexes[0];
+    const endIndex = endIndexes.find((index) => index >= beginIndex);
+    if (endIndex !== undefined) {
+      malformedBlockDetected = beginIndexes.length !== 1 || endIndexes.length !== 1;
+      lines.splice(beginIndex, endIndex - beginIndex + 1, ...blockLines);
+      const nextBody = lines.join('\n');
+      return {
+        textNormalized: hasFinalNewline ? `${nextBody}\n` : nextBody,
+        malformedBlockDetected,
+      };
+    }
+    malformedBlockDetected = true;
+  } else if (beginIndexes.length > 0 || endIndexes.length > 0) {
+    malformedBlockDetected = true;
+  }
+
+  if (lines.length > 0 && lines[lines.length - 1] !== '') {
+    lines.push('');
+  }
+  lines.push(...blockLines);
+  const nextBody = lines.join('\n');
+  return {
+    textNormalized: hasFinalNewline ? `${nextBody}\n` : nextBody,
+    malformedBlockDetected,
+  };
+}
+
+function findLineIndexes(lines: readonly string[], expected: string): number[] {
+  const indexes: number[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] === expected) {
+      indexes.push(index);
+    }
+  }
+  return indexes;
 }

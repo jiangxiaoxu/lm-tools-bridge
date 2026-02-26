@@ -6,6 +6,32 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.93] - 2026-02-26
+
+### English
+
+#### Added
+- Added `lm_qgrepFiles` tool for qgrep file search with `fp`, `fn`, `fs`, and `ff` modes.
+
+#### Changed
+- qgrep index maintenance now combines `watch` with debounced create/delete-triggered `qgrep update` refreshes.
+- qgrep `workspace.cfg` now syncs a managed `search.exclude` block from VS Code `search.exclude=true` entries and always includes fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`.
+
+#### Fixed
+- Hardened generated qgrep config regex output to avoid unsupported `(?...)` syntax that can break qgrep config parsing.
+
+### 中文
+
+#### 新增
+- 新增 `lm_qgrepFiles` 工具,支持 qgrep 文件搜索 `fp`、`fn`、`fs`、`ff` 模式。
+
+#### 变更
+- qgrep 索引维护现在结合 `watch` 与基于 create/delete 事件的防抖 `qgrep update` 自动刷新。
+- qgrep `workspace.cfg` 现在会从 VS Code `search.exclude=true` 条目同步受管区块,并固定排除 `.git`、`Intermediate`、`DerivedDataCache`、`Saved`、`.vs`、`.vscode`。
+
+#### 修复
+- 加固 qgrep 配置 regex 生成逻辑,避免输出 qgrep 不支持的 `(?...)` 语法导致配置解析失败。
+
 ## [1.0.92] - 2026-02-23
 
 ### English

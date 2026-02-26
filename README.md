@@ -100,14 +100,17 @@ User guidance:
 
 ### Qgrep Tool
 - `lm_qgrepSearch` performs regex-only text search using the extension bundled binary at `bin/qgrep.exe`.
+- `lm_qgrepFiles` searches indexed file paths using qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns path results only.
 - Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `200`).
+- `lm_qgrepFiles` inputs: required `query`, optional `mode` (`fp` default), optional `caseInsensitive`, optional `searchPath`, optional `maxResults` (default `200`).
 - `searchPath` supports absolute paths, `WorkspaceName/...`, and workspace-relative paths. Paths must exist and stay inside current workspace folders.
 - If `searchPath` is omitted, search runs across all initialized workspaces in the current multi-root session.
-- Workspace initialization is manual: run `Status Menu -> Qgrep Init All Workspaces` once before search. After init, background `qgrep watch` keeps indexes fresh.
+- Workspace initialization is manual: run `Status Menu -> Qgrep Init All Workspaces` once before search. After init, background `qgrep watch` keeps existing-file content changes fresh, and extension-side create/delete watchers trigger debounced `qgrep update` to refresh file-list changes.
+- On qgrep init/rebuild and `search.exclude` configuration changes, the extension syncs `search.exclude=true` patterns into a managed `exclude ...` block inside each initialized `workspace.cfg` and always writes fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`. `.gitignore` is not synced yet.
 - Multi-root indexes are isolated per workspace under `<workspace>/.vscode/qgrep`.
 - qgrep progress is parsed from qgrep stdout frames (`[xx%] N files`). File-weighted aggregate `A/B` is shown only after all initialized workspaces have known totals.
-- If no initialized workspace is available, or `searchPath` is outside current workspaces, the tool returns an error.
-- Default policy: `lm_qgrepSearch` is exposed by default, but not enabled by default.
+- If no initialized workspace is available, or `searchPath` is outside current workspaces, the qgrep tools return an error.
+- Default policy: `lm_qgrepSearch` and `lm_qgrepFiles` are exposed by default, but not enabled by default.
 
 ### Tasks And Debug Tools
 - `lm_tasks_runBuild`: starts a build task via `vscode.tasks` without interactive pickers.
@@ -158,7 +161,7 @@ User guidance:
 - `lm_qgrepSearch` fails with init required:
   - Run `Status Menu -> Qgrep Init All Workspaces`.
   - Make sure at least one workspace still has `.vscode/qgrep/workspace.cfg`.
-- `lm_qgrepSearch` path scope rejected:
+- `lm_qgrepSearch` or `lm_qgrepFiles` path scope rejected:
   - Ensure `searchPath` points to an existing path inside current workspace folders.
   - In multi-root with ambiguous relative paths, use `WorkspaceName/...`.
 - Client stops working after port change:
@@ -321,14 +324,17 @@ url = "http://127.0.0.1:47100/mcp"
 
 ### Qgrep 工具
 - `lm_qgrepSearch` 使用扩展内置二进制 `bin/qgrep.exe` 执行 regex 文本搜索.
+- `lm_qgrepFiles` 使用 qgrep `files` 模式(`fp`/`fn`/`fs`/`ff`)搜索已索引文件路径,仅返回路径结果.
 - 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
+- `lm_qgrepFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `caseInsensitive`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
 - `searchPath` 支持绝对路径,`WorkspaceName/...` 和 workspace 相对路径. 路径必须存在且必须位于当前 workspace 内.
 - 未传 `searchPath` 时,会在当前会话中所有已初始化的 workspace 上聚合搜索.
-- workspace 初始化是手动门禁: 先执行 `Status Menu -> Qgrep Init All Workspaces`. 初始化后后台 `qgrep watch` 会自动维护索引.
+- workspace 初始化是手动门禁: 先执行 `Status Menu -> Qgrep Init All Workspaces`. 初始化后后台 `qgrep watch` 负责已有文件内容变更,扩展侧会监听 create/delete 并防抖触发 `qgrep update` 来刷新文件列表变化.
+- 在 qgrep init/rebuild 和 `search.exclude` 配置变更时,扩展会把 `search.exclude=true` 规则同步到每个已初始化 `workspace.cfg` 的受管 `exclude ...` 区块,并固定写入 `.git`、`Intermediate`、`DerivedDataCache`、`Saved`、`.vs`、`.vscode` 排除规则. 当前还不会同步 `.gitignore`.
 - multi-root 下每个 workspace 独立维护 `<workspace>/.vscode/qgrep` 索引目录.
 - qgrep 进度来自 qgrep stdout 帧(`[xx%] N files`). 只有在所有已初始化 workspace 都拿到总文件数后,才显示按文件加权聚合的 `A/B`.
-- 若没有任何已初始化 workspace,或 `searchPath` 不在当前 workspace 内,工具会返回错误.
-- 默认策略: `lm_qgrepSearch` 默认 exposed,默认不 enabled.
+- 若没有任何已初始化 workspace,或 `searchPath` 不在当前 workspace 内,qgrep 工具会返回错误.
+- 默认策略: `lm_qgrepSearch` 与 `lm_qgrepFiles` 默认 exposed,默认不 enabled.
 
 ### Tasks 与 Debug 工具
 - `lm_tasks_runBuild`: 通过 `vscode.tasks` 启动 build task,不使用交互式选择器.
@@ -379,7 +385,7 @@ url = "http://127.0.0.1:47100/mcp"
 - `lm_qgrepSearch` 提示需要初始化:
   - 先执行 `Status Menu -> Qgrep Init All Workspaces`.
   - 确认至少一个 workspace 仍存在 `.vscode/qgrep/workspace.cfg`.
-- `lm_qgrepSearch` 路径范围被拒绝:
+- `lm_qgrepSearch` 或 `lm_qgrepFiles` 路径范围被拒绝:
   - 确认 `searchPath` 指向当前 workspace 内存在的路径.
   - multi-root 下相对路径有歧义时,请使用 `WorkspaceName/...`.
 - 端口变化后客户端不可用:

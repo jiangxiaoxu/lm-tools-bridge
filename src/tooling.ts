@@ -8,7 +8,7 @@ import { getClangdToolsSnapshot } from './clangd';
 import { resolveInputFilePath, resolveStructuredPath } from './clangd/workspacePath';
 import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
 import { showToolConfigPanel, type ToolConfigPanelResult } from './toolConfigPanel';
-import { executeQgrepSearch } from './qgrep';
+import { executeQgrepFilesSearch, executeQgrepSearch } from './qgrep';
 import {
   CONFIG_SECTION,
   getConfigValue,
@@ -48,6 +48,7 @@ const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
 const LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME = 'lm_debug_listLaunchConfigs';
 const LM_DEBUG_START_TOOL_NAME = 'lm_debug_start';
 const LM_QGREP_SEARCH_TOOL_NAME = 'lm_qgrepSearch';
+const LM_QGREP_FILES_TOOL_NAME = 'lm_qgrepFiles';
 const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 100;
 const LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS = 1;
 const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
@@ -84,6 +85,7 @@ const DEFAULT_EXPOSED_TOOL_NAMES = [
   LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME,
   LM_DEBUG_START_TOOL_NAME,
   LM_QGREP_SEARCH_TOOL_NAME,
+  LM_QGREP_FILES_TOOL_NAME,
   ...DEFAULT_CLANGD_EXPOSED_TOOL_NAMES,
 ];
 const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
@@ -378,6 +380,54 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
       default: 200,
       minimum: 1,
       description: 'Maximum number of matches across all searched workspaces.',
+    },
+  },
+  required: ['query'],
+};
+
+const LM_QGREP_FILES_DESCRIPTION = [
+  'Search indexed workspace files using qgrep file search modes.',
+  'Supports qgrep files modes: fp (path regex), fn (file name regex), fs (space-delimited literal components), ff (fuzzy path).',
+  'Before first use, run "LM Tools Bridge: Qgrep Init All Workspaces" from the status menu.',
+  'If searchPath is omitted, search runs across all initialized workspace folders.',
+  'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
+  'searchPath must resolve inside the current workspace folders; external paths are rejected.',
+  'Examples:',
+  '{"query":"manager","mode":"fn"}',
+  '{"query":"manager\\\\.ts$","mode":"fn"}',
+  '{"query":"src/r/lmanager","mode":"ff","maxResults":20}',
+  '{"query":"render manager.c","mode":"fs","searchPath":"WorkspaceName/src"}',
+  '{"query":"src/.*controller","mode":"fp","searchPath":"C:/repo/project/src","maxResults":50}',
+  '{"query":"src/.*test","mode":"fp","caseInsensitive":true}',
+].join('\n');
+
+const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    query: {
+      type: 'string',
+      description: 'File search query string. Regex for fp/fn, literal components for fs, fuzzy path pattern for ff.',
+    },
+    mode: {
+      type: 'string',
+      enum: ['fp', 'fn', 'fs', 'ff'],
+      default: 'fp',
+      description: 'qgrep files mode. fp=path regex, fn=file name regex, fs=space-delimited literal components, ff=fuzzy path.',
+    },
+    searchPath: {
+      type: 'string',
+      description: 'Optional path scope. Supports absolute paths, WorkspaceName/... paths, and workspace-relative paths. Path must exist and stay inside current workspace folders.',
+    },
+    maxResults: {
+      type: 'integer',
+      default: 200,
+      minimum: 1,
+      description: 'Maximum number of file results across all searched workspaces.',
+    },
+    caseInsensitive: {
+      type: 'boolean',
+      default: false,
+      description: 'Optional case-insensitive match flag (`i` option in qgrep files).',
     },
   },
   required: ['query'],
@@ -1898,6 +1948,17 @@ function buildQgrepSearchToolDefinition(): CustomToolDefinition {
   };
 }
 
+function buildQgrepFilesToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_QGREP_FILES_TOOL_NAME,
+    description: LM_QGREP_FILES_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_QGREP_FILES_SCHEMA,
+    isCustom: true,
+    invoke: runQgrepFilesTool,
+  };
+}
+
 function buildCustomToolResult(
   text: string,
   structuredContent: unknown,
@@ -2033,6 +2094,11 @@ async function runDebugStartTool(input: Record<string, unknown>): Promise<vscode
 async function runQgrepSearchTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeQgrepSearch(input);
   return buildCustomToolResult(formatQgrepSearchSummary(payload), payload);
+}
+
+async function runQgrepFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const payload = await executeQgrepFilesSearch(input);
+  return buildCustomToolResult(formatQgrepFilesSummary(payload), payload);
 }
 
 function parseOptionalStringInput(input: Record<string, unknown>, key: string): string | undefined {
@@ -2451,6 +2517,38 @@ function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
     lines.push('---');
     lines.push(`// ${matchPath}:${line}`);
     lines.push(preview);
+  }
+  return lines.join('\n');
+}
+
+function formatQgrepFilesSummary(payload: Record<string, unknown>): string {
+  const count = typeof payload.count === 'number' ? payload.count : 0;
+  const capped = payload.capped === true;
+  const searchPath = typeof payload.searchPath === 'string' ? payload.searchPath : null;
+  const mode = typeof payload.mode === 'string' ? payload.mode : 'fp';
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  const lines: string[] = [
+    'Qgrep files summary',
+    `mode: ${mode}`,
+    `count: ${count}${capped ? ' (capped)' : ''}`,
+    `scope: ${searchPath ?? 'all initialized workspaces'}`,
+  ];
+  if (files.length === 0) {
+    lines.push('No files found.');
+    return lines.join('\n');
+  }
+  for (const entry of files) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const record = entry as { workspacePath?: unknown; absolutePath?: unknown };
+    const value = typeof record.workspacePath === 'string'
+      ? record.workspacePath
+      : typeof record.absolutePath === 'string'
+        ? toSummaryPathPreferWorkspace(record.absolutePath)
+        : '<unknown>';
+    lines.push('---');
+    lines.push(value);
   }
   return lines.join('\n');
 }
@@ -3126,6 +3224,7 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
     buildDebugListLaunchConfigsToolDefinition(),
     buildDebugStartToolDefinition(),
     buildQgrepSearchToolDefinition(),
+    buildQgrepFilesToolDefinition(),
     ...getClangdToolsSnapshot(),
   ];
 }

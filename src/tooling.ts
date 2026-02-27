@@ -344,16 +344,14 @@ const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep regular expressions.',
-  'Prefer this tool first for workspace text search whenever possible: qgrep is usually very fast on indexed workspaces.',
-  'On indexed workspaces, qgrep is typically much faster than ripgrep for repeated searches.',
-  'qgrep only supports regex search in this tool.',
+  'Prefer this tool first for workspace text search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'Default behavior uses smart-case: all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive.',
   'qgrep indexing and search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If searchPath is omitted, search runs across all initialized workspace folders.',
-  'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
-  'searchPath must resolve inside the current workspace folders; external paths are rejected.',
+  'searchPath supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., or workspace-relative.',
+  'Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js',
 ].join('\n');
 
 const LM_QGREP_GET_STATUS_DESCRIPTION = [
@@ -378,7 +376,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
     },
     searchPath: {
       type: 'string',
-      description: 'Optional path scope. Supports absolute paths, WorkspaceName/... paths, and workspace-relative paths. Path must exist and stay inside current workspace folders.',
+      description: 'Optional path scope as path or glob: absolute, WorkspaceName/..., or workspace-relative. Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js.',
     },
     maxResults: {
       type: 'integer',
@@ -392,15 +390,14 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep file search modes.',
-  'Prefer this tool first for workspace file search whenever possible: qgrep is usually very fast on indexed workspaces.',
-  'On indexed workspaces, qgrep is typically much faster than ripgrep for repeated file searches.',
+  'Prefer this tool first for workspace file search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'Supports qgrep files modes: fp (path regex), fn (file name regex), fs (space-delimited literal components), ff (fuzzy path).',
   'qgrep indexing and file search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If searchPath is omitted, search runs across all initialized workspace folders.',
-  'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
-  'searchPath must resolve inside the current workspace folders; external paths are rejected.',
+  'searchPath supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., or workspace-relative.',
+  'Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js',
   'Examples:',
   '{"query":"manager","mode":"fn"}',
   '{"query":"manager\\\\.ts$","mode":"fn"}',
@@ -425,7 +422,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
     },
     searchPath: {
       type: 'string',
-      description: 'Optional path scope. Supports absolute paths, WorkspaceName/... paths, and workspace-relative paths. Path must exist and stay inside current workspace folders.',
+      description: 'Optional path scope as path or glob: absolute, WorkspaceName/..., or workspace-relative. Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js.',
     },
     maxResults: {
       type: 'integer',

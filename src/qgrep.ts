@@ -143,6 +143,17 @@ interface QgrepSearchTarget {
   filterRegex?: string;
 }
 
+interface QgrepGlobPathMatcher {
+  pattern: string;
+  regex: RegExp;
+  matchTarget: 'relative' | 'absolute';
+}
+
+interface QgrepGlobSearchTarget {
+  state: WorkspaceQgrepState;
+  matcher: QgrepGlobPathMatcher;
+}
+
 interface ResolvedSearchPath {
   state: WorkspaceQgrepState;
   absolutePath: string;
@@ -320,6 +331,10 @@ class QgrepService implements vscode.Disposable {
     const maxResults = this.parseMaxResults(input);
     const useCaseInsensitiveSearch = this.shouldUseCaseInsensitiveSearchForQuery(query);
     await this.ensureToolSearchReady();
+    if (searchPath && this.isGlobSearchPath(searchPath)) {
+      return this.searchWithGlobPath(searchPath, query, useCaseInsensitiveSearch, maxResults);
+    }
+
     const targets = this.resolveSearchTargets(searchPath);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
@@ -366,6 +381,11 @@ class QgrepService implements vscode.Disposable {
     const searchPath = this.parseOptionalSearchPath(input);
     const maxResults = this.parseMaxResults(input);
     await this.ensureToolSearchReady();
+
+    if (searchPath && this.isGlobSearchPath(searchPath)) {
+      return this.filesWithGlobPath(searchPath, query, mode, maxResults);
+    }
+
     const targets = this.resolveSearchTargets(searchPath);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
@@ -400,6 +420,52 @@ class QgrepService implements vscode.Disposable {
       query,
       mode,
       searchPath: searchPath ?? null,
+      maxResults,
+      count: files.length,
+      capped,
+      sort: 'qgrep-native',
+      files,
+    };
+  }
+
+  private async filesWithGlobPath(
+    searchPath: string,
+    query: string,
+    mode: QgrepFilesMode,
+    maxResults: number,
+  ): Promise<Record<string, unknown>> {
+    const targets = this.resolveGlobSearchTargets(searchPath);
+    if (targets.length === 0) {
+      throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
+    }
+
+    const files: Array<Record<string, unknown>> = [];
+    let matchedCount = 0;
+    let capped = false;
+
+    outer: for (const target of targets) {
+      const targetFiles = await this.searchFilesInWorkspace(
+        { state: target.state },
+        query,
+        mode,
+      );
+      for (const file of targetFiles) {
+        if (!this.matchesGlobSearchPath(target.matcher, target.state.folder, file.absolutePath)) {
+          continue;
+        }
+        matchedCount += 1;
+        if (matchedCount > maxResults) {
+          capped = true;
+          break outer;
+        }
+        files.push(this.toFilePayload(target.state.folder, file));
+      }
+    }
+
+    return {
+      query,
+      mode,
+      searchPath,
       maxResults,
       count: files.length,
       capped,
@@ -865,6 +931,81 @@ class QgrepService implements vscode.Disposable {
     return parts.join(', ');
   }
 
+  private isGlobSearchPath(searchPath: string): boolean {
+    const trimmed = searchPath.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    try {
+      const normalized = normalizeWorkspaceSearchGlobPattern(trimmed);
+      return hasUnescapedGlobMeta(normalized);
+    } catch {
+      return hasUnescapedGlobMeta(trimmed);
+    }
+  }
+
+  private async searchWithGlobPath(
+    searchPath: string,
+    query: string,
+    useCaseInsensitiveSearch: boolean,
+    maxResults: number,
+  ): Promise<Record<string, unknown>> {
+    const targets = this.resolveGlobSearchTargets(searchPath);
+    if (targets.length === 0) {
+      throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
+    }
+
+    const matches: Array<Record<string, unknown>> = [];
+    let matchedCount = 0;
+    let capped = false;
+
+    outer: for (const target of targets) {
+      const targetMatches = await this.searchInWorkspace(
+        { state: target.state },
+        query,
+        useCaseInsensitiveSearch,
+      );
+      for (const match of targetMatches) {
+        if (!this.matchesGlobSearchPath(target.matcher, target.state.folder, match.absolutePath)) {
+          continue;
+        }
+        matchedCount += 1;
+        if (matchedCount > maxResults) {
+          capped = true;
+          break outer;
+        }
+        matches.push(this.toMatchPayload(target.state.folder, match));
+      }
+    }
+
+    return {
+      query,
+      searchPath,
+      maxResults,
+      count: matches.length,
+      capped,
+      matches,
+    };
+  }
+
+  private resolveGlobSearchTargets(searchPath: string): QgrepGlobSearchTarget[] {
+    const trimmed = searchPath.trim();
+    if (isAbsolutePath(trimmed)) {
+      const matcher = compileAbsoluteGlobPathMatcher(trimmed);
+      return this.getInitializedStates().map((state) => ({ state, matcher }));
+    }
+
+    const prefixed = this.tryResolveWorkspacePrefixedGlobPattern(trimmed);
+    if (prefixed) {
+      const state = this.requireInitializedState(prefixed.folder);
+      const matcher = compileWorkspaceGlobPathMatcher(prefixed.pattern);
+      return [{ state, matcher }];
+    }
+
+    const matcher = compileWorkspaceGlobPathMatcher(trimmed);
+    return this.getInitializedStates().map((state) => ({ state, matcher }));
+  }
+
   private resolveSearchTargets(searchPath: string | undefined): QgrepSearchTarget[] {
     if (!searchPath) {
       return this.getInitializedStates().map((state) => ({ state }));
@@ -961,6 +1102,41 @@ class QgrepService implements vscode.Disposable {
     };
   }
 
+  private tryResolveWorkspacePrefixedGlobPattern(inputPath: string): {
+    folder: vscode.WorkspaceFolder;
+    pattern: string;
+  } | undefined {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      return undefined;
+    }
+
+    const trimmed = inputPath.trim().replace(/^[\\/]+/u, '');
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+
+    const normalizedInput = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
+    for (const folder of folders) {
+      const workspaceName = process.platform === 'win32' ? folder.name.toLowerCase() : folder.name;
+      if (normalizedInput === workspaceName) {
+        return {
+          folder,
+          pattern: '**/*',
+        };
+      }
+      if (normalizedInput.startsWith(`${workspaceName}/`) || normalizedInput.startsWith(`${workspaceName}\\`)) {
+        const remainder = trimmed.slice(folder.name.length + 1).replace(/^[\\/]+/u, '');
+        return {
+          folder,
+          pattern: remainder.length > 0 ? remainder : '**/*',
+        };
+      }
+    }
+
+    return undefined;
+  }
+
   private buildFilterRegex(folder: vscode.WorkspaceFolder, absolutePath: string): string | undefined {
     const resolvedFolderPath = path.resolve(folder.uri.fsPath);
     const resolvedTargetPath = path.resolve(absolutePath);
@@ -981,9 +1157,12 @@ class QgrepService implements vscode.Disposable {
     target: QgrepSearchTarget,
     query: string,
     useCaseInsensitiveSearch: boolean,
-    maxResults: number,
+    maxResults?: number,
   ): Promise<ParsedQgrepMatch[]> {
-    const args: string[] = ['search', target.state.configPath, `L${maxResults}`];
+    const args: string[] = ['search', target.state.configPath];
+    if (typeof maxResults === 'number') {
+      args.push(`L${maxResults}`);
+    }
     if (useCaseInsensitiveSearch) {
       args.push('i');
     }
@@ -1008,7 +1187,7 @@ class QgrepService implements vscode.Disposable {
     target: QgrepSearchTarget,
     query: string,
     mode: QgrepFilesMode,
-    maxResults: number,
+    maxResults?: number,
   ): Promise<ParsedQgrepFile[]> {
     const args: string[] = ['files', target.state.configPath];
     if (process.platform === 'win32') {
@@ -1018,7 +1197,9 @@ class QgrepService implements vscode.Disposable {
     if (target.filterRegex) {
       args.push(`fi${target.filterRegex}`);
     }
-    args.push(`L${maxResults}`);
+    if (typeof maxResults === 'number') {
+      args.push(`L${maxResults}`);
+    }
     args.push(query);
 
     const result = await this.runQgrepCommand(args, target.state.folder.uri.fsPath);
@@ -1147,6 +1328,22 @@ class QgrepService implements vscode.Disposable {
       return undefined;
     }
     return absolutePath;
+  }
+
+  private toWorkspaceRelativePath(folder: vscode.WorkspaceFolder, absolutePath: string): string {
+    const relativePath = normalizeSlash(path.relative(folder.uri.fsPath, absolutePath));
+    return relativePath.length > 0 ? relativePath : '.';
+  }
+
+  private matchesGlobSearchPath(
+    matcher: QgrepGlobPathMatcher,
+    folder: vscode.WorkspaceFolder,
+    absolutePath: string,
+  ): boolean {
+    const candidate = matcher.matchTarget === 'absolute'
+      ? normalizeSlash(path.resolve(absolutePath))
+      : this.toWorkspaceRelativePath(folder, absolutePath);
+    return matcher.regex.test(candidate);
   }
 
   private toMatchPayload(folder: vscode.WorkspaceFolder, match: ParsedQgrepMatch): Record<string, unknown> {
@@ -2276,6 +2473,284 @@ function delayMs(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, Math.max(0, durationMs));
   });
+}
+
+interface GlobPatternParserState {
+  pattern: string;
+  index: number;
+}
+
+function isGlobMetaCharacter(char: string): boolean {
+  return char === '*' || char === '?' || char === '[' || char === ']' || char === '{' || char === '}';
+}
+
+function hasUnescapedGlobMeta(pattern: string): boolean {
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '\\') {
+      const next = pattern[index + 1];
+      if (next && isGlobMetaCharacter(next)) {
+        index += 1;
+      }
+      continue;
+    }
+    if (isGlobMetaCharacter(char)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeWorkspaceSearchGlobPattern(pattern: string): string {
+  const trimmed = pattern.trim();
+  let normalized = '';
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (char === '/') {
+      normalized += '/';
+      continue;
+    }
+    if (char !== '\\') {
+      normalized += char;
+      continue;
+    }
+
+    const next = trimmed[index + 1];
+    if (next === undefined) {
+      throw new Error('Invalid searchPath glob pattern: trailing escape (\\).');
+    }
+    if (next === '/' || next === '\\') {
+      normalized += '/';
+      index += 1;
+      continue;
+    }
+    if (isGlobMetaCharacter(next) || next === ',') {
+      const previousNormalizedChar = normalized.length > 0 ? normalized[normalized.length - 1] : '';
+      const treatAsEscape = previousNormalizedChar === '' || previousNormalizedChar === '/';
+      if (treatAsEscape) {
+        normalized += `\\${next}`;
+        index += 1;
+        continue;
+      }
+    }
+
+    normalized += '/';
+  }
+
+  const hasUncPrefix = normalized.startsWith('//');
+  const uncSafeNormalized = hasUncPrefix
+    ? `//${normalized.slice(2).replace(/\/{2,}/g, '/')}`
+    : normalized.replace(/\/{2,}/g, '/');
+
+  return uncSafeNormalized.replace(/^\.\//u, '');
+}
+
+function compileWorkspaceGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
+  const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
+  if (normalizedPattern.length === 0) {
+    throw new Error('searchPath glob must be a non-empty string.');
+  }
+
+  let glob = normalizedPattern.startsWith('/') ? normalizedPattern.slice(1) : normalizedPattern;
+  if (glob.length === 0) {
+    glob = '**/*';
+  }
+
+  const regexSource = compileWorkspaceGlobToRegexSource(glob);
+  const fullSource = `^${regexSource}$`;
+  const flags = process.platform === 'win32' ? 'iu' : 'u';
+
+  try {
+    const regex = new RegExp(fullSource, flags);
+    return {
+      pattern: normalizedPattern,
+      regex,
+      matchTarget: 'relative',
+    };
+  } catch (error) {
+    throw new Error(`Invalid searchPath glob pattern: ${String(error)}`);
+  }
+}
+
+function compileAbsoluteGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
+  const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
+  if (!isAbsolutePath(normalizedPattern)) {
+    throw new Error(`searchPath glob must be an absolute path pattern: ${pattern}`);
+  }
+
+  const regexSource = compileWorkspaceGlobToRegexSource(normalizedPattern);
+  const fullSource = `^${regexSource}$`;
+  const flags = process.platform === 'win32' ? 'iu' : 'u';
+
+  try {
+    const regex = new RegExp(fullSource, flags);
+    return {
+      pattern: normalizedPattern,
+      regex,
+      matchTarget: 'absolute',
+    };
+  } catch (error) {
+    throw new Error(`Invalid searchPath glob pattern: ${String(error)}`);
+  }
+}
+
+function compileWorkspaceGlobToRegexSource(glob: string): string {
+  const state: GlobPatternParserState = {
+    pattern: glob,
+    index: 0,
+  };
+  const source = parseGlobSequence(state, '');
+  if (state.index !== state.pattern.length) {
+    throw new Error(`Invalid searchPath glob pattern near index ${String(state.index)}.`);
+  }
+  return source;
+}
+
+function parseGlobSequence(state: GlobPatternParserState, stopChars: string): string {
+  let result = '';
+  while (state.index < state.pattern.length) {
+    const char = state.pattern[state.index];
+    if (stopChars.includes(char)) {
+      break;
+    }
+
+    if (char === '\\') {
+      state.index += 1;
+      if (state.index >= state.pattern.length) {
+        throw new Error('Invalid searchPath glob pattern: trailing escape (\\).');
+      }
+      const escaped = state.pattern[state.index];
+      result += escapeRegex(escaped);
+      state.index += 1;
+      continue;
+    }
+
+    if (char === '*') {
+      if (state.pattern[state.index + 1] === '*') {
+        let endIndex = state.index + 1;
+        while (state.pattern[endIndex + 1] === '*') {
+          endIndex += 1;
+        }
+        state.index = endIndex + 1;
+        if (state.pattern[state.index] === '/') {
+          state.index += 1;
+          result += '(?:.*/)?';
+        } else {
+          result += '.*';
+        }
+        continue;
+      }
+      state.index += 1;
+      result += '[^/]*';
+      continue;
+    }
+
+    if (char === '?') {
+      state.index += 1;
+      result += '[^/]';
+      continue;
+    }
+
+    if (char === '[') {
+      result += parseGlobCharClass(state);
+      continue;
+    }
+
+    if (char === '{') {
+      result += parseGlobBraceGroup(state);
+      continue;
+    }
+
+    if (char === '/') {
+      result += '/';
+      state.index += 1;
+      while (state.pattern[state.index] === '/') {
+        state.index += 1;
+      }
+      continue;
+    }
+
+    result += escapeRegex(char);
+    state.index += 1;
+  }
+  return result;
+}
+
+function parseGlobCharClass(state: GlobPatternParserState): string {
+  state.index += 1;
+  if (state.index >= state.pattern.length) {
+    throw new Error('Invalid searchPath glob pattern: unterminated character class.');
+  }
+
+  let negated = false;
+  const first = state.pattern[state.index];
+  if (first === '!' || first === '^') {
+    negated = true;
+    state.index += 1;
+  }
+
+  let content = '';
+  let hasContent = false;
+  while (state.index < state.pattern.length) {
+    const char = state.pattern[state.index];
+    if (char === ']' && hasContent) {
+      state.index += 1;
+      return `[${negated ? '^' : ''}${content}]`;
+    }
+
+    if (char === '\\') {
+      state.index += 1;
+      if (state.index >= state.pattern.length) {
+        throw new Error('Invalid searchPath glob pattern: unterminated escape in character class.');
+      }
+      content += escapeRegexCharClass(state.pattern[state.index]);
+      hasContent = true;
+      state.index += 1;
+      continue;
+    }
+
+    if (char === '/') {
+      content += '\\/';
+      hasContent = true;
+      state.index += 1;
+      continue;
+    }
+
+    content += escapeRegexCharClass(char);
+    hasContent = true;
+    state.index += 1;
+  }
+
+  throw new Error('Invalid searchPath glob pattern: unterminated character class.');
+}
+
+function parseGlobBraceGroup(state: GlobPatternParserState): string {
+  state.index += 1;
+  const branches: string[] = [];
+  while (true) {
+    const branch = parseGlobSequence(state, ',}');
+    branches.push(branch);
+    if (state.index >= state.pattern.length) {
+      throw new Error('Invalid searchPath glob pattern: unterminated brace expression.');
+    }
+    const token = state.pattern[state.index];
+    if (token === ',') {
+      state.index += 1;
+      continue;
+    }
+    if (token === '}') {
+      state.index += 1;
+      break;
+    }
+  }
+  return `(?:${branches.join('|')})`;
+}
+
+function escapeRegexCharClass(char: string): string {
+  if (char === '\\' || char === ']' || char === '^') {
+    return `\\${char}`;
+  }
+  return char;
 }
 
 function normalizeSearchExcludeGlob(pattern: string): string | undefined {

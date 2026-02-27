@@ -114,7 +114,16 @@ User guidance:
 - On indexed workspaces, `lm_qgrepSearchFiles` is typically much faster than ripgrep for repeated file searches.
 - Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `300`).
 - `lm_qgrepSearchFiles` inputs: required `query`, optional `mode` (`fp` default), optional `searchPath`, optional `maxResults` (default `300`).
-- `searchPath` supports absolute paths, `WorkspaceName/...`, and workspace-relative paths. Paths must exist and stay inside current workspace folders.
+- `lm_qgrepSearchText.searchPath` supports existing path scopes (absolute path, `WorkspaceName/...`, workspace-relative path) and glob path scopes.
+- `lm_qgrepSearchText.searchPath` also supports `WorkspaceName/**` (for example, `UE5/**`) to limit search to a specific workspace folder.
+- Glob patterns match from the root of the workspace folder.
+- Glob `lm_qgrepSearchText.searchPath` supports workspace-relative patterns, `WorkspaceName/...` patterns, and absolute-path patterns (including Windows UNC paths).
+- Glob examples:
+- `**/*.{js,ts}` to match all js/ts files in the workspace.
+- `src/**` to match all files under the top-level `src` folder.
+- `**/foo/**/*.js` to match all js files under any `foo` folder in the workspace.
+- `lm_qgrepSearchFiles.searchPath` supports existing path scopes (absolute path, `WorkspaceName/...`, workspace-relative path) and glob path scopes.
+- `lm_qgrepSearchFiles.searchPath` also supports `WorkspaceName/**` (for example, `UE5/**`) to limit search to a specific workspace folder.
 - qgrep indexing/search is workspace-only. External folders cannot be indexed or searched.
 - If `searchPath` is omitted, search runs across all initialized workspaces in the current multi-root session.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-initialize qgrep indexes for all current workspaces on demand and block until indexing/update becomes ready (or timeout after 150s).
@@ -354,7 +363,16 @@ url = "http://127.0.0.1:47100/mcp"
 - 在已建立索引的 workspace 上,`lm_qgrepSearchFiles` 对重复文件搜索通常明显快于 `ripgrep`.
 - 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
 - `lm_qgrepSearchFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
-- `searchPath` 支持绝对路径,`WorkspaceName/...` 和 workspace 相对路径. 路径必须存在且必须位于当前 workspace 内.
+- `lm_qgrepSearchText.searchPath` 支持已有路径范围(绝对路径、`WorkspaceName/...`、workspace 相对路径)以及 glob 路径范围.
+- `lm_qgrepSearchText.searchPath` 也支持 `WorkspaceName/**`(例如 `UE5/**`)将搜索限制到特定 workspace.
+- glob pattern 从 workspace 根路径开始匹配.
+- glob `lm_qgrepSearchText.searchPath` 支持 workspace 相对 pattern、`WorkspaceName/...` pattern 以及绝对路径 pattern(包含 Windows UNC 路径).
+- glob 示例:
+- `**/*.{js,ts}` 匹配 workspace 中所有 js/ts 文件.
+- `src/**` 匹配顶层 `src` 目录下的所有文件.
+- `**/foo/**/*.js` 匹配 workspace 任意 `foo` 目录下的所有 js 文件.
+- `lm_qgrepSearchFiles.searchPath` 支持已有路径范围(绝对路径、`WorkspaceName/...`、workspace 相对路径)以及 glob 路径范围.
+- `lm_qgrepSearchFiles.searchPath` 也支持 `WorkspaceName/**`(例如 `UE5/**`)将搜索限制到特定 workspace.
 - qgrep 索引和搜索仅限当前 workspace,不能用于工作区外文件夹.
 - 未传 `searchPath` 时,会在当前会话中所有已初始化的 workspace 上聚合搜索.
 - `lm_qgrepSearchText` 与 `lm_qgrepSearchFiles` 会按需自动初始化当前所有 workspace 的 qgrep 索引,并阻塞等待到索引/更新就绪(超时 150s).

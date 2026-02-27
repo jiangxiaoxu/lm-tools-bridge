@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.97] - 2026-02-27
+
+### English
+
+#### Changed
+- Breaking change: renamed qgrep query tool IDs from `lm_qgrepSearch` to `lm_qgrepSearchText`, and from `lm_qgrepFiles` to `lm_qgrepSearchFiles`.
+- Updated tool registration names, qgrep status auto-init hint payload text, and default exposed/enabled policy references to the new tool IDs.
+- Updated README and face-ai-report current-behavior documentation to use the new qgrep tool IDs consistently.
+
+### 中文
+
+#### 变更
+- Breaking change: 将 qgrep 查询工具 ID 从 `lm_qgrepSearch` 重命名为 `lm_qgrepSearchText`,并将 `lm_qgrepFiles` 重命名为 `lm_qgrepSearchFiles`.
+- 已同步更新工具注册名、qgrep 状态自动初始化提示文本以及默认 exposed/enabled 策略中的工具 ID 引用。
+- 已同步更新 README 与 face-ai-report 的当前行为文档,统一使用新的 qgrep 工具 ID。
+
 ## [1.0.96] - 2026-02-27
 
 ### English

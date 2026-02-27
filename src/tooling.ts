@@ -52,8 +52,8 @@ const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
 const LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME = 'lm_debug_listLaunchConfigs';
 const LM_DEBUG_START_TOOL_NAME = 'lm_debug_start';
 const LM_QGREP_GET_STATUS_TOOL_NAME = 'lm_qgrepGetStatus';
-const LM_QGREP_SEARCH_TOOL_NAME = 'lm_qgrepSearch';
-const LM_QGREP_FILES_TOOL_NAME = 'lm_qgrepFiles';
+const LM_QGREP_SEARCH_TOOL_NAME = 'lm_qgrepSearchText';
+const LM_QGREP_FILES_TOOL_NAME = 'lm_qgrepSearchFiles';
 const LM_GET_DIAGNOSTICS_DEFAULT_MAX_RESULTS = 100;
 const LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS = 1;
 const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
@@ -359,7 +359,7 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
 const LM_QGREP_GET_STATUS_DESCRIPTION = [
   'Get qgrep binary availability, workspace initialization/watch status, and indexing progress snapshot.',
   'Returns status even when qgrep is not initialized yet.',
-  'When no workspace qgrep index is initialized, the returned status includes an auto-initialization hint explaining that lm_qgrepSearch and lm_qgrepFiles will auto-initialize indexes on actual query calls.',
+  'When no workspace qgrep index is initialized, the returned status includes an auto-initialization hint explaining that lm_qgrepSearchText and lm_qgrepSearchFiles will auto-initialize indexes on actual query calls.',
   'Use this tool to inspect qgrep readiness before calling qgrep search tools.',
 ].join('\n');
 
@@ -2606,10 +2606,10 @@ function buildQgrepGetStatusPayload(status: QgrepStatusSummary): Record<string, 
     autoInitialization: {
       hintActive: showAutoInitializationHint,
       appliesWhen: 'no workspace qgrep index is initialized',
-      triggerTools: ['lm_qgrepSearch', 'lm_qgrepFiles'],
+      triggerTools: ['lm_qgrepSearchText', 'lm_qgrepSearchFiles'],
       behavior: 'These query tools auto-initialize qgrep indexes for current workspaces on first use and wait until indexing is ready or timeout.',
       message: showAutoInitializationHint
-        ? 'No qgrep indexes are initialized yet. Calling lm_qgrepSearch or lm_qgrepFiles will auto-initialize indexes for current workspaces and wait until indexing is ready (or timeout).'
+        ? 'No qgrep indexes are initialized yet. Calling lm_qgrepSearchText or lm_qgrepSearchFiles will auto-initialize indexes for current workspaces and wait until indexing is ready (or timeout).'
         : undefined,
     },
   };

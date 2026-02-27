@@ -15,17 +15,17 @@
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
-- `lm_qgrepSearch` is regex-only and always executes the bundled binary at `bin/qgrep.exe`.
-- `lm_qgrepSearch` defaults to smart-case matching: all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive.
-- `lm_qgrepFiles` uses qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns file paths only (no fuzzy score field).
-- `lm_qgrepSearch` and `lm_qgrepFiles` use default `maxResults=300` when input omits `maxResults`.
-- `lm_qgrepSearch` and `lm_qgrepFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence; use `lm_qgrepGetStatus` for readiness details.
-- On indexed workspaces, prefer `lm_qgrepSearch`/`lm_qgrepFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
-- `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearch`/`lm_qgrepFiles` will initialize on query.
-- `lm_qgrepSearch` and `lm_qgrepFiles` are built-in required exposed tools and default enabled tools.
-- qgrep auto-maintenance still depends on initialized workspaces (`<workspace>/.vscode/qgrep/workspace.cfg`), but `lm_qgrepSearch`/`lm_qgrepFiles` now auto-initialize all current workspaces on demand before searching.
+- `lm_qgrepSearchText` is regex-only and always executes the bundled binary at `bin/qgrep.exe`.
+- `lm_qgrepSearchText` defaults to smart-case matching: all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive.
+- `lm_qgrepSearchFiles` uses qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns file paths only (no fuzzy score field).
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence; use `lm_qgrepGetStatus` for readiness details.
+- On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
+- `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
+- qgrep auto-maintenance still depends on initialized workspaces (`<workspace>/.vscode/qgrep/workspace.cfg`), but `lm_qgrepSearchText`/`lm_qgrepSearchFiles` now auto-initialize all current workspaces on demand before searching.
 - On extension startup, already-initialized qgrep workspaces auto-queue one background `qgrep update` to refresh progress/file totals for the current session.
-- `lm_qgrepSearch`/`lm_qgrepFiles` block tool completion until qgrep indexing is ready across current workspaces (including in-progress auto `qgrep update`) or timeout (150s).
+- `lm_qgrepSearchText`/`lm_qgrepSearchFiles` block tool completion until qgrep indexing is ready across current workspaces (including in-progress auto `qgrep update`) or timeout (150s).
 - qgrep index operations (`init`/`update`/`build`) are serialized per workspace to avoid overlapping runs under parallel tool calls and auto-update activity.
 - `Qgrep Rebuild Indexes` runs against all current workspaces; uninitialized workspaces are auto-initialized before rebuild.
 - `Qgrep Stop And Clear Indexes` cancels in-flight qgrep index commands (`init`/`update`/`build`) before deleting `.vscode/qgrep` for all current workspaces, reducing clear-time qgrep `workspace.cfg` read errors.
@@ -36,8 +36,8 @@
 - qgrep multi-root storage is per-workspace under `<workspace>/.vscode/qgrep`; `Qgrep Stop And Clear Indexes` removes that directory for all current workspaces and disables maintenance until re-init.
 - qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server/manager logs remain in `lm-tools-bridge`.
 - qgrep clear-cancel control flow logs (`... cancelled during clear`) are expected `info` entries and should not be treated as qgrep command failures.
-- `lm_qgrepSearch.searchPath` must resolve to an existing path inside current workspace folders; outside paths are rejected.
-- `lm_qgrepFiles.searchPath` follows the same path resolution/containment rules as `lm_qgrepSearch.searchPath`.
+- `lm_qgrepSearchText.searchPath` must resolve to an existing path inside current workspace folders; outside paths are rejected.
+- `lm_qgrepSearchFiles.searchPath` follows the same path resolution/containment rules as `lm_qgrepSearchText.searchPath`.
 - Status bar is split: server item (`LM Tools Bridge`) and dedicated qgrep item (`qgrep <circle> <percent> <A/B>`).
 - qgrep status bar shows `qgrep not initialized` when there is no initialized workspace.
 - qgrep tooltip reports binary readiness, aggregate file progress, and one per-workspace line in `A/B (percent)` format.
@@ -88,7 +88,7 @@
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
 - Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).
-- qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearch` sees expected changes without manual rebuild.
+- qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearchText` sees expected changes without manual rebuild.
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
 - qgrep-status-ui: verify server status and qgrep status render as separate status bar items, and qgrep tooltip shows per-workspace `A/B` lines.
 - qgrep-failure: verify outside-workspace `searchPath` returns expected error, and no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately.

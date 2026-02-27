@@ -559,6 +559,7 @@ class QgrepService implements vscode.Disposable {
     if (!this.isWorkspaceInitialized(state)) {
       return;
     }
+    state.managedSearchExcludeDirty = true;
     state.autoUpdateDirty = true;
     qgrepLogger.info(`[qgrep.startup-update:${state.folder.name}] queued startup refresh`);
     this.scheduleWorkspaceAutoUpdate(state, 0);

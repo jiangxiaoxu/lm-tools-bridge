@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.99] - 2026-02-27
+
+### English
+
+#### Changed
+- Extended `lm_qgrepSearchText.searchPath` and `lm_qgrepSearchFiles.searchPath` to support path-or-glob scopes (absolute, `WorkspaceName/...`, workspace-relative), including absolute and UNC glob patterns with plugin-side filtering.
+- Added qgrep result observability fields and semantics: `maxResultsApplied` is always returned, `maxResultsRequested` is returned only when clamped, and `totalAvailableCapped` / `hardLimitHit` are returned only when hard-cap signals are triggered.
+- Raised per-qgrep-call hard output limit from `2000` to `10000`, and aligned summary output and tool descriptions with the new cap behavior.
+- Simplified and synchronized qgrep documentation in README and face-ai-report for glob scope behavior and truncation semantics.
+
+### 中文
+
+#### 变更
+- 扩展 `lm_qgrepSearchText.searchPath` 与 `lm_qgrepSearchFiles.searchPath` 为 path-or-glob 范围,支持 absolute、`WorkspaceName/...`、workspace-relative,并支持 absolute/UNC glob,过滤在插件内完成.
+- 增加并收敛 qgrep 结果可观测字段语义:`maxResultsApplied` 总是返回,`maxResultsRequested` 仅在钳制时返回,`totalAvailableCapped` 与 `hardLimitHit` 仅在触发硬限制时返回.
+- 将每次 qgrep 调用的硬限制从 `2000` 提升到 `10000`,并同步 summary 输出与工具描述的上限语义.
+- 精简并同步 README 与 face-ai-report 的 qgrep 文案,保持 glob 范围与截断语义一致.
+
 ## [1.0.98] - 2026-02-27
 
 ### English

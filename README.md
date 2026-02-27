@@ -20,7 +20,7 @@ This README covers the current Manager-based version only.
 - Manager log endpoint: `http://127.0.0.1:47100/mcp/log`
 - Workspace MCP endpoint (dynamic target): `http://127.0.0.1:<runtime-port>/mcp`
 - Status format negotiation:
-- Browser requests (`Accept: text/html`) return a human-readable status page with `Refresh` and `Auto refresh (2s)` controls; auto refresh is enabled by default.
+- Browser requests (`Accept: text/html`) return a human-readable status page with `Refresh` and `Auto refresh (6s)` controls; auto refresh is enabled by default.
 - The status page uses responsive layout (`<960px` card-style rows); long values are shown as full multi-line text by default.
 - Programmatic requests default to JSON; use `?format=json` to force JSON and `?format=html` to force HTML.
 
@@ -73,9 +73,9 @@ User guidance:
 ### Daily Usage
 - `Configure Exposure Tools`: choose tools that can be selected.
 - `Configure Enabled Tools`: choose active tools within exposed set.
-- `Status Menu -> Qgrep Init All Workspaces`: initialize `.vscode/qgrep/workspace.cfg` per workspace and start qgrep watch.
-- `Status Menu -> Qgrep Rebuild Indexes`: run qgrep clean rebuild for all current workspaces (auto-init per workspace if missing).
-- `Status Menu -> Qgrep Stop And Clear Indexes`: stop qgrep watch and remove `.vscode/qgrep` for all current workspaces.
+- `Status Menu -> Qgrep Init All Workspaces`: shown only when no workspace is initialized; initialize `.vscode/qgrep/workspace.cfg` per workspace and start qgrep watch.
+- `Status Menu -> Qgrep Rebuild Indexes`: shown when at least one workspace is initialized; run qgrep clean rebuild for all current workspaces (auto-init per workspace if missing).
+- `Status Menu -> Qgrep Stop And Clear Indexes`: shown when at least one workspace is initialized; stop qgrep watch and remove `.vscode/qgrep` for all current workspaces.
 - Status bar is split into two items: `LM Tools Bridge` (server state) and `qgrep` (index progress).
 - `qgrep` item shows circular progress + percent + aggregate `A/B`; if no workspace is initialized it shows `qgrep not init`.
 - `qgrep` tooltip lists one line per workspace in `A/B (percent)` format; unknown values use `--/-- (--%)`.
@@ -101,7 +101,7 @@ User guidance:
 - Unknown input fields are ignored.
 - Structured diagnostics no longer include `uri`; each diagnostic includes `preview`, `previewUnavailable`, and `previewTruncated`.
 - `preview` returns source code lines from `startLine` to `endLine`, capped at 10 lines.
-- `copilot_getErrors` is still available for compatibility, but `lm_getDiagnostics` provides stable structured output.
+- `copilot_getErrors` is built-in disabled in this build and cannot be exposed or enabled; use `lm_getDiagnostics` for stable structured output.
 
 ### Qgrep Tool
 - `lm_qgrepGetStatus` returns qgrep binary availability, workspace init/watch status, per-workspace indexing progress, and aggregate progress snapshot.
@@ -114,11 +114,18 @@ User guidance:
 - On indexed workspaces, `lm_qgrepSearchFiles` is typically much faster than ripgrep for repeated file searches.
 - Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `300`).
 - `lm_qgrepSearchFiles` inputs: required `query`, optional `mode` (`fp` default), optional `searchPath`, optional `maxResults` (default `300`).
+- qgrep backend calls enforce a hard output cap of `10000` entries. Payload always returns `maxResultsApplied`; when clamped (`maxResults > 10000`), payload also returns `maxResultsRequested`.
+- qgrep search/files payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true, and then `totalAvailable` is a lower bound.
+- `hardLimitHit` is returned only when qgrep hits the hard output cap.
+- `hardLimitHit=true` means qgrep hit the hard output cap. `capped=true` means returned results were truncated by `maxResults` and/or hard-cap behavior.
+- `lm_qgrepSearchText` payload also includes `casePolicy` and `caseModeApplied`.
+- `lm_qgrepSearchFiles` payload also includes `querySemanticsApplied`.
 - `lm_qgrepSearchText.searchPath` supports existing path scopes (absolute path, `WorkspaceName/...`, workspace-relative path) and glob path scopes.
 - `lm_qgrepSearchText.searchPath` also supports `WorkspaceName/**` (for example, `UE5/**`) to limit search to a specific workspace folder.
 - Glob patterns match from the root of the workspace folder.
 - Glob `lm_qgrepSearchText.searchPath` supports workspace-relative patterns, `WorkspaceName/...` patterns, and absolute-path patterns (including Windows UNC paths).
 - Glob examples:
+- `WorkspaceName/**` (for example, `UE5/**`) to scope one workspace.
 - `**/*.{js,ts}` to match all js/ts files in the workspace.
 - `src/**` to match all files under the top-level `src` folder.
 - `**/foo/**/*.js` to match all js files under any `foo` folder in the workspace.
@@ -167,7 +174,7 @@ User guidance:
   - Re-run handshake.
 - Status bar tooltip:
   - Hover `LM Tools Bridge` to view a compact manager ownership summary (manager online/offline, current instance match, and a capped list of other instances/workspaces).
-  - Tooltip also includes qgrep binary/index/watch status and indexed workspace names.
+  - Hover the separate `qgrep` status bar item to view qgrep binary/index/watch status and indexed workspace progress.
   - Tooltip output is line/length capped for readability and is not a full raw dump of `/mcp/status`.
 - `Restart Manager` fails:
   - The restart flow is single-instance priority: stale locks are cleaned automatically, but valid locks owned by another VS Code instance are not forcefully preempted.
@@ -195,7 +202,7 @@ User guidance:
   - Ensure the tool is both exposed and enabled.
 
 ### Tool Output Mapping
-- Built-in custom tools (`lm_find*`, `lm_getDiagnostics`) always return both `content.text` and `structuredContent`.
+- Built-in custom `lm_*` tools (for example `lm_find*`, `lm_getDiagnostics`, `lm_tasks_*`, `lm_debug_*`, `lm_qgrep*`) always return both `content.text` and `structuredContent`.
 - For forwarded LM tools (`lm.invokeTool`), output is passthrough-based:
 - `content.text` is emitted only when upstream returns `LanguageModelTextPart`.
 - `structuredContent` is emitted only when upstream returns a valid JSON object (`LanguageModelDataPart` with JSON mime, or tool-level `structuredContent` object).
@@ -269,7 +276,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - Manager 日志端点: `http://127.0.0.1:47100/mcp/log`
 - Workspace MCP 端点(动态目标): `http://127.0.0.1:<runtime-port>/mcp`
 - 状态格式协商:
-- 浏览器请求(`Accept: text/html`)会返回人类可读状态页,并提供 `Refresh` 与 `Auto refresh (2s)` 控件; 自动刷新默认开启.
+- 浏览器请求(`Accept: text/html`)会返回人类可读状态页,并提供 `Refresh` 与 `Auto refresh (6s)` 控件; 自动刷新默认开启.
 - 状态页采用响应式布局(`<960px` 时按卡片行展示),长文本默认完整多行展示.
 - 程序化请求默认返回 JSON; 可使用 `?format=json` 强制 JSON,`?format=html` 强制 HTML.
 
@@ -322,9 +329,9 @@ url = "http://127.0.0.1:47100/mcp"
 ### 日常使用
 - `Configure Exposure Tools`: 选择可进入候选集的工具.
 - `Configure Enabled Tools`: 在已暴露集合内选择真正启用的工具.
-- `Status Menu -> Qgrep Init All Workspaces`: 为每个 workspace 初始化 `.vscode/qgrep/workspace.cfg` 并启动 qgrep watch.
-- `Status Menu -> Qgrep Rebuild Indexes`: 对当前所有 workspace 执行 qgrep 全量重建(未初始化 workspace 会先自动初始化).
-- `Status Menu -> Qgrep Stop And Clear Indexes`: 停止 qgrep watch 并删除当前所有 workspace 的 `.vscode/qgrep`.
+- `Status Menu -> Qgrep Init All Workspaces`: 仅在没有已初始化 workspace 时显示; 为每个 workspace 初始化 `.vscode/qgrep/workspace.cfg` 并启动 qgrep watch.
+- `Status Menu -> Qgrep Rebuild Indexes`: 在至少一个 workspace 已初始化时显示; 对当前所有 workspace 执行 qgrep 全量重建(未初始化 workspace 会先自动初始化).
+- `Status Menu -> Qgrep Stop And Clear Indexes`: 在至少一个 workspace 已初始化时显示; 停止 qgrep watch 并删除当前所有 workspace 的 `.vscode/qgrep`.
 - 状态栏拆分为两个条目: `LM Tools Bridge`(server 状态) 与 `qgrep`(索引进度).
 - `qgrep` 条目显示圆形进度 + 百分比 + 聚合 `A/B`; 如果没有任何已初始化 workspace,会显示 `qgrep not init`.
 - `qgrep` tooltip 按 workspace 逐行显示 `A/B (percent)` 格式; 未知值使用 `--/-- (--%)`.
@@ -350,7 +357,7 @@ url = "http://127.0.0.1:47100/mcp"
 - 未定义输入字段会被忽略.
 - structured diagnostics 不再包含 `uri`; 每条诊断包含 `preview`,`previewUnavailable`,`previewTruncated`.
 - `preview` 返回 `startLine` 到 `endLine` 的源码预览,最多 10 行.
-- `copilot_getErrors` 仍保留兼容,但 `lm_getDiagnostics` 提供更稳定的 structured 输出.
+- `copilot_getErrors` 在当前构建属于 built-in disabled,不能被 exposed 或 enabled; 请使用 `lm_getDiagnostics` 获取稳定 structured 输出.
 
 ### Qgrep 工具
 - `lm_qgrepGetStatus` 返回 qgrep binary 可用性、workspace 初始化/监听状态、每个 workspace 的索引进度以及聚合进度快照.
@@ -363,11 +370,18 @@ url = "http://127.0.0.1:47100/mcp"
 - 在已建立索引的 workspace 上,`lm_qgrepSearchFiles` 对重复文件搜索通常明显快于 `ripgrep`.
 - 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
 - `lm_qgrepSearchFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
+- qgrep 后端调用存在 `10000` 条硬限制. payload 总是返回 `maxResultsApplied`; 当发生钳制(`maxResults > 10000`)时,还会返回 `maxResultsRequested`.
+- qgrep search/files payload 总是返回 `totalAvailable`; `totalAvailableCapped` 仅在为 true 时返回,此时 `totalAvailable` 表示下界.
+- `hardLimitHit` 只会在 qgrep 命中硬限制时返回.
+- `hardLimitHit=true` 表示 qgrep 命中了硬限制; `capped=true` 表示返回结果被 `maxResults` 或硬限制语义截断.
+- `lm_qgrepSearchText` payload 还会返回 `casePolicy` 与 `caseModeApplied`.
+- `lm_qgrepSearchFiles` payload 还会返回 `querySemanticsApplied`.
 - `lm_qgrepSearchText.searchPath` 支持已有路径范围(绝对路径、`WorkspaceName/...`、workspace 相对路径)以及 glob 路径范围.
 - `lm_qgrepSearchText.searchPath` 也支持 `WorkspaceName/**`(例如 `UE5/**`)将搜索限制到特定 workspace.
 - glob pattern 从 workspace 根路径开始匹配.
 - glob `lm_qgrepSearchText.searchPath` 支持 workspace 相对 pattern、`WorkspaceName/...` pattern 以及绝对路径 pattern(包含 Windows UNC 路径).
 - glob 示例:
+- `WorkspaceName/**`(例如 `UE5/**`)可限制到单个 workspace.
 - `**/*.{js,ts}` 匹配 workspace 中所有 js/ts 文件.
 - `src/**` 匹配顶层 `src` 目录下的所有文件.
 - `**/foo/**/*.js` 匹配 workspace 任意 `foo` 目录下的所有 js 文件.
@@ -416,7 +430,7 @@ url = "http://127.0.0.1:47100/mcp"
   - 重新执行握手.
 - 状态栏 tooltip:
   - 鼠标悬停 `LM Tools Bridge` 可查看精简的 manager 归属摘要(manager 在线状态,当前实例是否匹配,以及限量展示的其他实例/工作区).
-  - tooltip 同时展示 qgrep binary/index/watch 状态以及已索引 workspace 名称.
+  - 鼠标悬停独立的 `qgrep` 状态栏条目可查看 qgrep binary/index/watch 状态和按 workspace 的索引进度.
   - tooltip 输出采用行数和长度限额,不会原样透传 `/mcp/status` 全量字段.
 - `Restart Manager` 失败:
   - 重启流程采用单实例优先策略: 会自动清理陈旧锁,但不会强制抢占其他 VS Code 实例持有的有效锁.
@@ -432,9 +446,9 @@ url = "http://127.0.0.1:47100/mcp"
 - manager 空闲自动退出:
   - 当所有活跃实例都消失后,manager 会先等待约 10 秒空闲窗口再自退出.
   - 实例存活 TTL 调整为 2.5 秒,用于容忍短暂 heartbeat 抖动.
-- `lm_qgrepSearchText` 提示需要初始化:
-  - 先执行 `Status Menu -> Qgrep Init All Workspaces`.
-  - 确认至少一个 workspace 仍存在 `.vscode/qgrep/workspace.cfg`.
+- `lm_qgrepSearchText` 或 `lm_qgrepSearchFiles` 等待过久或超时:
+  - 先用 `lm_qgrepGetStatus` 检查索引进度和 workspace 就绪状态.
+  - 如需预建索引,仍可手动执行 `Status Menu -> Qgrep Init All Workspaces`.
 - `lm_qgrepSearchText` 或 `lm_qgrepSearchFiles` 路径范围被拒绝:
   - 确认 `searchPath` 指向当前 workspace 内存在的路径.
   - multi-root 下相对路径有歧义时,请使用 `WorkspaceName/...`.
@@ -444,7 +458,7 @@ url = "http://127.0.0.1:47100/mcp"
   - 确认该工具同时处于 exposed 和 enabled.
 
 ### 工具输出映射
-- 内置自定义工具(`lm_find*`,`lm_getDiagnostics`)固定同时返回 `content.text` 和 `structuredContent`.
+- 内置自定义 `lm_*` 工具(例如 `lm_find*`,`lm_getDiagnostics`,`lm_tasks_*`,`lm_debug_*`,`lm_qgrep*`)固定同时返回 `content.text` 和 `structuredContent`.
 - 对上游转发 LM tools(`lm.invokeTool`),输出按存在性透传:
 - 仅当上游返回 `LanguageModelTextPart` 时输出 `content.text`.
 - 仅当上游返回合法 JSON object(来自 JSON mime 的 `LanguageModelDataPart` 或 tool-level `structuredContent` object)时输出 `structuredContent`.

@@ -19,7 +19,10 @@
 - `lm_qgrepSearchText` defaults to smart-case matching: all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive.
 - `lm_qgrepSearchFiles` uses qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns file paths only (no fuzzy score field).
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.
-- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence; use `lm_qgrepGetStatus` for readiness details.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` enforce a per-qgrep-call hard output limit of `10000`; payload always includes `maxResultsApplied`, and includes `maxResultsRequested` only when input is clamped.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true and then `totalAvailable` is a lower bound; `hardLimitHit` is returned only when the hard limit is hit.
+- `lm_qgrepSearchText` payload includes `casePolicy`/`caseModeApplied`; `lm_qgrepSearchFiles` payload includes `querySemanticsApplied`.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; use `lm_qgrepGetStatus` for readiness details.
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
@@ -36,8 +39,8 @@
 - qgrep multi-root storage is per-workspace under `<workspace>/.vscode/qgrep`; `Qgrep Stop And Clear Indexes` removes that directory for all current workspaces and disables maintenance until re-init.
 - qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server/manager logs remain in `lm-tools-bridge`.
 - qgrep clear-cancel control flow logs (`... cancelled during clear`) are expected `info` entries and should not be treated as qgrep command failures.
-- `lm_qgrepSearchText.searchPath` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), with `maxResults` applied after plugin-side glob filtering.
-- `lm_qgrepSearchFiles.searchPath` follows the same path/glob scope model as `lm_qgrepSearchText.searchPath`: non-glob paths must resolve to existing locations inside current workspace folders, while glob scopes support workspace-relative patterns, `WorkspaceName/...` scoping, and absolute-path glob patterns (including Windows UNC path globs), with `maxResults` applied after plugin-side glob filtering.
+- `lm_qgrepSearchText.searchPath` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), with `maxResultsApplied` and hard-cap semantics applied after plugin-side glob filtering.
+- `lm_qgrepSearchFiles.searchPath` follows the same path/glob scope model as `lm_qgrepSearchText.searchPath`: non-glob paths must resolve to existing locations inside current workspace folders, while glob scopes support workspace-relative patterns, `WorkspaceName/...` scoping, and absolute-path glob patterns (including Windows UNC path globs), with `maxResultsApplied` and hard-cap semantics applied after plugin-side glob filtering.
 - Status bar is split: server item (`LM Tools Bridge`) and dedicated qgrep item (`qgrep <circle> <percent> <A/B>`).
 - qgrep status bar shows `qgrep not initialized` when there is no initialized workspace.
 - qgrep tooltip reports binary readiness, aggregate file progress, and one per-workspace line in `A/B (percent)` format.

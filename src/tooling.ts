@@ -346,6 +346,7 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep regular expressions.',
   'Prefer this tool first for workspace text search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'Default behavior uses smart-case: all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive.',
+  'Each qgrep call has a hard output limit of 10000 entries.',
   'qgrep indexing and search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
@@ -372,7 +373,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Regular expression query string for qgrep search.',
+      description: 'Regular expression query string for qgrep search. smart-case is applied by default (all-lowercase = case-insensitive, contains uppercase = case-sensitive).',
     },
     searchPath: {
       type: 'string',
@@ -382,7 +383,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
       type: 'integer',
       default: 300,
       minimum: 1,
-      description: 'Maximum number of matches across all searched workspaces.',
+      description: 'Maximum number of matches to return. Values above 10000 are clamped to the hard output limit; payload returns maxResultsApplied and, when clamped, maxResultsRequested.',
     },
   },
   required: ['query'],
@@ -392,6 +393,7 @@ const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep file search modes.',
   'Prefer this tool first for workspace file search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'Supports qgrep files modes: fp (path regex), fn (file name regex), fs (space-delimited literal components), ff (fuzzy path).',
+  'Each qgrep call has a hard output limit of 10000 entries.',
   'qgrep indexing and file search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
@@ -412,7 +414,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'File search query string. Regex for fp/fn, literal components for fs, fuzzy path pattern for ff.',
+      description: 'File search query string. Semantics depend on mode: fp/fn use regex, fs uses space-delimited literal components, ff uses fuzzy path matching. Applied semantics are returned as querySemanticsApplied.',
     },
     mode: {
       type: 'string',
@@ -428,7 +430,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
       type: 'integer',
       default: 300,
       minimum: 1,
-      description: 'Maximum number of file results across all searched workspaces.',
+      description: 'Maximum number of file results to return. Values above 10000 are clamped to the hard output limit; payload returns maxResultsApplied and, when clamped, maxResultsRequested.',
     },
   },
   required: ['query'],
@@ -2521,11 +2523,26 @@ function formatFindFilesSummary(payload: Record<string, unknown>): string {
 function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
   const count = typeof payload.count === 'number' ? payload.count : 0;
   const capped = payload.capped === true;
+  const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
+  const totalAvailableCapped = payload.totalAvailableCapped === true;
+  const hardLimitHit = payload.hardLimitHit === true;
   const searchPath = typeof payload.searchPath === 'string' ? payload.searchPath : null;
+  const maxResultsApplied = typeof payload.maxResultsApplied === 'number'
+    ? payload.maxResultsApplied
+    : null;
+  const maxResultsRequested = typeof payload.maxResultsRequested === 'number'
+    ? payload.maxResultsRequested
+    : null;
+  const casePolicy = typeof payload.casePolicy === 'string' ? payload.casePolicy : null;
+  const caseModeApplied = typeof payload.caseModeApplied === 'string' ? payload.caseModeApplied : null;
   const matches = Array.isArray(payload.matches) ? payload.matches : [];
   const lines: string[] = [
     'Qgrep search summary',
-    `count: ${count}${capped ? ' (capped)' : ''}`,
+    `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
+    ...(hardLimitHit ? ['hardLimitHit: true'] : []),
+    ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
+    ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
+    ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
     `scope: ${searchPath ?? 'all initialized workspaces'}`,
   ];
   if (matches.length === 0) {
@@ -2702,13 +2719,29 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
 function formatQgrepFilesSummary(payload: Record<string, unknown>): string {
   const count = typeof payload.count === 'number' ? payload.count : 0;
   const capped = payload.capped === true;
+  const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
+  const totalAvailableCapped = payload.totalAvailableCapped === true;
+  const hardLimitHit = payload.hardLimitHit === true;
   const searchPath = typeof payload.searchPath === 'string' ? payload.searchPath : null;
   const mode = typeof payload.mode === 'string' ? payload.mode : 'fp';
+  const maxResultsApplied = typeof payload.maxResultsApplied === 'number'
+    ? payload.maxResultsApplied
+    : null;
+  const maxResultsRequested = typeof payload.maxResultsRequested === 'number'
+    ? payload.maxResultsRequested
+    : null;
+  const querySemanticsApplied = typeof payload.querySemanticsApplied === 'string'
+    ? payload.querySemanticsApplied
+    : null;
   const files = Array.isArray(payload.files) ? payload.files : [];
   const lines: string[] = [
     'Qgrep files summary',
     `mode: ${mode}`,
-    `count: ${count}${capped ? ' (capped)' : ''}`,
+    ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
+    `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
+    ...(hardLimitHit ? ['hardLimitHit: true'] : []),
+    ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
+    ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
     `scope: ${searchPath ?? 'all initialized workspaces'}`,
   ];
   if (files.length === 0) {

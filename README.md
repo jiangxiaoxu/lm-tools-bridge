@@ -74,8 +74,8 @@ User guidance:
 - `Configure Exposure Tools`: choose tools that can be selected.
 - `Configure Enabled Tools`: choose active tools within exposed set.
 - `Status Menu -> Qgrep Init All Workspaces`: initialize `.vscode/qgrep/workspace.cfg` per workspace and start qgrep watch.
-- `Status Menu -> Qgrep Rebuild Indexes`: run qgrep clean rebuild for initialized workspaces.
-- `Status Menu -> Qgrep Stop And Clear Indexes`: stop qgrep watch and remove `.vscode/qgrep` for initialized workspaces.
+- `Status Menu -> Qgrep Rebuild Indexes`: run qgrep clean rebuild for all current workspaces (auto-init per workspace if missing).
+- `Status Menu -> Qgrep Stop And Clear Indexes`: stop qgrep watch and remove `.vscode/qgrep` for all current workspaces.
 - Status bar is split into two items: `LM Tools Bridge` (server state) and `qgrep` (index progress).
 - `qgrep` item shows circular progress + percent + aggregate `A/B`; if no workspace is initialized it shows `qgrep not init`.
 - `qgrep` tooltip lists one line per workspace in `A/B (percent)` format; unknown values use `--/-- (--%)`.
@@ -88,6 +88,7 @@ User guidance:
 ### Search Tools
 - `lm_findFiles` uses VS Code workspace file search (ripgrep-based backend) for glob-based file discovery.
 - `lm_findTextInFiles` uses VS Code workspace text search (ripgrep-based backend) for exact-text or regex search.
+- Default policy: `lm_findFiles` and `lm_findTextInFiles` are exposed by default, but not enabled by default.
 
 ### Diagnostics Tool
 - `lm_getDiagnostics` reads diagnostics from VS Code Problems data source (`vscode.languages.getDiagnostics`).
@@ -111,8 +112,8 @@ User guidance:
 - On indexed workspaces, `lm_qgrepSearch` is typically much faster than ripgrep for repeated searches.
 - `lm_qgrepFiles` searches indexed file paths using qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns path results only.
 - On indexed workspaces, `lm_qgrepFiles` is typically much faster than ripgrep for repeated file searches.
-- Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `200`).
-- `lm_qgrepFiles` inputs: required `query`, optional `mode` (`fp` default), optional `searchPath`, optional `maxResults` (default `200`).
+- Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `300`).
+- `lm_qgrepFiles` inputs: required `query`, optional `mode` (`fp` default), optional `searchPath`, optional `maxResults` (default `300`).
 - `searchPath` supports absolute paths, `WorkspaceName/...`, and workspace-relative paths. Paths must exist and stay inside current workspace folders.
 - qgrep indexing/search is workspace-only. External folders cannot be indexed or searched.
 - If `searchPath` is omitted, search runs across all initialized workspaces in the current multi-root session.
@@ -313,8 +314,8 @@ url = "http://127.0.0.1:47100/mcp"
 - `Configure Exposure Tools`: 选择可进入候选集的工具.
 - `Configure Enabled Tools`: 在已暴露集合内选择真正启用的工具.
 - `Status Menu -> Qgrep Init All Workspaces`: 为每个 workspace 初始化 `.vscode/qgrep/workspace.cfg` 并启动 qgrep watch.
-- `Status Menu -> Qgrep Rebuild Indexes`: 对已初始化 workspace 执行 qgrep 全量重建.
-- `Status Menu -> Qgrep Stop And Clear Indexes`: 停止 qgrep watch 并删除已初始化 workspace 的 `.vscode/qgrep`.
+- `Status Menu -> Qgrep Rebuild Indexes`: 对当前所有 workspace 执行 qgrep 全量重建(未初始化 workspace 会先自动初始化).
+- `Status Menu -> Qgrep Stop And Clear Indexes`: 停止 qgrep watch 并删除当前所有 workspace 的 `.vscode/qgrep`.
 - 状态栏拆分为两个条目: `LM Tools Bridge`(server 状态) 与 `qgrep`(索引进度).
 - `qgrep` 条目显示圆形进度 + 百分比 + 聚合 `A/B`; 如果没有任何已初始化 workspace,会显示 `qgrep not init`.
 - `qgrep` tooltip 按 workspace 逐行显示 `A/B (percent)` 格式; 未知值使用 `--/-- (--%)`.
@@ -327,6 +328,7 @@ url = "http://127.0.0.1:47100/mcp"
 ### 搜索工具
 - `lm_findFiles` 使用 VS Code workspace 文件搜索(基于 `ripgrep` 后端)执行 glob 文件发现.
 - `lm_findTextInFiles` 使用 VS Code workspace 文本搜索(基于 `ripgrep` 后端)执行精确文本或 regex 搜索.
+- 默认策略: `lm_findFiles` 与 `lm_findTextInFiles` 默认 exposed,但默认不 enabled.
 
 ### 诊断工具
 - `lm_getDiagnostics` 从 VS Code Problems 数据源(`vscode.languages.getDiagnostics`)读取诊断.
@@ -350,8 +352,8 @@ url = "http://127.0.0.1:47100/mcp"
 - 在已建立索引的 workspace 上,`lm_qgrepSearch` 对重复搜索通常明显快于 `ripgrep`.
 - `lm_qgrepFiles` 使用 qgrep `files` 模式(`fp`/`fn`/`fs`/`ff`)搜索已索引文件路径,仅返回路径结果.
 - 在已建立索引的 workspace 上,`lm_qgrepFiles` 对重复文件搜索通常明显快于 `ripgrep`.
-- 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
-- `lm_qgrepFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `searchPath`, 可选 `maxResults`(默认 `200`).
+- 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
+- `lm_qgrepFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
 - `searchPath` 支持绝对路径,`WorkspaceName/...` 和 workspace 相对路径. 路径必须存在且必须位于当前 workspace 内.
 - qgrep 索引和搜索仅限当前 workspace,不能用于工作区外文件夹.
 - 未传 `searchPath` 时,会在当前会话中所有已初始化的 workspace 上聚合搜索.

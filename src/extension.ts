@@ -1260,19 +1260,41 @@ function getQgrepProgressCircle(percent: number | undefined): string {
 }
 
 async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
-  const items: Array<vscode.QuickPickItem & {
-    action?:
-      | 'configureExposure'
-      | 'configureEnabled'
-      | 'dump'
-      | 'help'
-      | 'restartManager'
-      | 'openSettings'
-      | 'openExtensionPage'
-      | 'qgrepInitAll'
-      | 'qgrepRebuild'
-      | 'qgrepStopClear';
-  }> = [
+  const qgrepStatus = getQgrepStatusSummary();
+  const hasInitializedQgrep = qgrepStatus.initializedWorkspaces > 0;
+  type StatusMenuAction =
+    | 'configureExposure'
+    | 'configureEnabled'
+    | 'dump'
+    | 'help'
+    | 'restartManager'
+    | 'openSettings'
+    | 'openExtensionPage'
+    | 'qgrepInitAll'
+    | 'qgrepRebuild'
+    | 'qgrepStopClear';
+  type StatusMenuItem = vscode.QuickPickItem & { action?: StatusMenuAction };
+  const qgrepItems: StatusMenuItem[] = hasInitializedQgrep
+    ? [
+        {
+          label: '$(tools) Qgrep Rebuild Indexes',
+          description: 'Rebuild qgrep index for all workspaces',
+          action: 'qgrepRebuild',
+        },
+        {
+          label: '$(trash) Qgrep Stop And Clear Indexes',
+          description: 'Stop watch and remove .vscode/qgrep in all workspaces',
+          action: 'qgrepStopClear',
+        },
+      ]
+    : [
+        {
+          label: '$(database) Qgrep Init All Workspaces',
+          description: 'Initialize qgrep index in each workspace and enable background watch',
+          action: 'qgrepInitAll',
+        },
+      ];
+  const items: StatusMenuItem[] = [
     {
       label: '$(settings-gear) Configure Exposure Tools',
       description: 'Choose tools available for MCP enablement',
@@ -1294,21 +1316,8 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       action: 'restartManager',
     },
     { label: 'Qgrep', kind: vscode.QuickPickItemKind.Separator },
-    {
-      label: '$(database) Qgrep Init All Workspaces',
-      description: 'Initialize qgrep index in each workspace and enable background watch',
-      action: 'qgrepInitAll',
-    },
-    {
-      label: '$(tools) Qgrep Rebuild Indexes',
-      description: 'Rebuild qgrep index for initialized workspaces',
-      action: 'qgrepRebuild',
-    },
-    {
-      label: '$(trash) Qgrep Stop And Clear Indexes',
-      description: 'Stop watch and remove .vscode/qgrep in initialized workspaces',
-      action: 'qgrepStopClear',
-    },
+    ...qgrepItems,
+    { label: '', kind: vscode.QuickPickItemKind.Separator },
     {
       label: '$(settings) Open Settings',
       description: 'Open settings for this extension',
@@ -1435,7 +1444,7 @@ async function runQgrepRebuildCommand(): Promise<void> {
 
 async function runQgrepStopAndClearIndexesCommand(): Promise<void> {
   const answer = await vscode.window.showWarningMessage(
-    'Stop qgrep watch and delete .vscode/qgrep index directories in initialized workspaces?',
+    'Stop qgrep watch and delete .vscode/qgrep index directories in all workspaces?',
     { modal: true },
     'Stop And Clear',
   );

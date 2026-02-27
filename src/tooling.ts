@@ -64,8 +64,6 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
   'copilot_searchCodebase',
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
-  'lm_findFiles',
-  'lm_findTextInFiles',
   'lm_getDiagnostics',
   LM_QGREP_GET_STATUS_TOOL_NAME,
   LM_QGREP_SEARCH_TOOL_NAME,
@@ -73,6 +71,8 @@ const DEFAULT_ENABLED_TOOL_NAMES = [
 ];
 const DEFAULT_EXPOSED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_TOOL_NAMES,
+  FIND_FILES_TOOL_NAME,
+  FIND_TEXT_IN_FILES_TOOL_NAME,
   LM_TASKS_RUN_BUILD_TOOL_NAME,
   LM_TASKS_RUN_TEST_TOOL_NAME,
   LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME,
@@ -350,7 +350,6 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'Default behavior uses smart-case: all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive.',
   'qgrep indexing and search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
-  'If qgrep is currently updating (indexing progress below 100%), this tool blocks until indexing is ready or times out (150s).',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If searchPath is omitted, search runs across all initialized workspace folders.',
   'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
@@ -383,7 +382,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
     },
     maxResults: {
       type: 'integer',
-      default: 200,
+      default: 300,
       minimum: 1,
       description: 'Maximum number of matches across all searched workspaces.',
     },
@@ -398,7 +397,6 @@ const LM_QGREP_FILES_DESCRIPTION = [
   'Supports qgrep files modes: fp (path regex), fn (file name regex), fs (space-delimited literal components), ff (fuzzy path).',
   'qgrep indexing and file search are workspace-only in lm-tools-bridge; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
-  'If qgrep is currently updating (indexing progress below 100%), this tool blocks until indexing is ready or times out (150s).',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If searchPath is omitted, search runs across all initialized workspace folders.',
   'searchPath supports absolute paths, WorkspaceName/... paths, and workspace-relative paths.',
@@ -431,7 +429,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
     },
     maxResults: {
       type: 'integer',
-      default: 200,
+      default: 300,
       minimum: 1,
       description: 'Maximum number of file results across all searched workspaces.',
     },

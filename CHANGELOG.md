@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.96] - 2026-02-27
+
+### English
+
+#### Changed
+- Updated status menu grouping and qgrep action visibility: add a separator below qgrep actions and show `Qgrep Init All Workspaces` only when no workspace is initialized; otherwise show `Qgrep Rebuild Indexes` and `Qgrep Stop And Clear Indexes`.
+- Changed qgrep menu command scope to all current workspaces: `Qgrep Rebuild Indexes` now runs across all workspaces (auto-initializes per workspace when needed), and `Qgrep Stop And Clear Indexes` clears all workspaces.
+- Adjusted default tool policy: `lm_findFiles` and `lm_findTextInFiles` are now default exposed but not default enabled.
+- Updated qgrep default result limit to `300` for both `lm_qgrepSearch` and `lm_qgrepFiles` (runtime default and schema default).
+- Simplified qgrep tool descriptions by removing the explicit sentence about blocking during in-progress index updates.
+
+### 中文
+
+#### 变更
+- 调整状态菜单的 qgrep 分组与显示逻辑: 在 qgrep 操作下方新增分隔线,并在无已初始化 workspace 时仅显示 `Qgrep Init All Workspaces`; 存在已初始化 workspace 时仅显示 `Qgrep Rebuild Indexes` 与 `Qgrep Stop And Clear Indexes`.
+- 将 qgrep 菜单命令作用范围统一为当前所有 workspace: `Qgrep Rebuild Indexes` 会对所有 workspace 执行(必要时按 workspace 自动初始化),`Qgrep Stop And Clear Indexes` 会清理所有 workspace.
+- 调整默认工具策略: `lm_findFiles` 与 `lm_findTextInFiles` 改为默认 exposed,但默认不 enabled.
+- 将 `lm_qgrepSearch` 与 `lm_qgrepFiles` 的默认结果上限更新为 `300`(运行时默认值与 schema 默认值同步更新).
+- 精简 qgrep 工具描述,移除了“索引更新进行中会阻塞等待”的显式句子.
+
 ## [1.0.95] - 2026-02-26
 
 ### English

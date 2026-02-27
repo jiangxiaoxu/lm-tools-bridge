@@ -10,7 +10,7 @@ const AUTO_UPDATE_DEBOUNCE_MS = 2000;
 const SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS = 500;
 const TOOL_SEARCH_READY_TIMEOUT_MS = 150_000;
 const TOOL_SEARCH_READY_POLL_INTERVAL_MS = 200;
-const DEFAULT_MAX_RESULTS = 200;
+const DEFAULT_MAX_RESULTS = 300;
 const MIN_MAX_RESULTS = 1;
 const INIT_COMMAND_HINT = 'Run "LM Tools Bridge: Qgrep Init All Workspaces" first.';
 const QGREP_PROGRESS_FRAME_PATTERN = /\[\s*(\d{1,3})%\]\s+(\d+)\s+files\b/u;
@@ -233,43 +233,55 @@ class QgrepService implements vscode.Disposable {
     return summary;
   }
 
-  public async rebuildAllInitializedWorkspaces(): Promise<QgrepCommandSummary> {
-    const initializedStates = this.getInitializedStates();
-    if (initializedStates.length === 0) {
-      throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
+  public async rebuildAllWorkspaces(): Promise<QgrepCommandSummary> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      throw new Error('No workspace folders are open.');
     }
+    this.syncWorkspaceStates(folders);
 
     const failures: string[] = [];
     let processed = 0;
-    for (const state of initializedStates) {
+    for (const folder of folders) {
+      const state = this.getStateForFolder(folder);
+      if (!state) {
+        failures.push(`${folder.name}: failed to allocate workspace state.`);
+        continue;
+      }
       try {
         await this.rebuildWorkspace(state);
         processed += 1;
       } catch (error) {
-        failures.push(`${state.folder.name}: ${String(error)}`);
+        failures.push(`${folder.name}: ${String(error)}`);
       }
     }
 
     const summary = this.buildSummary(
-      initializedStates.length,
+      folders.length,
       processed,
       failures,
       failures.length === 0
-        ? `Qgrep indexes rebuilt for ${processed}/${initializedStates.length} workspace(s).`
-        : `Qgrep indexes rebuilt for ${processed}/${initializedStates.length} workspace(s), ${failures.length} failed.`,
+        ? `Qgrep indexes rebuilt for ${processed}/${folders.length} workspace(s).`
+        : `Qgrep indexes rebuilt for ${processed}/${folders.length} workspace(s), ${failures.length} failed.`,
     );
     return summary;
   }
 
-  public async stopAndClearAllInitializedWorkspaces(): Promise<QgrepCommandSummary> {
-    const initializedStates = this.getInitializedStates();
-    if (initializedStates.length === 0) {
-      return this.buildSummary(0, 0, [], 'No initialized qgrep workspace found.');
+  public async stopAndClearAllWorkspaces(): Promise<QgrepCommandSummary> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      throw new Error('No workspace folders are open.');
     }
+    this.syncWorkspaceStates(folders);
 
     const failures: string[] = [];
     let processed = 0;
-    for (const state of initializedStates) {
+    for (const folder of folders) {
+      const state = this.getStateForFolder(folder);
+      if (!state) {
+        failures.push(`${folder.name}: failed to allocate workspace state.`);
+        continue;
+      }
       try {
         this.stopWatch(state);
         this.stopAutoUpdateWatcher(state);
@@ -279,17 +291,17 @@ class QgrepService implements vscode.Disposable {
         this.setWorkspaceIndexing(state, false);
         processed += 1;
       } catch (error) {
-        failures.push(`${state.folder.name}: ${String(error)}`);
+        failures.push(`${folder.name}: ${String(error)}`);
       }
     }
 
     const summary = this.buildSummary(
-      initializedStates.length,
+      folders.length,
       processed,
       failures,
       failures.length === 0
-        ? `Qgrep index directory cleared for ${processed}/${initializedStates.length} workspace(s).`
-        : `Qgrep index directory cleared for ${processed}/${initializedStates.length} workspace(s), ${failures.length} failed.`,
+        ? `Qgrep index directory cleared for ${processed}/${folders.length} workspace(s).`
+        : `Qgrep index directory cleared for ${processed}/${folders.length} workspace(s), ${failures.length} failed.`,
     );
     return summary;
   }
@@ -1859,10 +1871,29 @@ class QgrepService implements vscode.Disposable {
 
   private async rebuildWorkspaceInternal(state: WorkspaceQgrepState): Promise<void> {
     this.requireBinaryPath();
+    await fs.promises.mkdir(state.qgrepDirPath, { recursive: true });
     this.stopWatch(state);
     this.setWorkspaceIndexing(state, true);
 
     try {
+      if (!this.isWorkspaceInitialized(state)) {
+        const initResult = await this.runWorkspaceIndexCommand(
+          state,
+          'init',
+          ['init', state.configPath, state.folder.uri.fsPath],
+          state.folder.uri.fsPath,
+          { progressState: state },
+        );
+        if (initResult.cancelledByClear) {
+          this.logIndexCommandCancelledDuringClear(state, 'rebuild', 'init');
+          return;
+        }
+        const initError = this.extractCommandError(initResult.command, `Init failed for workspace '${state.folder.name}'.`);
+        if (initError) {
+          throw new Error(initError);
+        }
+      }
+
       await this.syncManagedSearchExcludeBlock(state);
 
       const buildResult = await this.runWorkspaceIndexCommand(
@@ -2062,11 +2093,11 @@ export async function runQgrepInitAllWorkspacesCommand(): Promise<QgrepCommandSu
 }
 
 export async function runQgrepRebuildIndexesCommand(): Promise<QgrepCommandSummary> {
-  return requireQgrepService().rebuildAllInitializedWorkspaces();
+  return requireQgrepService().rebuildAllWorkspaces();
 }
 
 export async function runQgrepStopAndClearCommand(): Promise<QgrepCommandSummary> {
-  return requireQgrepService().stopAndClearAllInitializedWorkspaces();
+  return requireQgrepService().stopAndClearAllWorkspaces();
 }
 
 export async function executeQgrepSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {

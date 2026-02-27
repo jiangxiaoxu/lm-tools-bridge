@@ -4,7 +4,6 @@
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
 - Version baseline: `1.0.94`.
-- Current build constraint: clangd MCP implementation is removed and `lm_clangd_*` tools are not registered.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -48,7 +47,6 @@
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths; `content.text` summaries prefer workspace-relative (`WorkspaceName/...`) display and fall back to absolute paths.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
-- No `lm_clangd_*` runtime implementation is present in current build.
 
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
@@ -98,5 +96,4 @@
 - Docs: verify update triggers against `AGENTS.md`.
 
 ## Section E: Historical or Unreachable Appendix
-- Clangd MCP implementation was removed from source; historical release notes may still reference legacy `lm_clangd_*` tools.
 - Historical notes stay in appendix only and must not be described as current runtime mainline.

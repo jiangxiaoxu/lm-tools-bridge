@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.100] - 2026-02-27
+
+### English
+
+#### Changed
+- Simplified README structure and reduced duplicated long-form guidance while keeping current behavior notes.
+- Removed all clangd/lm_clangd historical and current mentions from README, face-ai-report, and changelog text.
+
+### 中文
+
+#### 变更
+- 精简 README 结构并减少重复长说明,同时保留当前行为说明.
+- 从 README、face-ai-report、CHANGELOG 文本中移除全部 clangd/lm_clangd 相关描述.
+
 ## [1.0.99] - 2026-02-27
 
 ### English
@@ -113,7 +127,6 @@ Maintenance rule:
 - `lm_qgrepGetStatus` is now exposed and enabled by default so clients can check qgrep status before calling qgrep search tools.
 
 #### Removed
-- Removed deprecated clangd MCP implementation source (`src/clangd/**`) and the default `Clangd` tool grouping rule (`^lm_clangd_`).
 
 ### 中文
 
@@ -124,7 +137,6 @@ Maintenance rule:
 - `lm_qgrepGetStatus` 现在默认 exposed 且默认 enabled,客户端可以在调用 qgrep 搜索工具前先检查 qgrep 状态.
 
 #### Removed
-- 移除已弃用的 clangd MCP 实现源码(`src/clangd/**`)以及默认 `Clangd` 工具分组规则(`^lm_clangd_`).
 
 ## [1.0.93] - 2026-02-26
 
@@ -294,8 +306,6 @@ Maintenance rule:
 - Expanded `lm_debug_listLaunchConfigs` and `lm_debug_start` launch config discovery to include both workspace-folder launch settings and workspace-level launch settings.
 - Tightened `lm_debug_start` name-based selection: when `name` matches multiple launch configs, the tool now returns an explicit ambiguity error and asks callers to disambiguate with `index` or `workspaceFolder`.
 - Debug tool summaries now include launch config scope (`workspaceFolder` or `workspace`) and workspace folder path when available.
-- Deprecated and hard-disabled all `lm_clangd_*` MCP tools in runtime registration; clangd tools can no longer be enabled by settings.
-- Removed user-facing `lmToolsBridge.clangd.*` enablement settings from extension configuration contributions.
 - Marked `copilot_findFiles` and `copilot_findTextInFiles` as built-in disabled tools; they are now always blocked from exposure/enabling/calling.
 - Removed implementation-layer `copilot_find*` special handling in `tooling.ts` (schema default overrides and `copilot_findTextInFiles` schema/text normalization branches), while keeping `lm_find*` behavior unchanged.
 - Clarified `lm_findFiles` and `lm_findTextInFiles` schema/description guidance: both now explicitly document `WorkspaceName/**` style scoping for multi-root workspace targeting.
@@ -309,8 +319,6 @@ Maintenance rule:
 - 扩展 `lm_debug_listLaunchConfigs` 与 `lm_debug_start` 的 launch 配置发现范围: 同时覆盖 workspace-folder launch 配置和 workspace 级 launch 配置.
 - 收紧 `lm_debug_start` 按 `name` 的选择行为: 当 `name` 命中多个 launch 配置时,返回明确歧义错误,并提示调用方使用 `index` 或 `workspaceFolder` 消歧.
 - debug 工具摘要新增配置作用域(`workspaceFolder` 或 `workspace`)和可用的 workspace folder 路径信息.
-- 将 `lm_clangd_*` MCP 工具标记为弃用并在运行时硬禁用,不再允许通过设置开启 clangd 工具.
-- 从扩展配置贡献中移除面向用户的 `lmToolsBridge.clangd.*` 启用类设置项.
 - 将 `copilot_findFiles` 与 `copilot_findTextInFiles` 标记为 built-in disabled 工具,并统一阻断 exposed/enabled/call.
 - 移除 `tooling.ts` 中针对 `copilot_find*` 的实现层特判(默认 schema override 与 `copilot_findTextInFiles` 的 schema/text normalize 分支),同时保持 `lm_find*` 行为不变.
 - 补充 `lm_findFiles` 与 `lm_findTextInFiles` 的 schema/description 文案: 显式说明可使用 `WorkspaceName/**` 形式在 multi-root 中限定目标工作区.
@@ -364,19 +372,15 @@ Maintenance rule:
 
 #### Changed
 - Breaking change: removed legacy custom-tool compatibility payload mapping (`CustomToolInvokePayload`), and now require custom tools to return `LanguageModelToolResult` directly.
-- Built-in custom tools (`lm_find*`, `lm_getDiagnostics`, `lm_clangd_*`) now provide explicit dual-channel outputs from tool implementations: `content.text` and `structuredContent`.
 - Tightened forwarded LM tool mapping (`lm.invokeTool`): `content.text` is emitted only from upstream text parts, and `structuredContent` is emitted only for valid JSON object payloads; no cross-channel fallback copy is performed.
 - Removed structured fallback wrapper generation (`{ blocks: [...] }`) for forwarded LM tool results when no valid structured object exists.
-- Updated `lm_clangd_inlayHints` to include structured payload alongside summary text.
 
 ### 中文
 
 #### 变更
 - Breaking change: 移除旧的自定义工具兼容返回形态(`CustomToolInvokePayload`),并统一要求自定义工具直接返回 `LanguageModelToolResult`.
-- 内置自定义工具(`lm_find*`,`lm_getDiagnostics`,`lm_clangd_*`)现在由工具实现端显式提供双通道输出:`content.text` 与 `structuredContent`.
 - 收紧上游 LM 工具转发映射(`lm.invokeTool`): `content.text` 仅在上游 text part 存在时输出,`structuredContent` 仅在上游返回合法 JSON object 时输出; 不再做跨通道回填复制.
 - 移除上游 LM 工具结果在缺失 structured object 时的结构化回退包装(`{ blocks: [...] }`).
-- 为 `lm_clangd_inlayHints` 补充 structured payload,与摘要文本同时返回.
 
 ## [1.0.74] - 2026-02-11
 
@@ -494,7 +498,6 @@ Maintenance rule:
 - Breaking change: renamed custom diagnostics tool from `lm_getErrors` to `lm_getDiagnostics`.
 - No compatibility alias is provided; callers and local settings must migrate to `lm_getDiagnostics` manually.
 - Kept tool behavior and payload schema unchanged (`filePath`/`severities`/`maxResults` input and diagnostics summary + structured payload output).
-- Updated defaults for clangd tools: they are exposed by default but not enabled by default.
 
 ### 中文
 
@@ -502,7 +505,6 @@ Maintenance rule:
 - Breaking change: 自定义诊断工具由 `lm_getErrors` 更名为 `lm_getDiagnostics`.
 - 不提供兼容 alias; 外部调用和本地配置需手动迁移到 `lm_getDiagnostics`.
 - 保持工具行为和输出结构不变(输入仍为 `filePath`/`severities`/`maxResults`,输出仍为诊断摘要与结构化载荷).
-- 调整 clangd 工具默认策略: 默认暴露,但不默认启用.
 
 ## [1.0.66] - 2026-02-09
 
@@ -549,58 +551,26 @@ Maintenance rule:
 ### English
 
 #### Changed
-- Unified clangd structured location fields to `absolutePath` (always) + `workspacePath` (nullable), with 1-based numeric coordinates and optional `preview`.
 - Removed legacy structured path fields (`summaryPath`, `location.path#...`) and dropped raw input echo fields from AI-first structured payloads.
-- Updated `lm_clangd_symbolInfo` to classify symbol category via document symbols and emit adaptive entries; `typeDefinition` is now included only when meaningful (for example value-like symbols).
-- Disabled `lm_clangd_ast` exposure and removed it from default exposed/enabled clangd tool list.
-- Updated `lm_clangd_status` and `lm_clangd_lspRequest` to return human-readable text content while preserving structured JSON objects in `structuredContent`.
 
 ### 中文
 
 #### 变更
-- 统一 clangd 结构化位置字段为 `absolutePath`(必有) + `workspacePath`(可空),并使用 1-based 数值坐标与可选 `preview`.
 - 移除旧结构化路径字段(`summaryPath`,`location.path#...`),并清理 AI-first 结构化载荷中的输入回显字段.
-- 更新 `lm_clangd_symbolInfo`: 基于 document symbols 做符号类别判定并自适应输出条目; `typeDefinition` 仅在有意义场景(如 value-like 符号)返回.
-- 禁用 `lm_clangd_ast` 暴露并将其从 clangd 默认 exposed/enabled 列表移除.
-- 将 `lm_clangd_status` 与 `lm_clangd_lspRequest` 的 `content` 调整为人类可读文本,同时保留 `structuredContent` 结构化对象.
 
 ## [1.0.62] - 2026-02-08
 
 ### English
 
 #### Changed
-- Breaking change: clangd AI-first tools now use `filePath` input instead of `uri`.
 - Added workspace-aware path parsing for `filePath`: `WorkspaceName/...` and absolute paths are accepted, `file:///...` is rejected.
-- Switched `lm_clangd_typeHierarchy` output to AI summary text (`counts + --- + sections + entries`) and removed file coordinate JSON payload fields.
-- Added AI-first symbol tools: `lm_clangd_symbolSearch`, `lm_clangd_symbolInfo`, `lm_clangd_symbolReferences`, `lm_clangd_symbolImplementations`, and `lm_clangd_callHierarchy`.
-- Added `lm_clangd_symbolBundle` to aggregate symbol search/info/references/implementations/call-hierarchy into one AI-first call.
-- Added `structuredContent` for clangd AI-first tools so clients can use stable machine-readable payloads alongside summary text.
-- Enhanced `lm_clangd_symbolSearch` to include full symbol signatures by default, using fallback chain `signatureHelp -> hover -> definitionLine`.
-- Updated `lm_clangd_symbolInfo` snippet sourcing to exclude generated files (`*.generated.h`, `*.gen.cpp`) and no longer fallback to generated locations.
-- Updated `lm_clangd_typeHierarchy` SOURCE text order to `type -> preview -> path`, and added `preview` to `structuredContent.sourceByClass`.
-- Updated `lm_clangd_typeHierarchy` source range strategy to rely on `textDocument/documentSymbol` only; when no matching symbol is found, output now falls back to single-line range (`endLine = startLine`).
-- Updated `lm_clangd_typeHierarchy` to return a compact summary payload (`root`, `supers`, `derivedByParent`, `sourceByClass`, `limits`, `truncated`) with bounded expansion controls.
-- Replaced `lm_clangd_typeHierarchy` input options `resolve/direction` with `maxSuperDepth`, `maxSubDepth`, and `maxSubBreadth`.
 - Improved `sourceByClass.startLine` for Unreal C++ types: when the previous line is `UCLASS(...)` or `USTRUCT(...)`, the macro line is reported as the start line.
-- Removed `lm_clangd_typeHierarchyResolve` from exposed clangd tools and dropped its dedicated implementation entrypoint.
 
 ### 中文
 
 #### 变更
-- Breaking change: clangd AI-first 工具输入从 `uri` 改为 `filePath`.
 - 新增工作区感知 `filePath` 解析: 接受 `WorkspaceName/...` 和绝对路径,拒绝 `file:///...`.
-- `lm_clangd_typeHierarchy` 输出切换为 AI 摘要文本(`counts + --- + sections + entries`),不再返回文件坐标 JSON 字段.
-- 新增 AI-first 符号工具: `lm_clangd_symbolSearch`,`lm_clangd_symbolInfo`,`lm_clangd_symbolReferences`,`lm_clangd_symbolImplementations`,`lm_clangd_callHierarchy`.
-- 新增 `lm_clangd_symbolBundle`,支持一次调用聚合 symbol search/info/references/implementations/call hierarchy.
-- 为 clangd AI-first 工具补充 `structuredContent`,可在摘要文本之外提供稳定可机读载荷.
-- 增强 `lm_clangd_symbolSearch`,默认返回完整符号签名,并使用 `signatureHelp -> hover -> definitionLine` 回退链路.
-- 调整 `lm_clangd_symbolInfo` snippet 选点规则: 默认排除 generated 文件(`*.generated.h`,`*.gen.cpp`),且不再回退到 generated 位置.
-- 调整 `lm_clangd_typeHierarchy` 的 SOURCE 文本顺序为 `type -> preview -> path`,并在 `structuredContent.sourceByClass` 新增 `preview` 字段.
-- 调整 `lm_clangd_typeHierarchy` 区间策略为仅依赖 `textDocument/documentSymbol`; 未命中匹配符号时回退为单行区间(`endLine = startLine`),不再使用本地大括号扫描.
-- 更新 `lm_clangd_typeHierarchy` 输出为汇总结构(`root`,`supers`,`derivedByParent`,`sourceByClass`,`limits`,`truncated`),并支持有界展开.
-- 将 `lm_clangd_typeHierarchy` 入参从 `resolve/direction` 调整为 `maxSuperDepth`,`maxSubDepth`,`maxSubBreadth`.
 - 优化 Unreal C++ 类型的 `sourceByClass.startLine`: 当前一行是 `UCLASS(...)` 或 `USTRUCT(...)` 宏时,起始行会上移到宏所在行.
-- 移除 `lm_clangd_typeHierarchyResolve` 的 clangd 工具暴露及其独立实现入口.
 
 ## [1.0.61] - 2026-02-07
 
@@ -627,15 +597,6 @@ Maintenance rule:
 ### English
 
 #### Changed
-- Added an isolated `src/clangd/` module for clangd MCP integration with low coupling to `tooling.ts`.
-- Added configurable clangd MCP settings: `clangd.enabled`, `clangd.autoStartOnInvoke`, `clangd.enablePassthrough`, `clangd.requestTimeoutMs`, and `clangd.allowedMethods`.
-- Added `lm_clangd_*` tools for status, switch header/source, AST, type hierarchy, memory usage, inlay hints, and restricted passthrough requests.
-- Added auto-start-on-invoke behavior that triggers `clangd.activate` when clangd tools are enabled and the client is unavailable.
-- Restricted `lm_clangd_lspRequest` to read-only passthrough methods and ignore non-read-only configured methods.
-- Pruned low-value clangd tool exposure by removing default exposure of `lm_clangd_memoryUsage` and `lm_clangd_inlayHints`.
-- Trimmed read-only passthrough defaults by removing `textDocument/completion`, `textDocument/semanticTokens/full`, `$/memoryUsage`, and `clangd/inlayHints`.
-- Switched clangd tool position semantics to 1-based line/character for human-facing input and output, with automatic conversion at the LSP boundary.
-- Added `clangd-mcp-implementation-guide.md` as the implementation and progress tracking guide.
 - Replaced QuickPick tool configuration pages with a grouped tree webview panel for both exposure tools and enabled tools, with collapse, group batch selection, search, and reset/confirm/cancel actions.
 - Added resilient fallback to legacy QuickPick configuration when the webview path fails.
 - Reworked tool selection into a two-layer `exposure + enabled` model with new settings: `tools.exposedDelta` and `tools.unexposedDelta`.
@@ -647,7 +608,6 @@ Maintenance rule:
 - Added `copilot_askQuestions`, `copilot_readNotebookCellOutput`, `copilot_switchAgent`, `copilot_toolReplay`, and `search_subagent` to the built-in disabled list.
 - Added a dedicated `AngelScript` group for tools with the `angelscript_` prefix in the configuration UI.
 - Replaced hardcoded `angelscript_` grouping with configurable regex rules via `tools.groupingRules` (built-in disabled > custom rules > built-in groups).
-- Added a default `Clangd` custom grouping rule (`^lm_clangd_`) so clangd tools appear in their own top-level group by default.
 
 #### Fixed
 - Fixed blank tool-configuration webview caused by invalid JSON state serialization in the embedded `application/json` script block.
@@ -655,15 +615,6 @@ Maintenance rule:
 ### 中文
 
 #### 变更
-- 新增独立 `src/clangd/` 模块,用于低耦合集成 clangd MCP 能力,降低对 `tooling.ts` 的耦合.
-- 新增可配置 clangd MCP 设置: `clangd.enabled`, `clangd.autoStartOnInvoke`, `clangd.enablePassthrough`, `clangd.requestTimeoutMs`, `clangd.allowedMethods`.
-- 新增 `lm_clangd_*` 工具,覆盖 status, switch header/source, AST, type hierarchy, memory usage, inlay hints,以及受限 passthrough 请求.
-- 新增按需自动启动逻辑: clangd 工具调用时客户端不可用则触发 `clangd.activate`.
-- 限制 `lm_clangd_lspRequest` 仅允许只读 passthrough 方法,并忽略非只读配置方法.
-- 剪裁低价值 clangd 工具默认暴露,移除 `lm_clangd_memoryUsage` 与 `lm_clangd_inlayHints` 的默认暴露.
-- 精简只读 passthrough 默认方法,移除 `textDocument/completion`, `textDocument/semanticTokens/full`, `$/memoryUsage`, `clangd/inlayHints`.
-- 将 clangd 工具的行列位置语义统一为 1-based 输入输出,并在 LSP 边界自动转换.
-- 新增 `clangd-mcp-implementation-guide.md` 作为实施与进度跟踪指南.
 - 将 Exposure/Enabled 配置 UI 从 QuickPick 替换为分组树形 webview,支持折叠,分组批量勾选,搜索,以及 reset/confirm/cancel.
 - 增加 webview 失败时回退到 legacy QuickPick 的兜底路径.
 - 将工具选择模型重构为双层 `exposure + enabled`,新增 `tools.exposedDelta` 与 `tools.unexposedDelta`.
@@ -675,7 +626,6 @@ Maintenance rule:
 - 将 `copilot_askQuestions`, `copilot_readNotebookCellOutput`, `copilot_switchAgent`, `copilot_toolReplay`, `search_subagent` 加入 built-in disabled 列表.
 - 新增 `angelscript_` 前缀工具专用 `AngelScript` 分组.
 - 将 `angelscript_` 硬编码分组替换为 `tools.groupingRules` 正则规则分组(优先级: built-in disabled > custom rules > built-in groups).
-- 新增默认 `Clangd` 分组规则(`^lm_clangd_`),使 clangd 工具默认显示在独立顶层分组.
 
 #### 修复
 - 修复工具配置 webview 为空白的问题,原因是嵌入 `application/json` 脚本块时状态序列化无效.

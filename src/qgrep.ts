@@ -26,6 +26,14 @@ const QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_BEGIN = '# BEGIN lm-tools-bridge manage
 const QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_END = '# END lm-tools-bridge managed search.exclude';
 const QGREP_MANAGED_SEARCH_EXCLUDE_SOURCE_COMMENT = '# source: VS Code search.exclude (true entries only)';
 const QGREP_MANAGED_SEARCH_EXCLUDE_EMPTY_COMMENT = '# no eligible search.exclude=true patterns';
+const QGREP_MANAGED_SHADER_INCLUDE_BLOCK_BEGIN = '# BEGIN lm-tools-bridge managed shader include';
+const QGREP_MANAGED_SHADER_INCLUDE_BLOCK_END = '# END lm-tools-bridge managed shader include';
+const QGREP_MANAGED_SHADER_INCLUDE_SOURCE_COMMENT = '# source: lm-tools-bridge Unreal Engine include set (*.ush, *.usf, *.ini)';
+const QGREP_MANAGED_SHADER_INCLUDE_RULE = '\\.(ush|usf|ini)$';
+const QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_BEGIN = '# BEGIN lm-tools-bridge managed powershell include';
+const QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_END = '# END lm-tools-bridge managed powershell include';
+const QGREP_MANAGED_POWERSHELL_INCLUDE_SOURCE_COMMENT = '# source: lm-tools-bridge PowerShell include set (*.ps1)';
+const QGREP_MANAGED_POWERSHELL_INCLUDE_RULE = '\\.(ps1)$';
 const QGREP_FIXED_EXCLUDE_REGEXES: readonly string[] = [
   '(^|.*/)\\.git/',
   '(^|.*/)Intermediate/',
@@ -1694,36 +1702,96 @@ class QgrepService implements vscode.Disposable {
       throw new Error(`Failed to read qgrep config '${state.configPath}': ${String(error)}`);
     }
 
-    const buildResult = this.buildManagedSearchExcludeBlock(state.folder);
-    for (const warning of buildResult.warnings) {
+    const shaderIncludeBuildResult = this.buildManagedShaderIncludeBlock();
+    const powershellIncludeBuildResult = this.buildManagedPowerShellIncludeBlock();
+    const excludeBuildResult = this.buildManagedSearchExcludeBlock(state.folder);
+    for (const warning of excludeBuildResult.warnings) {
       qgrepLogger.warn(`[qgrep.exclude-sync:${state.folder.name}] ${warning}`);
     }
 
     const normalizedInput = normalizeLineEndings(rawConfigText);
-    const upsertResult = upsertManagedSearchExcludeBlock(
+    const shaderIncludeUpsertResult = upsertManagedConfigBlock(
       normalizedInput,
-      buildResult.blockTextNormalized,
+      shaderIncludeBuildResult.blockTextNormalized,
+      QGREP_MANAGED_SHADER_INCLUDE_BLOCK_BEGIN,
+      QGREP_MANAGED_SHADER_INCLUDE_BLOCK_END,
     );
-    if (upsertResult.malformedBlockDetected) {
+    const powershellIncludeUpsertResult = upsertManagedConfigBlock(
+      shaderIncludeUpsertResult.textNormalized,
+      powershellIncludeBuildResult.blockTextNormalized,
+      QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_BEGIN,
+      QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_END,
+    );
+    const excludeUpsertResult = upsertManagedConfigBlock(
+      powershellIncludeUpsertResult.textNormalized,
+      excludeBuildResult.blockTextNormalized,
+      QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_BEGIN,
+      QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_END,
+    );
+    if (shaderIncludeUpsertResult.malformedBlockDetected) {
+      qgrepLogger.warn(
+        `[qgrep.exclude-sync:${state.folder.name}] malformed managed shader include block markers detected; appended a new managed block at file end.`,
+      );
+    }
+    if (powershellIncludeUpsertResult.malformedBlockDetected) {
+      qgrepLogger.warn(
+        `[qgrep.exclude-sync:${state.folder.name}] malformed managed powershell include block markers detected; appended a new managed block at file end.`,
+      );
+    }
+    if (excludeUpsertResult.malformedBlockDetected) {
       qgrepLogger.warn(
         `[qgrep.exclude-sync:${state.folder.name}] malformed managed search.exclude block markers detected; appended a new managed block at file end.`,
       );
     }
-    if (upsertResult.textNormalized === normalizedInput) {
+    if (excludeUpsertResult.textNormalized === normalizedInput) {
       return;
     }
 
     const lineEnding = detectLineEnding(rawConfigText);
-    const outputText = restoreLineEndings(upsertResult.textNormalized, lineEnding);
-    qgrepLogger.info(`[qgrep.exclude-sync:${state.folder.name}] writing managed search.exclude block`);
+    const outputText = restoreLineEndings(excludeUpsertResult.textNormalized, lineEnding);
+    qgrepLogger.info(`[qgrep.exclude-sync:${state.folder.name}] writing managed qgrep config blocks`);
     try {
       await fs.promises.writeFile(state.configPath, outputText, 'utf8');
     } catch (error) {
       throw new Error(`Failed to write qgrep config '${state.configPath}': ${String(error)}`);
     }
     qgrepLogger.info(
-      `[qgrep.exclude-sync:${state.folder.name}] wrote ${String(buildResult.excludeRuleCount)} exclude rule(s)`,
+      `[qgrep.exclude-sync:${state.folder.name}] wrote ${String(shaderIncludeBuildResult.includeRuleCount)} shader include rule(s), ${String(powershellIncludeBuildResult.includeRuleCount)} powershell include rule(s), and ${String(excludeBuildResult.excludeRuleCount)} exclude rule(s)`,
     );
+  }
+
+  private buildManagedShaderIncludeBlock(): {
+    blockTextNormalized: string;
+    includeRuleCount: number;
+  } {
+    const lines: string[] = [
+      QGREP_MANAGED_SHADER_INCLUDE_BLOCK_BEGIN,
+      QGREP_MANAGED_SHADER_INCLUDE_SOURCE_COMMENT,
+      `include ${QGREP_MANAGED_SHADER_INCLUDE_RULE}`,
+      QGREP_MANAGED_SHADER_INCLUDE_BLOCK_END,
+    ];
+
+    return {
+      blockTextNormalized: lines.join('\n'),
+      includeRuleCount: 1,
+    };
+  }
+
+  private buildManagedPowerShellIncludeBlock(): {
+    blockTextNormalized: string;
+    includeRuleCount: number;
+  } {
+    const lines: string[] = [
+      QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_BEGIN,
+      QGREP_MANAGED_POWERSHELL_INCLUDE_SOURCE_COMMENT,
+      `include ${QGREP_MANAGED_POWERSHELL_INCLUDE_RULE}`,
+      QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_END,
+    ];
+
+    return {
+      blockTextNormalized: lines.join('\n'),
+      includeRuleCount: 1,
+    };
   }
 
   private buildManagedSearchExcludeBlock(folder: vscode.WorkspaceFolder): {
@@ -2339,16 +2407,18 @@ function compileSimpleGlobToRegexSource(glob: string): string | undefined {
   return result;
 }
 
-function upsertManagedSearchExcludeBlock(
+function upsertManagedConfigBlock(
   textNormalized: string,
   blockTextNormalized: string,
+  blockBeginMarker: string,
+  blockEndMarker: string,
 ): { textNormalized: string; malformedBlockDetected: boolean } {
   const hasFinalNewline = textNormalized.endsWith('\n');
   const body = hasFinalNewline ? textNormalized.slice(0, -1) : textNormalized;
   const lines = body.length > 0 ? body.split('\n') : [];
 
-  const beginIndexes = findLineIndexes(lines, QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_BEGIN);
-  const endIndexes = findLineIndexes(lines, QGREP_MANAGED_SEARCH_EXCLUDE_BLOCK_END);
+  const beginIndexes = findLineIndexes(lines, blockBeginMarker);
+  const endIndexes = findLineIndexes(lines, blockEndMarker);
   const blockLines = blockTextNormalized.split('\n');
   let malformedBlockDetected = false;
 

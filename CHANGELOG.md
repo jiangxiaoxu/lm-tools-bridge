@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.98] - 2026-02-27
+
+### English
+
+#### Changed
+- qgrep managed include sync now writes an Unreal include block for `*.ush`/`*.usf`/`*.ini` with explicit source annotation.
+- Added a separate qgrep managed PowerShell include block for `*.ps1` with its own source annotation.
+- Updated qgrep config-sync documentation in README and face-ai-report to reflect split managed include blocks.
+
+### 中文
+
+#### 变更
+- qgrep 受管 include 同步现在会写入 Unreal include 区块(`*.ush`/`*.usf`/`*.ini`),并带有明确 source 标注.
+- 新增独立的 qgrep 受管 PowerShell include 区块(`*.ps1`),并使用单独 source 标注.
+- 更新 README 与 face-ai-report 中的 qgrep 配置同步说明,反映 include 区块拆分.
+
 ## [1.0.97] - 2026-02-27
 
 ### English

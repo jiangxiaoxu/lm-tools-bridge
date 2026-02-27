@@ -122,7 +122,7 @@ User guidance:
 - On extension startup, workspaces that already have qgrep initialized (`.vscode/qgrep/workspace.cfg`) automatically queue one background `qgrep update` to refresh progress/file totals for the current session.
 - Background `qgrep watch` keeps existing-file content changes fresh, and extension-side create/delete watchers trigger debounced `qgrep update` to refresh file-list changes.
 - `Qgrep Stop And Clear Indexes` cancels in-flight qgrep index commands (`init`/`update`/`build`) before deleting `.vscode/qgrep`, which reduces misleading qgrep `workspace.cfg` read errors during clear.
-- On qgrep init/rebuild and `search.exclude` configuration changes, the extension syncs `search.exclude=true` patterns into a managed `exclude ...` block inside each initialized `workspace.cfg` and always writes fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`. `.gitignore` is not synced yet.
+- On qgrep init/rebuild and `search.exclude` configuration changes, the extension syncs a managed Unreal include block for `*.ush`/`*.usf`/`*.ini`, a managed PowerShell include block for `*.ps1`, and `search.exclude=true` patterns into a managed `exclude ...` block inside each initialized `workspace.cfg` with fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`. `.gitignore` is not synced yet.
 - Multi-root indexes are isolated per workspace under `<workspace>/.vscode/qgrep`.
 - qgrep progress is parsed from qgrep stdout frames (`[xx%] N files`). File-weighted aggregate `A/B` is shown only after all initialized workspaces have known totals.
 - If auto-initialization fails or times out, qgrep search tools return an error. `searchPath` outside current workspaces is still rejected.
@@ -362,7 +362,7 @@ url = "http://127.0.0.1:47100/mcp"
 - 扩展启动时,对于已经初始化过 qgrep(存在 `.vscode/qgrep/workspace.cfg`)的 workspace,会自动排队执行一次后台 `qgrep update`,用于补足当前会话的进度/文件总数显示.
 - 初始化后后台 `qgrep watch` 负责已有文件内容变更,扩展侧会监听 create/delete 并防抖触发 `qgrep update` 来刷新文件列表变化.
 - `Qgrep Stop And Clear Indexes` 在删除 `.vscode/qgrep` 前会先取消进行中的 qgrep 索引命令(`init`/`update`/`build`),以减少清理过程中的误导性 `workspace.cfg` 读取报错.
-- 在 qgrep init/rebuild 和 `search.exclude` 配置变更时,扩展会把 `search.exclude=true` 规则同步到每个已初始化 `workspace.cfg` 的受管 `exclude ...` 区块,并固定写入 `.git`、`Intermediate`、`DerivedDataCache`、`Saved`、`.vs`、`.vscode` 排除规则. 当前还不会同步 `.gitignore`.
+- 在 qgrep init/rebuild 和 `search.exclude` 配置变更时,扩展会把 `*.ush`/`*.usf`/`*.ini` 的受管 Unreal include 区块和 `*.ps1` 的受管 PowerShell include 区块写入每个已初始化 `workspace.cfg`,并把 `search.exclude=true` 规则同步到受管 `exclude ...` 区块,同时固定写入 `.git`、`Intermediate`、`DerivedDataCache`、`Saved`、`.vs`、`.vscode` 排除规则. 当前还不会同步 `.gitignore`.
 - multi-root 下每个 workspace 独立维护 `<workspace>/.vscode/qgrep` 索引目录.
 - qgrep 进度来自 qgrep stdout 帧(`[xx%] N files`). 只有在所有已初始化 workspace 都拿到总文件数后,才显示按文件加权聚合的 `A/B`.
 - 如果自动初始化失败或超时,qgrep 搜索工具会返回错误; `searchPath` 不在当前 workspace 内仍会被拒绝.

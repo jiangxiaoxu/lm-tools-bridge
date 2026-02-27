@@ -112,12 +112,14 @@ User guidance:
 - On indexed workspaces, `lm_qgrepSearchText` is typically much faster than ripgrep for repeated searches.
 - `lm_qgrepSearchFiles` searches indexed file paths using qgrep `files` modes (`fp`/`fn`/`fs`/`ff`) and returns path results only.
 - On indexed workspaces, `lm_qgrepSearchFiles` is typically much faster than ripgrep for repeated file searches.
-- Inputs: required `query`, optional `searchPath`, optional `maxResults` (default `300`).
-- `lm_qgrepSearchFiles` inputs: required `query`, optional `mode` (`fp` default), optional `searchPath`, optional `maxResults` (default `300`).
-- qgrep backend calls enforce a hard output cap of `10000` entries. Payload always returns `maxResultsApplied`; when clamped (`maxResults > 10000`), payload also returns `maxResultsRequested`.
+- `lm_qgrepSearchText` inputs: required `query`, optional `searchPath`, optional `maxResults` (default `300`).
+- `lm_qgrepSearchText` uses `maxResultsApplied` as the backend qgrep `search` call limit, with an enforced cap of `2000`.
+- `lm_qgrepSearchFiles` inputs: required `query`, optional `mode` (`fp` default), optional `maxResults` (default `300`).
+- `lm_qgrepSearchFiles` does not support `searchPath`; passing `searchPath` returns an input error. Use `lm_findFiles` for path-scoped filtering.
+- `lm_qgrepSearchFiles` clamps `maxResults` to `2000` and forwards `maxResultsApplied` directly as qgrep `files` backend limit.
+- qgrep payload always returns `maxResultsApplied`; when clamped (`maxResults > 2000`), payload also returns `maxResultsRequested`.
 - qgrep search/files payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true, and then `totalAvailable` is a lower bound.
-- `hardLimitHit` is returned only when qgrep hits the hard output cap.
-- `hardLimitHit=true` means qgrep hit the hard output cap. `capped=true` means returned results were truncated by `maxResults` and/or hard-cap behavior.
+- `hardLimitHit=true` means the qgrep backend hit the applied `L` limit. `capped=true` means returned results are known to be incomplete.
 - `lm_qgrepSearchText` payload also includes `casePolicy` and `caseModeApplied`.
 - `lm_qgrepSearchFiles` payload also includes `querySemanticsApplied`.
 - `lm_qgrepSearchText.searchPath` supports existing path scopes (absolute path, `WorkspaceName/...`, workspace-relative path) and glob path scopes.
@@ -129,10 +131,8 @@ User guidance:
 - `**/*.{js,ts}` to match all js/ts files in the workspace.
 - `src/**` to match all files under the top-level `src` folder.
 - `**/foo/**/*.js` to match all js files under any `foo` folder in the workspace.
-- `lm_qgrepSearchFiles.searchPath` supports existing path scopes (absolute path, `WorkspaceName/...`, workspace-relative path) and glob path scopes.
-- `lm_qgrepSearchFiles.searchPath` also supports `WorkspaceName/**` (for example, `UE5/**`) to limit search to a specific workspace folder.
 - qgrep indexing/search is workspace-only. External folders cannot be indexed or searched.
-- If `searchPath` is omitted, search runs across all initialized workspaces in the current multi-root session.
+- If `lm_qgrepSearchText.searchPath` is omitted, text search runs across all initialized workspaces. `lm_qgrepSearchFiles` always runs across all initialized workspaces.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-initialize qgrep indexes for all current workspaces on demand and block until indexing/update becomes ready (or timeout after 150s).
 - If qgrep is already updating (index progress below 100%), qgrep search tools block until indexing is ready before returning results.
 - On extension startup, workspaces that already have qgrep initialized (`.vscode/qgrep/workspace.cfg`) automatically queue one background `qgrep update` to refresh progress/file totals for the current session.
@@ -193,9 +193,11 @@ User guidance:
 - `lm_qgrepSearchText` or `lm_qgrepSearchFiles` waits too long / times out:
   - Check `lm_qgrepGetStatus` for indexing progress and workspace readiness.
   - You can still run `Status Menu -> Qgrep Init All Workspaces` manually to prebuild indexes.
-- `lm_qgrepSearchText` or `lm_qgrepSearchFiles` path scope rejected:
+- `lm_qgrepSearchText` path scope rejected:
   - Ensure `searchPath` points to an existing path inside current workspace folders.
   - In multi-root with ambiguous relative paths, use `WorkspaceName/...`.
+- `lm_qgrepSearchFiles` rejects `searchPath`:
+  - This is expected. Use `query` + `mode` only, or switch to `lm_findFiles` when path-scoped filtering is required.
 - Client stops working after port change:
   - Connect to Manager `/mcp` instead of old workspace runtime port.
 - `Tool not found or disabled`:
@@ -368,12 +370,14 @@ url = "http://127.0.0.1:47100/mcp"
 - 在已建立索引的 workspace 上,`lm_qgrepSearchText` 对重复搜索通常明显快于 `ripgrep`.
 - `lm_qgrepSearchFiles` 使用 qgrep `files` 模式(`fp`/`fn`/`fs`/`ff`)搜索已索引文件路径,仅返回路径结果.
 - 在已建立索引的 workspace 上,`lm_qgrepSearchFiles` 对重复文件搜索通常明显快于 `ripgrep`.
-- 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
-- `lm_qgrepSearchFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
-- qgrep 后端调用存在 `10000` 条硬限制. payload 总是返回 `maxResultsApplied`; 当发生钳制(`maxResults > 10000`)时,还会返回 `maxResultsRequested`.
+- `lm_qgrepSearchText` 输入: 必填 `query`, 可选 `searchPath`, 可选 `maxResults`(默认 `300`).
+- `lm_qgrepSearchText` 会将 `maxResultsApplied` 作为后端 qgrep `search` 的实际调用上限,并强制钳制到 `2000`.
+- `lm_qgrepSearchFiles` 输入: 必填 `query`, 可选 `mode`(`fp` 默认), 可选 `maxResults`(默认 `300`).
+- `lm_qgrepSearchFiles` 不再支持 `searchPath`; 传入 `searchPath` 会返回输入错误. 需要路径范围过滤请使用 `lm_findFiles`.
+- `lm_qgrepSearchFiles` 会将 `maxResults` 钳制到 `2000`,并把 `maxResultsApplied` 直接作为 qgrep `files` 后端 `L` 参数.
+- qgrep payload 总是返回 `maxResultsApplied`; 发生钳制(`maxResults > 2000`)时还会返回 `maxResultsRequested`.
 - qgrep search/files payload 总是返回 `totalAvailable`; `totalAvailableCapped` 仅在为 true 时返回,此时 `totalAvailable` 表示下界.
-- `hardLimitHit` 只会在 qgrep 命中硬限制时返回.
-- `hardLimitHit=true` 表示 qgrep 命中了硬限制; `capped=true` 表示返回结果被 `maxResults` 或硬限制语义截断.
+- `hardLimitHit=true` 表示 qgrep 后端命中了本次应用的 `L` 限制; `capped=true` 表示结果可确定并不完整.
 - `lm_qgrepSearchText` payload 还会返回 `casePolicy` 与 `caseModeApplied`.
 - `lm_qgrepSearchFiles` payload 还会返回 `querySemanticsApplied`.
 - `lm_qgrepSearchText.searchPath` 支持已有路径范围(绝对路径、`WorkspaceName/...`、workspace 相对路径)以及 glob 路径范围.
@@ -385,10 +389,8 @@ url = "http://127.0.0.1:47100/mcp"
 - `**/*.{js,ts}` 匹配 workspace 中所有 js/ts 文件.
 - `src/**` 匹配顶层 `src` 目录下的所有文件.
 - `**/foo/**/*.js` 匹配 workspace 任意 `foo` 目录下的所有 js 文件.
-- `lm_qgrepSearchFiles.searchPath` 支持已有路径范围(绝对路径、`WorkspaceName/...`、workspace 相对路径)以及 glob 路径范围.
-- `lm_qgrepSearchFiles.searchPath` 也支持 `WorkspaceName/**`(例如 `UE5/**`)将搜索限制到特定 workspace.
 - qgrep 索引和搜索仅限当前 workspace,不能用于工作区外文件夹.
-- 未传 `searchPath` 时,会在当前会话中所有已初始化的 workspace 上聚合搜索.
+- `lm_qgrepSearchText` 未传 `searchPath` 时会在当前会话中所有已初始化 workspace 上聚合搜索; `lm_qgrepSearchFiles` 总是在所有已初始化 workspace 上聚合搜索.
 - `lm_qgrepSearchText` 与 `lm_qgrepSearchFiles` 会按需自动初始化当前所有 workspace 的 qgrep 索引,并阻塞等待到索引/更新就绪(超时 150s).
 - 如果 qgrep 正在更新(索引进度低于 100%), qgrep 搜索工具会等待索引就绪后再返回结果.
 - 扩展启动时,对于已经初始化过 qgrep(存在 `.vscode/qgrep/workspace.cfg`)的 workspace,会自动排队执行一次后台 `qgrep update`,用于补足当前会话的进度/文件总数显示.
@@ -449,9 +451,11 @@ url = "http://127.0.0.1:47100/mcp"
 - `lm_qgrepSearchText` 或 `lm_qgrepSearchFiles` 等待过久或超时:
   - 先用 `lm_qgrepGetStatus` 检查索引进度和 workspace 就绪状态.
   - 如需预建索引,仍可手动执行 `Status Menu -> Qgrep Init All Workspaces`.
-- `lm_qgrepSearchText` 或 `lm_qgrepSearchFiles` 路径范围被拒绝:
+- `lm_qgrepSearchText` 路径范围被拒绝:
   - 确认 `searchPath` 指向当前 workspace 内存在的路径.
   - multi-root 下相对路径有歧义时,请使用 `WorkspaceName/...`.
+- `lm_qgrepSearchFiles` 拒绝 `searchPath`:
+  - 这是预期行为. 请仅使用 `query` + `mode`,或在需要路径范围过滤时改用 `lm_findFiles`.
 - 端口变化后客户端不可用:
   - 改连 Manager `/mcp`,不要继续使用旧 workspace runtime 端口.
 - `Tool not found or disabled`:

@@ -12,7 +12,8 @@ const TOOL_SEARCH_READY_TIMEOUT_MS = 150_000;
 const TOOL_SEARCH_READY_POLL_INTERVAL_MS = 200;
 const DEFAULT_MAX_RESULTS = 300;
 const MIN_MAX_RESULTS = 1;
-const QGREP_HARD_OUTPUT_LIMIT = 10000;
+const QGREP_TEXT_MAX_RESULTS_LIMIT = 2000;
+const QGREP_FILES_MAX_RESULTS_LIMIT = 2000;
 const INIT_COMMAND_HINT = 'Run "LM Tools Bridge: Qgrep Init All Workspaces" first.';
 const QGREP_PROGRESS_FRAME_PATTERN = /\[\s*(\d{1,3})%\]\s+(\d+)\s+files\b/u;
 const QGREP_SUMMARY_PATTERN = /^Search complete,\s+found\s+(\d+)(\+)?\s+(?:matches?|files?)\s+in\b/iu;
@@ -147,6 +148,7 @@ interface QgrepSearchTarget {
 
 interface QgrepGlobPathMatcher {
   pattern: string;
+  pathRegexSource: string;
   regex: RegExp;
   matchTarget: 'relative' | 'absolute';
 }
@@ -154,6 +156,7 @@ interface QgrepGlobPathMatcher {
 interface QgrepGlobSearchTarget {
   state: WorkspaceQgrepState;
   matcher: QgrepGlobPathMatcher;
+  textFilterRegex: string;
 }
 
 interface ResolvedSearchPath {
@@ -180,6 +183,7 @@ interface ParsedQgrepFile {
 
 interface WorkspaceSearchResult {
   matches: ParsedQgrepMatch[];
+  limitApplied: number;
   totalAvailableCapped: boolean;
 }
 
@@ -351,7 +355,7 @@ class QgrepService implements vscode.Disposable {
     const query = this.parseQuery(input);
     const searchPath = this.parseOptionalSearchPath(input);
     const maxResults = this.parseMaxResults(input);
-    const maxResultsPayload = this.buildMaxResultsPayload(maxResults);
+    const maxResultsPayload = this.buildSearchMaxResultsPayload(maxResults);
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
     const useCaseInsensitiveSearch = this.shouldUseCaseInsensitiveSearchForQuery(query);
     await this.ensureToolSearchReady();
@@ -370,10 +374,16 @@ class QgrepService implements vscode.Disposable {
     let hardLimitHit = false;
 
     for (const target of targets) {
-      const targetResult = await this.searchInWorkspace(target, query, useCaseInsensitiveSearch);
+      const targetResult = await this.searchInWorkspace(
+        target,
+        query,
+        useCaseInsensitiveSearch,
+        maxResultsApplied,
+      );
       totalAvailable += targetResult.matches.length;
       totalAvailableCapped = totalAvailableCapped || targetResult.totalAvailableCapped;
-      hardLimitHit = hardLimitHit || targetResult.totalAvailableCapped;
+      hardLimitHit = hardLimitHit
+        || (targetResult.totalAvailableCapped && targetResult.limitApplied >= QGREP_TEXT_MAX_RESULTS_LIMIT);
 
       if (matches.length >= maxResultsApplied) {
         continue;
@@ -405,18 +415,14 @@ class QgrepService implements vscode.Disposable {
   public async files(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const query = this.parseFilesQuery(input);
     const mode = this.parseFilesMode(input);
-    const searchPath = this.parseOptionalSearchPath(input);
+    this.ensureFilesSearchPathUnsupported(input);
     const maxResults = this.parseMaxResults(input);
-    const maxResultsPayload = this.buildMaxResultsPayload(maxResults);
+    const maxResultsPayload = this.buildFilesMaxResultsPayload(maxResults);
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
     await this.ensureToolSearchReady();
 
-    if (searchPath && this.isGlobSearchPath(searchPath)) {
-      return this.filesWithGlobPath(searchPath, query, mode, maxResultsPayload);
-    }
-
-    const targets = this.resolveSearchTargets(searchPath);
-    if (targets.length === 0) {
+    const states = this.getInitializedStates();
+    if (states.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
     }
 
@@ -424,85 +430,32 @@ class QgrepService implements vscode.Disposable {
     let totalAvailable = 0;
     let totalAvailableCapped = false;
     let hardLimitHit = false;
+    let remaining = maxResultsApplied;
 
-    for (const target of targets) {
-      const targetResult = await this.searchFilesInWorkspace(target, query, mode);
+    for (let index = 0; index < states.length; index += 1) {
+      if (remaining <= 0) {
+        totalAvailableCapped = true;
+        break;
+      }
+      const state = states[index];
+      const targetResult = await this.searchFilesInWorkspace(state, query, mode, remaining);
       totalAvailable += targetResult.files.length;
       totalAvailableCapped = totalAvailableCapped || targetResult.totalAvailableCapped;
       hardLimitHit = hardLimitHit || targetResult.totalAvailableCapped;
-
-      if (files.length >= maxResultsApplied) {
-        continue;
-      }
-      const remaining = maxResultsApplied - files.length;
-      const selectedFiles = targetResult.files.slice(0, remaining);
-      for (const file of selectedFiles) {
-        files.push(this.toFilePayload(target.state.folder, file));
-      }
-    }
-
-    const capped = totalAvailableCapped || files.length < totalAvailable;
-
-    return {
-      query,
-      mode,
-      searchPath: searchPath ?? null,
-      ...maxResultsPayload,
-      totalAvailable,
-      ...(totalAvailableCapped ? { totalAvailableCapped: true } : {}),
-      ...(hardLimitHit ? { hardLimitHit: true } : {}),
-      count: files.length,
-      capped,
-      querySemanticsApplied: this.getFilesQuerySemantics(mode),
-      sort: 'qgrep-native',
-      files,
-    };
-  }
-
-  private async filesWithGlobPath(
-    searchPath: string,
-    query: string,
-    mode: QgrepFilesMode,
-    maxResultsPayload: MaxResultsPayload,
-  ): Promise<Record<string, unknown>> {
-    const maxResultsApplied = maxResultsPayload.maxResultsApplied;
-    const targets = this.resolveGlobSearchTargets(searchPath);
-    if (targets.length === 0) {
-      throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
-    }
-
-    const files: Array<Record<string, unknown>> = [];
-    let totalAvailable = 0;
-    let totalAvailableCapped = false;
-    let hardLimitHit = false;
-
-    for (const target of targets) {
-      const targetResult = await this.searchFilesInWorkspace(
-        { state: target.state },
-        query,
-        mode,
-      );
-      totalAvailableCapped = totalAvailableCapped || targetResult.totalAvailableCapped;
-      hardLimitHit = hardLimitHit || targetResult.totalAvailableCapped;
-
       for (const file of targetResult.files) {
-        if (!this.matchesGlobSearchPath(target.matcher, target.state.folder, file.absolutePath)) {
-          continue;
-        }
-        totalAvailable += 1;
-        if (files.length >= maxResultsApplied) {
-          continue;
-        }
-        files.push(this.toFilePayload(target.state.folder, file));
+        files.push(this.toFilePayload(state.folder, file));
+      }
+      remaining -= targetResult.files.length;
+      if (remaining <= 0 && index < states.length - 1) {
+        totalAvailableCapped = true;
       }
     }
 
-    const capped = totalAvailableCapped || files.length < totalAvailable;
+    const capped = totalAvailableCapped;
 
     return {
       query,
       mode,
-      searchPath,
       ...maxResultsPayload,
       totalAvailable,
       ...(totalAvailableCapped ? { totalAvailableCapped: true } : {}),
@@ -840,12 +793,35 @@ class QgrepService implements vscode.Disposable {
     return rounded;
   }
 
-  private applyHardOutputLimit(maxResults: number): number {
-    return Math.min(maxResults, QGREP_HARD_OUTPUT_LIMIT);
+  private ensureFilesSearchPathUnsupported(input: Record<string, unknown>): void {
+    if (!Object.prototype.hasOwnProperty.call(input, 'searchPath')) {
+      return;
+    }
+    if (input.searchPath === undefined) {
+      return;
+    }
+    throw new Error(
+      'searchPath is no longer supported for lm_qgrepSearchFiles. Use query/mode only, or use lm_findFiles for path-scoped filtering.',
+    );
   }
 
-  private buildMaxResultsPayload(maxResults: number): MaxResultsPayload {
-    const maxResultsApplied = this.applyHardOutputLimit(maxResults);
+  private applySearchMaxResultsLimit(maxResults: number): number {
+    return Math.min(maxResults, QGREP_TEXT_MAX_RESULTS_LIMIT);
+  }
+
+  private buildSearchMaxResultsPayload(maxResults: number): MaxResultsPayload {
+    const maxResultsApplied = this.applySearchMaxResultsLimit(maxResults);
+    if (maxResults > maxResultsApplied) {
+      return {
+        maxResultsApplied,
+        maxResultsRequested: maxResults,
+      };
+    }
+    return { maxResultsApplied };
+  }
+
+  private buildFilesMaxResultsPayload(maxResults: number): MaxResultsPayload {
+    const maxResultsApplied = Math.min(maxResults, QGREP_FILES_MAX_RESULTS_LIMIT);
     if (maxResults > maxResultsApplied) {
       return {
         maxResultsApplied,
@@ -1036,21 +1012,22 @@ class QgrepService implements vscode.Disposable {
 
     for (const target of targets) {
       const targetResult = await this.searchInWorkspace(
-        { state: target.state },
+        { state: target.state, filterRegex: target.textFilterRegex },
         query,
         useCaseInsensitiveSearch,
+        maxResultsApplied,
       );
+      totalAvailable += targetResult.matches.length;
       totalAvailableCapped = totalAvailableCapped || targetResult.totalAvailableCapped;
-      hardLimitHit = hardLimitHit || targetResult.totalAvailableCapped;
+      hardLimitHit = hardLimitHit
+        || (targetResult.totalAvailableCapped && targetResult.limitApplied >= QGREP_TEXT_MAX_RESULTS_LIMIT);
 
-      for (const match of targetResult.matches) {
-        if (!this.matchesGlobSearchPath(target.matcher, target.state.folder, match.absolutePath)) {
-          continue;
-        }
-        totalAvailable += 1;
-        if (matches.length >= maxResultsApplied) {
-          continue;
-        }
+      if (matches.length >= maxResultsApplied) {
+        continue;
+      }
+      const remaining = maxResultsApplied - matches.length;
+      const selectedMatches = targetResult.matches.slice(0, remaining);
+      for (const match of selectedMatches) {
         matches.push(this.toMatchPayload(target.state.folder, match));
       }
     }
@@ -1076,18 +1053,45 @@ class QgrepService implements vscode.Disposable {
     const trimmed = searchPath.trim();
     if (isAbsolutePath(trimmed)) {
       const matcher = compileAbsoluteGlobPathMatcher(trimmed);
-      return this.getInitializedStates().map((state) => ({ state, matcher }));
+      return this.getInitializedStates().map((state) => this.createGlobSearchTarget(state, matcher));
     }
 
     const prefixed = this.tryResolveWorkspacePrefixedGlobPattern(trimmed);
     if (prefixed) {
       const state = this.requireInitializedState(prefixed.folder);
       const matcher = compileWorkspaceGlobPathMatcher(prefixed.pattern);
-      return [{ state, matcher }];
+      return [this.createGlobSearchTarget(state, matcher)];
     }
 
     const matcher = compileWorkspaceGlobPathMatcher(trimmed);
-    return this.getInitializedStates().map((state) => ({ state, matcher }));
+    return this.getInitializedStates().map((state) => this.createGlobSearchTarget(state, matcher));
+  }
+
+  private createGlobSearchTarget(
+    state: WorkspaceQgrepState,
+    matcher: QgrepGlobPathMatcher,
+  ): QgrepGlobSearchTarget {
+    return {
+      state,
+      matcher,
+      textFilterRegex: this.buildTextFilterRegexForGlobMatcher(state.folder, matcher),
+    };
+  }
+
+  private buildTextFilterRegexForGlobMatcher(
+    folder: vscode.WorkspaceFolder,
+    matcher: QgrepGlobPathMatcher,
+  ): string {
+    const regexSource = matcher.matchTarget === 'absolute'
+      ? `^${matcher.pathRegexSource}$`
+      : `^${escapeRegex(normalizeSlash(path.resolve(folder.uri.fsPath)))}/${matcher.pathRegexSource}$`;
+    const syntaxError = validateQgrepConfigRegexSyntax(regexSource);
+    if (syntaxError) {
+      throw new Error(
+        `Invalid searchPath glob pattern: generated qgrep regex is not supported (${syntaxError}).`,
+      );
+    }
+    return regexSource;
   }
 
   private resolveSearchTargets(searchPath: string | undefined): QgrepSearchTarget[] {
@@ -1241,15 +1245,17 @@ class QgrepService implements vscode.Disposable {
     target: QgrepSearchTarget,
     query: string,
     useCaseInsensitiveSearch: boolean,
+    requestedLimit: number,
   ): Promise<WorkspaceSearchResult> {
+    const limitApplied = Math.max(MIN_MAX_RESULTS, Math.floor(requestedLimit));
     const args: string[] = ['search', target.state.configPath];
-    args.push(`L${QGREP_HARD_OUTPUT_LIMIT}`);
+    args.push(`L${limitApplied}`);
     args.push('S');
     if (useCaseInsensitiveSearch) {
       args.push('i');
     }
     if (target.filterRegex) {
-      args.push(`fi${target.filterRegex}`);
+      args.push(`fi${encodeRegexForQgrepSearchOption(target.filterRegex)}`);
     }
     args.push(query);
 
@@ -1261,6 +1267,7 @@ class QgrepService implements vscode.Disposable {
     const summary = parseQgrepResultSummary(result.stdout);
     return {
       matches: this.parseSearchOutput(result.stdout, target.state.folder),
+      limitApplied,
       totalAvailableCapped: summary.capped,
     };
   }
@@ -1270,30 +1277,29 @@ class QgrepService implements vscode.Disposable {
   }
 
   private async searchFilesInWorkspace(
-    target: QgrepSearchTarget,
+    state: WorkspaceQgrepState,
     query: string,
     mode: QgrepFilesMode,
+    requestedLimit: number,
   ): Promise<WorkspaceFilesResult> {
-    const args: string[] = ['files', target.state.configPath];
+    const limitApplied = Math.max(MIN_MAX_RESULTS, Math.floor(requestedLimit));
+    const args: string[] = ['files', state.configPath];
     if (process.platform === 'win32') {
       args.push('i');
     }
-    args.push(`L${QGREP_HARD_OUTPUT_LIMIT}`);
+    args.push(`L${limitApplied}`);
     args.push('S');
     args.push(mode);
-    if (target.filterRegex) {
-      args.push(`fi${target.filterRegex}`);
-    }
     args.push(query);
 
-    const result = await this.runQgrepCommand(args, target.state.folder.uri.fsPath);
-    const commandError = this.extractCommandError(result, `File search failed for workspace '${target.state.folder.name}'.`);
+    const result = await this.runQgrepCommand(args, state.folder.uri.fsPath);
+    const commandError = this.extractCommandError(result, `File search failed for workspace '${state.folder.name}'.`);
     if (commandError) {
       throw new Error(commandError);
     }
     const summary = parseQgrepResultSummary(result.stdout);
     return {
-      files: this.parseFilesOutput(result.stdout, target.state.folder, mode),
+      files: this.parseFilesOutput(result.stdout, state.folder, mode),
       totalAvailableCapped: summary.capped,
     };
   }
@@ -1419,22 +1425,6 @@ class QgrepService implements vscode.Disposable {
       return undefined;
     }
     return absolutePath;
-  }
-
-  private toWorkspaceRelativePath(folder: vscode.WorkspaceFolder, absolutePath: string): string {
-    const relativePath = normalizeSlash(path.relative(folder.uri.fsPath, absolutePath));
-    return relativePath.length > 0 ? relativePath : '.';
-  }
-
-  private matchesGlobSearchPath(
-    matcher: QgrepGlobPathMatcher,
-    folder: vscode.WorkspaceFolder,
-    absolutePath: string,
-  ): boolean {
-    const candidate = matcher.matchTarget === 'absolute'
-      ? normalizeSlash(path.resolve(absolutePath))
-      : this.toWorkspaceRelativePath(folder, absolutePath);
-    return matcher.regex.test(candidate);
   }
 
   private toMatchPayload(folder: vscode.WorkspaceFolder, match: ParsedQgrepMatch): Record<string, unknown> {
@@ -2563,6 +2553,30 @@ function escapeRegex(value: string): string {
   return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
 }
 
+function encodeRegexForQgrepSearchOption(regexSource: string): string {
+  let encoded = '';
+  for (const char of regexSource) {
+    if (char === ' ') {
+      encoded += '\\x20';
+      continue;
+    }
+    if (char === '\t') {
+      encoded += '\\x09';
+      continue;
+    }
+    if (char === '\n') {
+      encoded += '\\x0a';
+      continue;
+    }
+    if (char === '\r') {
+      encoded += '\\x0d';
+      continue;
+    }
+    encoded += char;
+  }
+  return encoded;
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -2677,6 +2691,7 @@ function compileWorkspaceGlobPathMatcher(pattern: string): QgrepGlobPathMatcher 
     const regex = new RegExp(fullSource, flags);
     return {
       pattern: normalizedPattern,
+      pathRegexSource: regexSource,
       regex,
       matchTarget: 'relative',
     };
@@ -2699,6 +2714,7 @@ function compileAbsoluteGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
     const regex = new RegExp(fullSource, flags);
     return {
       pattern: normalizedPattern,
+      pathRegexSource: regexSource,
       regex,
       matchTarget: 'absolute',
     };
@@ -2747,7 +2763,7 @@ function parseGlobSequence(state: GlobPatternParserState, stopChars: string): st
         state.index = endIndex + 1;
         if (state.pattern[state.index] === '/') {
           state.index += 1;
-          result += '(?:.*/)?';
+          result += '(.*/)?';
         } else {
           result += '.*';
         }
@@ -2856,7 +2872,7 @@ function parseGlobBraceGroup(state: GlobPatternParserState): string {
       break;
     }
   }
-  return `(?:${branches.join('|')})`;
+  return `(${branches.join('|')})`;
 }
 
 function escapeRegexCharClass(char: string): string {

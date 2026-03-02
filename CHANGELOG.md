@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.101] - 2026-03-02
+
+### English
+
+#### Fixed
+- Fixed qgrep text match parsing to split `path:line:preview` at the first `:line:` delimiter, preventing preview corruption when preview text contains `:number:` or similar colon segments.
+
+### 中文
+
+#### 修复
+- 修复 qgrep 文本匹配解析: 现在按首个 `:line:` 分隔 `path:line:preview`,避免 preview 文本包含 `:number:` 等冒号片段时发生错位和污染.
+
 ## [1.0.100] - 2026-02-27
 
 ### English

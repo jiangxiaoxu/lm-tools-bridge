@@ -1314,7 +1314,7 @@ class QgrepService implements vscode.Disposable {
       if (line.length === 0) {
         continue;
       }
-      const parsed = /^(.*):(\d+):(.*)$/u.exec(line);
+      const parsed = /^(.+?):(\d+):(.*)$/u.exec(line);
       if (!parsed) {
         continue;
       }

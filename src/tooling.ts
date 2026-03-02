@@ -1980,8 +1980,9 @@ function buildCustomToolResult(
   if (!isPlainObject(structuredContent)) {
     throw new Error('Custom tool must provide structuredContent as a JSON object.');
   }
+  const sanitizedText = sanitizeToolTextForDisplay(text);
   const result = {
-    content: [new vscode.LanguageModelTextPart(text)],
+    content: [new vscode.LanguageModelTextPart(sanitizedText)],
     structuredContent: structuredContent as Record<string, unknown>,
   };
   return result as unknown as vscode.LanguageModelToolResult;
@@ -3240,6 +3241,25 @@ function safePrettyStringify(value: unknown): string {
   } catch {
     return '[unserializable]';
   }
+}
+
+function stripAnsiEscapeCodesForDisplay(text: string): string {
+  return text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '')
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu, '');
+}
+
+function stripBidiAndZeroWidthCharsForDisplay(text: string): string {
+  return text.replace(/[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu, '');
+}
+
+function sanitizeToolTextForDisplay(text: string): string {
+  return stripBidiAndZeroWidthCharsForDisplay(
+    stripAnsiEscapeCodesForDisplay(text)
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu, ''),
+  );
 }
 
 function unescapeNewlines(text: string): string {

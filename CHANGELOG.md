@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.102] - 2026-03-02
+
+### English
+
+#### Fixed
+- Added unified sanitization for custom tool `content.text` output to strip ANSI/control/bidi/zero-width characters for stable summary rendering.
+- Kept `structuredContent` unchanged while applying display-layer sanitization only to text output.
+
+### 中文
+
+#### 修复
+- 为 custom tool 的 `content.text` 增加统一清洗,去除 ANSI/control/bidi/zero-width 字符,提升 summary 渲染稳定性.
+- 仅对文本展示层做清洗,`structuredContent` 保持不变.
+
 ## [1.0.101] - 2026-03-02
 
 ### English

@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.102",
+  "version": "1.0.103",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -180,6 +180,7 @@
     "vscode:prepublish": "npm run compile && npm run bundle",
     "bundle": "node ./scripts/bundle.mjs",
     "compile": "tsc -p ./",
+    "test": "npm run compile && node --test out/__tests__/windowsWorkspacePath.test.js",
     "watch": "tsc -watch -p ./"
   },
   "dependencies": {

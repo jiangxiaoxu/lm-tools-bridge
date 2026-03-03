@@ -47,6 +47,7 @@
 - qgrep tooltip reports binary readiness, aggregate file progress, and one per-workspace line in `A/B (percent)` format.
 - Aggregate qgrep `A/B`/remaining uses file-weighted sum across initialized workspaces only when all initialized workspaces have known totals; otherwise show unknown (`--/--`) with optional sampled percent.
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
+- `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths; `content.text` summaries prefer workspace-relative (`WorkspaceName/...`) display and fall back to absolute paths.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
 
@@ -56,6 +57,7 @@
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
 - `src/manager.ts -> handleMcpHttpRequest | dispatchRootsListRequest`
+- `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath | resolveComparablePath`
 
 ### Forbidden Assumptions
 - Do not assume handshake can be skipped before tool calls.
@@ -66,6 +68,7 @@
 ## Section B: Task Routing Cards
 - [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => reconnect manager endpoint; Verify: `/mcp/health` ok and status bar `Running`.
 - [Unknown Mcp-Session-Id] Read: `src/manager.ts -> handleMcpHttpRequest`; Decide: stale non-handshake session => re-bind via handshake; Verify: rerun `lmToolsBridge.requestWorkspaceMCPServer` then same tool call succeeds.
+- [Workspace handshake path rejected] Read: `src/manager.ts -> isSupportedWindowsWorkspacePath | stripWindowsNtNamespacePrefix | handleRequestWorkspace`; Decide: on Windows allow only normal absolute paths and `\\?\` + normal absolute paths; Verify: non-normal NT namespace formats fail with params error while normal and prefixed-normal forms bind the same workspace target.
 - [Tool not found or disabled] Read: `src/tooling.ts -> getEnabledExposedToolsSnapshot | invokeExposedTool`; Decide: exposure first, enabled second; Verify: target appears in effective set and call succeeds.
 - [Tool selection config mismatch] Read: `src/tooling.ts -> setExposedTools | setEnabledTools | pruneBuiltInDisabledFromDeltas | pruneEnabledDeltasByExposed`; Decide: required/built-in-disabled/exposed-first rules apply; Verify: deltas normalize and intended tool state persists.
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
@@ -89,7 +92,9 @@
 
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
+- Path-tests: run `npm test` to verify Windows workspace path acceptance and comparable-path normalization for both `G:\...` and `\\?\G:\...`.
 - Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
+- Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, and rejects non-normal NT namespace formats.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).
 - qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearchText` sees expected changes without manual rebuild.
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.

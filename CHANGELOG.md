@@ -6,6 +6,32 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.103] - 2026-03-03
+
+### English
+
+#### Changed
+- Refactored Windows workspace path handling into `src/windowsWorkspacePath.ts` and reused it from manager handshake/matching flows.
+
+#### Fixed
+- Handshake path validation now accepts both normal absolute Windows paths and `\\?\`-prefixed normal paths with case-insensitive prefix matching.
+- Normal and `\\?\`-prefixed drive/UNC paths now normalize to equivalent comparable paths for stable workspace matching.
+
+#### Added
+- Added automated tests for Windows path handling, including drive paths (`G:\...` and `\\?\G:\...`) and UNC paths (`\\server\share\...` and `\\?\UNC\server\share\...`).
+
+### 中文
+
+#### 变更
+- 将 Windows workspace 路径处理重构到 `src/windowsWorkspacePath.ts`,并在 manager 握手/匹配流程复用.
+
+#### 修复
+- 握手路径校验现在支持普通 Windows 绝对路径与 `\\?\` 前缀普通路径,且前缀匹配不区分大小写.
+- 普通路径与 `\\?\` 前缀的 drive/UNC 路径会归一化为等价可比路径,提升 workspace 匹配稳定性.
+
+#### 新增
+- 新增 Windows 路径自动化测试,覆盖 drive 路径(`G:\...` 和 `\\?\G:\...`)以及 UNC 路径(`\\server\share\...` 和 `\\?\UNC\server\share\...`).
+
 ## [1.0.102] - 2026-03-02
 
 ### English

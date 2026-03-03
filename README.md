@@ -11,7 +11,7 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 ### Quick Start
 1. Start service in VS Code: `LM Tools Bridge: Start Server`.
 2. Connect your MCP client to Manager: `http://127.0.0.1:47100/mcp`.
-3. Call handshake tool `lmToolsBridge.requestWorkspaceMCPServer` with `{ "cwd": "<project path>" }`.
+3. Call handshake tool `lmToolsBridge.requestWorkspaceMCPServer` with `{ "cwd": "<project path>" }` (Windows accepts only normal absolute paths and `\\?\` + normal absolute paths; prefix matching is case-insensitive).
 4. Call tools via `lmToolsBridge.callTool` or standard `tools/call`.
 
 ### Endpoints
@@ -88,7 +88,7 @@ Open VS Code Output panel and select:
 
 ### Troubleshooting
 - `workspace not set` or `Unknown Mcp-Session-Id`: rerun handshake.
-- `workspace not matched`: ensure `cwd` is inside target workspace.
+- `workspace not matched`: ensure `cwd` is inside target workspace (Windows `cwd` must be a normal absolute path or `\\?\` + normal absolute path; non-normal NT namespace forms are rejected).
 - qgrep waits too long: check `lm_qgrepGetStatus`.
 - `Tool not found or disabled`: ensure tool is both exposed and enabled.
 
@@ -106,7 +106,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 ### 快速开始
 1. 在 VS Code 里执行 `LM Tools Bridge: Start Server`.
 2. MCP 客户端连接 Manager: `http://127.0.0.1:47100/mcp`.
-3. 先调用握手工具 `lmToolsBridge.requestWorkspaceMCPServer`,参数 `{ "cwd": "<project path>" }`.
+3. 先调用握手工具 `lmToolsBridge.requestWorkspaceMCPServer`,参数 `{ "cwd": "<project path>" }`(Windows 仅接受普通绝对路径和 `\\?\` + 普通绝对路径,前缀匹配不区分大小写).
 4. 然后通过 `lmToolsBridge.callTool` 或标准 `tools/call` 调用工具.
 
 ### 端点
@@ -183,7 +183,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 
 ### 故障排查
 - `workspace not set` 或 `Unknown Mcp-Session-Id`: 重新握手.
-- `workspace not matched`: 检查 `cwd` 是否在目标 workspace 内.
+- `workspace not matched`: 检查 `cwd` 是否在目标 workspace 内(Windows `cwd` 仅支持普通绝对路径和 `\\?\` + 普通绝对路径,非普通 NT namespace 写法会被拒绝).
 - qgrep 等待过久: 先看 `lm_qgrepGetStatus`.
 - `Tool not found or disabled`: 确认工具同时处于 exposed 与 enabled.
 

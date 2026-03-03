@@ -9,6 +9,10 @@ import {
   handleManagerStatusRequest,
 } from './managerStatusPage';
 import type { ManagerStatusRootsPolicy } from './managerStatusTypes';
+import {
+  isSupportedWindowsWorkspacePath,
+  resolveComparablePath,
+} from './windowsWorkspacePath';
 
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
 
@@ -181,7 +185,7 @@ function getHttpPortFromArgs(): number | undefined {
 }
 
 function normalizePath(value: string): string {
-  return path.resolve(value).replace(/\//g, '\\').toLowerCase();
+  return resolveComparablePath(value).replace(/\//g, '\\').toLowerCase();
 }
 
 function normalizeFolders(value: unknown): string[] {
@@ -398,7 +402,7 @@ function getAliveRecords(): InstanceRecord[] {
 }
 
 function normalizeFsPath(value: string): string {
-  return path.resolve(value).toLowerCase();
+  return resolveComparablePath(value).toLowerCase();
 }
 
 function isCwdWithinWorkspaceFolders(cwd: string, workspaceFolders: string[]): boolean {
@@ -1602,7 +1606,16 @@ async function handleRequestWorkspace(
   if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
     return { error: { code: -32602, message: 'Invalid params: expected params.cwd (string).' } };
   }
-  session.resolveCwd = path.resolve(cwdValue);
+  const trimmedCwd = cwdValue.trim();
+  if (process.platform === 'win32' && !isSupportedWindowsWorkspacePath(trimmedCwd)) {
+    return {
+      error: {
+        code: -32602,
+        message: 'Invalid params.cwd: on Windows, only normal absolute paths or \\\\?\\ + normal absolute paths are supported.',
+      },
+    };
+  }
+  session.resolveCwd = resolveComparablePath(trimmedCwd);
   session.workspaceSetExplicitly = true;
   session.workspaceMatched = false;
   session.currentTarget = undefined;
@@ -2492,9 +2505,14 @@ const pipeServer = http.createServer(async (req, res) => {
         respondJson(res, 400, { ok: false, reason: 'missing_cwd' });
         return;
       }
+      const trimmedCwd = cwd.trim();
+      if (process.platform === 'win32' && !isSupportedWindowsWorkspacePath(trimmedCwd)) {
+        respondJson(res, 400, { ok: false, reason: 'invalid_cwd_format' });
+        return;
+      }
 
       const alive = getAliveRecords();
-      const match = pickBestMatch(cwd, alive);
+      const match = pickBestMatch(trimmedCwd, alive);
       if (!match) {
         respondJson(res, 404, { ok: false, reason: 'not_found' });
         return;

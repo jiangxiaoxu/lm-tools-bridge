@@ -141,6 +141,7 @@ const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
 const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge://handshake';
 const CALL_TOOL_RESOURCE_URI = 'lm-tools-bridge://callTool';
+const TOOL_SCHEMA_URI_TEMPLATE = 'lm-tools://schema/{name}';
 const ERROR_MANAGER_UNREACHABLE = -32003;
 const ERROR_NO_MATCH = -32004;
 const ERROR_WORKSPACE_NOT_SET = -32005;
@@ -159,6 +160,122 @@ const sessions = new Map<string, SessionState>();
 const logger = createManagerLogger({ envKey: 'LM_TOOLS_BRIDGE_MANAGER_LOG', maxLines: 200 });
 let lastNonEmptyAt = Date.now();
 let managerInternalRequestCounter = 0;
+
+function appendNextStep(message: string, nextStep: string): string {
+  const base = message.trim();
+  const suffix = base.endsWith('.') ? '' : '.';
+  return `${base}${suffix} Next step: ${nextStep}`;
+}
+
+function getDiscoveryRefreshHint(): string {
+  return 'if discovery.partial=true or discovery.issues is non-empty, refresh available tools via tools/list.';
+}
+
+function getSchemaReadHint(): string {
+  return `read ${TOOL_SCHEMA_URI_TEMPLATE} before the first tool call and build arguments that match inputSchema.`;
+}
+
+function getRebindRetryHint(): string {
+  return `call ${REQUEST_WORKSPACE_METHOD} with params.cwd, wait for ok=true, then retry once.`;
+}
+
+function getWorkspaceNotMatchedMessage(): string {
+  return appendNextStep(
+    'Workspace not matched.',
+    `call ${REQUEST_WORKSPACE_METHOD} with a cwd inside the target workspace, wait for success, then retry once.`,
+  );
+}
+
+function getWorkspaceNotSetMessage(): string {
+  return appendNextStep(
+    'Workspace not set.',
+    `call ${REQUEST_WORKSPACE_METHOD} with params.cwd before using MCP, then retry once.`,
+  );
+}
+
+function getUnknownSessionMessage(): string {
+  return appendNextStep(
+    'Unknown Mcp-Session-Id.',
+    `call ${REQUEST_WORKSPACE_METHOD} to re-bind this session and retry once.`,
+  );
+}
+
+function getManagerUnreachableMessage(): string {
+  return appendNextStep(
+    'Manager unreachable.',
+    `retry once; if it still fails, ${getRebindRetryHint()}`,
+  );
+}
+
+function getMcpOfflineMessage(): string {
+  return appendNextStep(
+    'Resolved MCP server is offline.',
+    `${getRebindRetryHint()} This can bind to a healthy workspace MCP server.`,
+  );
+}
+
+function getHandshakeResourceDescription(): string {
+  return `Handshake required: call ${REQUEST_WORKSPACE_METHOD} with params.cwd; success includes discovery (callTool/bridgedTools).`;
+}
+
+function getRequestWorkspaceToolDescription(): string {
+  return 'Resolve and bind a workspace MCP server. Input: { cwd: string }.';
+}
+
+function getDirectToolCallDescription(): string {
+  return 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.';
+}
+
+function getDirectCallNameParamMessage(): string {
+  return appendNextStep(
+    'Invalid params: expected arguments.name (string).',
+    `call ${DIRECT_TOOL_CALL_NAME} with { name: string, arguments?: object } and set arguments.name to a bridged tool name.`,
+  );
+}
+
+function getDirectCallArgumentsParamMessage(): string {
+  return appendNextStep(
+    'Invalid params: expected arguments.arguments (object).',
+    `pass arguments.arguments as an object that matches ${TOOL_SCHEMA_URI_TEMPLATE} for the target tool.`,
+  );
+}
+
+function getDirectCallForbiddenToolNameMessage(): string {
+  return appendNextStep(
+    'Invalid params: tool name is not allowed.',
+    'set arguments.name to a bridged workspace tool from discovery.bridgedTools or tools/list.',
+  );
+}
+
+function getInvalidRequestWorkspaceParamsMessage(): string {
+  return appendNextStep(
+    'Invalid params: expected params.cwd (string).',
+    `call ${REQUEST_WORKSPACE_METHOD} with a non-empty cwd string and retry.`,
+  );
+}
+
+function getInvalidWindowsCwdMessage(): string {
+  return appendNextStep(
+    'Invalid params.cwd: on Windows, only normal absolute paths or \\\\?\\ + normal absolute paths are supported.',
+    `pass a supported absolute path to ${REQUEST_WORKSPACE_METHOD} and retry.`,
+  );
+}
+
+function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): {
+  nextSteps: string[];
+  recoveryOnError: string;
+} {
+  const nextSteps = [
+    `For each bridged tool, ${getSchemaReadHint()}`,
+  ];
+  if (discovery.partial || discovery.issues.length > 0) {
+    nextSteps.push(`Discovery is partial or has issues: ${getDiscoveryRefreshHint()}`);
+  }
+  return {
+    nextSteps,
+    recoveryOnError: getRebindRetryHint(),
+  };
+}
 
 function nextManagerRequestId(prefix: string): string {
   managerInternalRequestCounter += 1;
@@ -703,6 +820,15 @@ function formatWorkspaceHandshakeSummary(payload: unknown): string {
   const discoveryIssues = Array.isArray(discovery?.issues) ? discovery.issues : [];
   const workspaceFolders = Array.isArray(target?.workspaceFolders) ? target.workspaceFolders : [];
   const bridgedTools = Array.isArray(discovery?.bridgedTools) ? discovery.bridgedTools : [];
+  const guidance = (record.guidance && typeof record.guidance === 'object' && !Array.isArray(record.guidance))
+    ? record.guidance as Record<string, unknown>
+    : undefined;
+  const guidanceNextSteps = Array.isArray(guidance?.nextSteps)
+    ? guidance.nextSteps.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+  const guidanceRecovery = typeof guidance?.recoveryOnError === 'string'
+    ? guidance.recoveryOnError.trim()
+    : '';
   const bridgedToolNames = bridgedTools
     .map((tool) => {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
@@ -758,6 +884,18 @@ function formatWorkspaceHandshakeSummary(payload: unknown): string {
         lines.push(`  details: ${details}`);
       }
     }
+  }
+  lines.push('Guidance:');
+  if (guidanceNextSteps.length === 0) {
+    lines.push('  nextSteps: (none)');
+  } else {
+    lines.push('  nextSteps:');
+    for (const nextStep of guidanceNextSteps) {
+      lines.push(`  - ${nextStep}`);
+    }
+  }
+  if (guidanceRecovery.length > 0) {
+    lines.push(`  recoveryOnError: ${guidanceRecovery}`);
   }
   return lines.join('\n');
 }
@@ -858,7 +996,7 @@ function getHandshakeResource(): Record<string, unknown> {
   return {
     uri: HANDSHAKE_RESOURCE_URI,
     name: 'MCP manager handshake',
-    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; success includes discovery (callTool/bridgedTools). Use tools/list as refresh fallback and read lm-tools://schema/{name} before first tool call when needed.',
+    description: getHandshakeResourceDescription(),
     mimeType: 'text/plain',
   };
 }
@@ -867,7 +1005,7 @@ function getCallToolResource(): Record<string, unknown> {
   return {
     uri: CALL_TOOL_RESOURCE_URI,
     name: 'MCP manager direct tool call',
-    description: 'Call lmToolsBridge.callTool after handshake to invoke a tool by name.',
+    description: getDirectToolCallDescription(),
     mimeType: 'text/plain',
   };
 }
@@ -876,7 +1014,7 @@ function getHandshakeTemplate(): Record<string, unknown> {
   return {
     name: 'MCP manager handshake',
     uriTemplate: HANDSHAKE_RESOURCE_URI,
-    description: 'Handshake required: call lmToolsBridge.requestWorkspaceMCPServer with params.cwd; success includes discovery (callTool/bridgedTools). Use tools/list as refresh fallback and read lm-tools://schema/{name} before first tool call when needed.',
+    description: getHandshakeResourceDescription(),
     mimeType: 'text/plain',
   };
 }
@@ -885,7 +1023,7 @@ function getCallToolTemplate(): Record<string, unknown> {
   return {
     name: 'MCP manager direct tool call',
     uriTemplate: CALL_TOOL_RESOURCE_URI,
-    description: 'Call lmToolsBridge.callTool after handshake to invoke a tool by name.',
+    description: getDirectToolCallDescription(),
     mimeType: 'text/plain',
   };
 }
@@ -893,7 +1031,7 @@ function getCallToolTemplate(): Record<string, unknown> {
 function getRequestWorkspaceToolDefinition(): Record<string, unknown> {
   return {
     name: REQUEST_WORKSPACE_METHOD,
-    description: 'Resolve and bind a workspace MCP server. Input: { cwd: string }.',
+    description: getRequestWorkspaceToolDescription(),
     inputSchema: {
       type: 'object',
       properties: {
@@ -907,7 +1045,7 @@ function getRequestWorkspaceToolDefinition(): Record<string, unknown> {
 function getDirectToolCallDefinition(): Record<string, unknown> {
   return {
     name: DIRECT_TOOL_CALL_NAME,
-    description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
+    description: getDirectToolCallDescription(),
     inputSchema: {
       type: 'object',
       properties: {
@@ -1305,7 +1443,7 @@ async function readToolSchemaFromResource(
 async function buildHandshakeDiscovery(target: ManagerMatch): Promise<HandshakeDiscoveryPayload> {
   const callTool = toHandshakeDiscoveryTool(getDirectToolCallDefinition()) ?? {
     name: DIRECT_TOOL_CALL_NAME,
-    description: 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.',
+    description: getDirectToolCallDescription(),
     inputSchema: {
       type: 'object',
       properties: {
@@ -1604,14 +1742,14 @@ async function handleRequestWorkspace(
   cwdValue: unknown,
 ): Promise<{ payload?: Record<string, unknown>; error?: { code: number; message: string } }> {
   if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
-    return { error: { code: -32602, message: 'Invalid params: expected params.cwd (string).' } };
+    return { error: { code: -32602, message: getInvalidRequestWorkspaceParamsMessage() } };
   }
   const trimmedCwd = cwdValue.trim();
   if (process.platform === 'win32' && !isSupportedWindowsWorkspacePath(trimmedCwd)) {
     return {
       error: {
         code: -32602,
-        message: 'Invalid params.cwd: on Windows, only normal absolute paths or \\\\?\\ + normal absolute paths are supported.',
+        message: getInvalidWindowsCwdMessage(),
       },
     };
   }
@@ -1630,8 +1768,8 @@ async function handleRequestWorkspace(
       error: {
         code: resolveResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
         message: resolveResult?.errorKind === 'no_match'
-          ? 'No matching VS Code instance for provided workspace.'
-          : 'Manager unreachable.',
+          ? appendNextStep('No matching VS Code instance for provided workspace.', 'adjust cwd to the target workspace path and retry.')
+          : getManagerUnreachableMessage(),
       },
     };
   }
@@ -1643,7 +1781,10 @@ async function handleRequestWorkspace(
     return {
       error: {
         code: ERROR_NO_MATCH,
-        message: 'Provided cwd is not within resolved workspace folders.',
+        message: appendNextStep(
+          'Provided cwd is not within resolved workspace folders.',
+          'choose a cwd inside workspaceFolders (or matching workspaceFile), then call handshake again.',
+        ),
       },
     };
   }
@@ -1657,7 +1798,7 @@ async function handleRequestWorkspace(
     return {
       error: {
         code: ERROR_MCP_OFFLINE,
-        message: 'Resolved MCP server is offline.',
+        message: getMcpOfflineMessage(),
       },
     };
   }
@@ -1665,6 +1806,7 @@ async function handleRequestWorkspace(
   session.currentTarget = matchedTarget;
   session.offlineSince = undefined;
   const discovery = await buildHandshakeDiscovery(matchedTarget);
+  const guidance = buildHandshakeGuidance(discovery);
   return {
     payload: {
       ok: true,
@@ -1680,6 +1822,7 @@ async function handleRequestWorkspace(
       online: true,
       health,
       discovery,
+      guidance,
     },
   };
 }
@@ -1781,11 +1924,12 @@ async function handleSessionMessage(
     const statusResult = await buildStatusPayload(session);
     const content = [
       'This MCP manager requires an explicit workspace handshake.',
-      'Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd. If the call fails, do not invoke MCP tools or resources.',
+      `Call ${REQUEST_WORKSPACE_METHOD} with params.cwd before MCP tools/resources.`,
+      `On session/workspace failures or MCP call failures, ${getRebindRetryHint()}`,
       'A successful handshake response includes discovery data (callTool/bridgedTools).',
-      'Use tools/list as refresh fallback when discovery is partial.',
-      'Before calling any tool for the first time, read lm-tools://schema/{name} if input schema is not already known.',
-      'Invoke tools via lmToolsBridge.callTool only after the tool schema has been read.',
+      `After handshake, ${getDiscoveryRefreshHint()}`,
+      `Before first tool call, ${getSchemaReadHint()}`,
+      `Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and schema read.`,
       '',
       'Status snapshot:',
       JSON.stringify(statusResult.payload, null, 2),
@@ -1809,15 +1953,18 @@ async function handleSessionMessage(
         message.id ?? null,
         session.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
         session.workspaceSetExplicitly
-          ? 'Workspace not matched. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd and wait for success.'
-          : 'Workspace not set. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+          ? getWorkspaceNotMatchedMessage()
+          : getWorkspaceNotSetMessage(),
       );
       return;
     }
     const content = [
-      'Direct tool call bridge (handshake required).',
+      'Direct tool call bridge (handshake + schema required).',
       `Tool name: ${DIRECT_TOOL_CALL_NAME}`,
       'Input: { name: string, arguments?: object }',
+      `Before first call, ${getSchemaReadHint()}`,
+      `When discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
+      `If session/workspace errors appear, ${getRebindRetryHint()}`,
       'Example:',
       JSON.stringify(
         {
@@ -1982,26 +2129,26 @@ async function handleSessionMessage(
           message.id ?? null,
           session.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
           session.workspaceSetExplicitly
-            ? 'Workspace not matched. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd and wait for success.'
-            : 'Workspace not set. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+            ? getWorkspaceNotMatchedMessage()
+            : getWorkspaceNotSetMessage(),
         );
         return;
       }
       const directArgs = message.params?.arguments as { name?: unknown; arguments?: unknown } | undefined;
       const targetToolName = typeof directArgs?.name === 'string' ? directArgs.name.trim() : '';
       if (!targetToolName) {
-        respondToolError(res, message.id ?? null, -32602, 'Invalid params: expected arguments.name (string).');
+        respondToolError(res, message.id ?? null, -32602, getDirectCallNameParamMessage());
         return;
       }
       if (directArgs?.arguments !== undefined) {
         const argValue = directArgs.arguments;
         if (typeof argValue !== 'object' || argValue === null || Array.isArray(argValue)) {
-          respondToolError(res, message.id ?? null, -32602, 'Invalid params: expected arguments.arguments (object).');
+          respondToolError(res, message.id ?? null, -32602, getDirectCallArgumentsParamMessage());
           return;
         }
       }
       if (targetToolName === DIRECT_TOOL_CALL_NAME || targetToolName === REQUEST_WORKSPACE_METHOD) {
-        respondToolError(res, message.id ?? null, -32602, 'Invalid params: tool name is not allowed.');
+        respondToolError(res, message.id ?? null, -32602, getDirectCallForbiddenToolNameMessage());
         return;
       }
       let target = session.currentTarget;
@@ -2016,8 +2163,8 @@ async function handleSessionMessage(
             message.id ?? null,
             refreshResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
             refreshResult?.errorKind === 'no_match'
-              ? 'No matching VS Code instance for current workspace.'
-              : 'Manager unreachable.',
+              ? appendNextStep('No matching VS Code instance for current workspace.', 're-run handshake with a valid cwd for the target workspace and retry.')
+              : getManagerUnreachableMessage(),
           );
           return;
         }
@@ -2039,15 +2186,23 @@ async function handleSessionMessage(
           if (!session.offlineSince) {
             session.offlineSince = Date.now();
           }
-          respondToolError(res, message.id ?? null, ERROR_MCP_OFFLINE, 'Resolved MCP server is offline.');
+          respondToolError(res, message.id ?? null, ERROR_MCP_OFFLINE, getMcpOfflineMessage());
           return;
         }
-        respondToolError(res, message.id ?? null, ERROR_MANAGER_UNREACHABLE, 'Manager unreachable.');
+        respondToolError(res, message.id ?? null, ERROR_MANAGER_UNREACHABLE, getManagerUnreachableMessage());
         return;
       }
       const remoteResult = (remote.data as { result?: Record<string, unknown> } | undefined)?.result;
       if (!remoteResult || typeof remoteResult !== 'object') {
-        respondToolError(res, message.id ?? null, -32603, 'Invalid response from MCP server.');
+        respondToolError(
+          res,
+          message.id ?? null,
+          -32603,
+          appendNextStep(
+            'Invalid response from MCP server.',
+            `retry once; if it still fails, ${getRebindRetryHint()}`,
+          ),
+        );
         return;
       }
       respondJsonRpcResult(res, message.id ?? null, remoteResult);
@@ -2081,8 +2236,8 @@ async function handleSessionMessage(
       message.id ?? null,
       session.workspaceSetExplicitly ? ERROR_NO_MATCH : ERROR_WORKSPACE_NOT_SET,
       session.workspaceSetExplicitly
-        ? 'Workspace not matched. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd and wait for success.'
-        : 'Workspace not set. Call lmToolsBridge.requestWorkspaceMCPServer with params.cwd before using MCP.',
+        ? getWorkspaceNotMatchedMessage()
+        : getWorkspaceNotSetMessage(),
     );
     return;
   }
@@ -2100,8 +2255,8 @@ async function handleSessionMessage(
         message.id ?? null,
         refreshResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
         refreshResult?.errorKind === 'no_match'
-          ? 'No matching VS Code instance for current workspace.'
-          : 'Manager unreachable.',
+          ? appendNextStep('No matching VS Code instance for current workspace.', 're-run handshake with a valid cwd for the target workspace and retry.')
+          : getManagerUnreachableMessage(),
       );
       return;
     }
@@ -2119,7 +2274,7 @@ async function handleSessionMessage(
     if (!session.offlineSince) {
       session.offlineSince = Date.now();
     }
-    respondJsonRpcError(res, 200, message.id ?? null, ERROR_MCP_OFFLINE, 'Resolved MCP server is offline.');
+    respondJsonRpcError(res, 200, message.id ?? null, ERROR_MCP_OFFLINE, getMcpOfflineMessage());
     return;
   }
   const now = Date.now();
@@ -2133,8 +2288,8 @@ async function handleSessionMessage(
       message.id ?? null,
       refreshResult?.errorKind === 'no_match' ? ERROR_NO_MATCH : ERROR_MANAGER_UNREACHABLE,
       refreshResult?.errorKind === 'no_match'
-        ? 'No matching VS Code instance for current workspace.'
-        : 'Manager unreachable.',
+        ? appendNextStep('No matching VS Code instance for current workspace.', 're-run handshake with a valid cwd for the target workspace and retry.')
+        : getManagerUnreachableMessage(),
     );
     return;
   }
@@ -2146,14 +2301,14 @@ async function handleSessionMessage(
     if (!session.offlineSince) {
       session.offlineSince = Date.now();
     }
-    respondJsonRpcError(res, 200, message.id ?? null, ERROR_MCP_OFFLINE, 'Resolved MCP server is offline.');
+    respondJsonRpcError(res, 200, message.id ?? null, ERROR_MCP_OFFLINE, getMcpOfflineMessage());
     return;
   }
   const retryAttempt = await forwardMcpMessage(refreshed, payload, req, res);
   if (retryAttempt.ok) {
     return;
   }
-  respondJsonRpcError(res, 200, message.id ?? null, ERROR_MANAGER_UNREACHABLE, 'Manager unreachable.');
+  respondJsonRpcError(res, 200, message.id ?? null, ERROR_MANAGER_UNREACHABLE, getManagerUnreachableMessage());
 }
 
 async function handleMcpHttpRequest(
@@ -2280,7 +2435,16 @@ async function handleMcpHttpRequest(
   }
   const sessionId = getSessionIdFromRequest(req);
   if (!sessionId) {
-    respondJsonRpcError(res, 400, rpcMessage.id ?? null, -32600, 'Missing Mcp-Session-Id.');
+    respondJsonRpcError(
+      res,
+      400,
+      rpcMessage.id ?? null,
+      -32600,
+      appendNextStep(
+        'Missing Mcp-Session-Id.',
+        `start a new MCP session and call ${REQUEST_WORKSPACE_METHOD} before other tool calls.`,
+      ),
+    );
     return;
   }
   let session = resolveSessionByHeaderId(sessionId);
@@ -2291,7 +2455,7 @@ async function handleMcpHttpRequest(
         400,
         rpcMessage.id ?? null,
         -32600,
-        'Unknown Mcp-Session-Id. Call lmToolsBridge.requestWorkspaceMCPServer to re-bind.',
+        getUnknownSessionMessage(),
       );
       return;
     }

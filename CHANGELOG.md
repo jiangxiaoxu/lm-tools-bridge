@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.105] - 2026-03-04
+
+### English
+
+#### Added
+- Handshake responses now include actionable `guidance` fields (`nextSteps` and `recoveryOnError`) to standardize schema-read, discovery-refresh, and rebind-retry flows.
+
+#### Changed
+- Manager JSON-RPC and direct-call validation errors now provide consistent `Next step:` recovery hints for missing/unknown session, workspace mismatch, offline MCP, invalid params, and retry guidance.
+- Handshake and direct-call metadata descriptions were centralized to reduce drift across tool/resource/template payloads.
+
+### 中文
+
+#### 新增
+- Handshake 返回新增可执行 `guidance` 字段(`nextSteps` 与 `recoveryOnError`),统一 schema read,discovery refresh,rebind retry 流程指引。
+
+#### 变更
+- Manager 的 JSON-RPC 与 direct-call 参数校验错误统一补充 `Next step:` 恢复提示,覆盖 missing/unknown session,workspace mismatch,offline MCP,invalid params 与重试路径。
+- Handshake 与 direct-call 的元数据描述改为集中复用,减少 tool/resource/template 文案漂移。
+
 ## [1.0.104] - 2026-03-04
 
 ### English

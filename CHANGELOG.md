@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.104] - 2026-03-04
+
+### English
+
+#### Added
+- Added startup qgrep auto-repair: when startup refresh `update` fails with a corruption-like assertion signature (`Assertion failed` and `filter.cpp`/`entries.entries`), the extension triggers one rebuild attempt per workspace per startup session.
+
+#### Changed
+- qgrep startup refresh now tracks one-shot per-workspace repair state and emits `qgrep.startup-repair:<workspace>` logs (`trigger`/`success`/`fail`/`skip`).
+
+### 中文
+
+#### 新增
+- 新增 qgrep 启动期自动修复: 当启动刷新 `update` 出现坏索引特征断言(`Assertion failed` 且包含 `filter.cpp`/`entries.entries`)时,扩展会在本次启动周期内按 workspace 自动尝试一次重建。
+
+#### 变更
+- qgrep 启动刷新新增按 workspace 的一次性修复状态跟踪,并输出 `qgrep.startup-repair:<workspace>` 日志(`trigger`/`success`/`fail`/`skip`)。
+
 ## [1.0.103] - 2026-03-03
 
 ### English

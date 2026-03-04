@@ -111,6 +111,8 @@ interface WorkspaceQgrepState {
   activeIndexCommandProcess?: ChildProcessWithoutNullStreams;
   activeIndexCommandKind?: QgrepIndexCommandKind;
   activeIndexCommandCancelledProcess?: ChildProcessWithoutNullStreams;
+  startupRefreshPending: boolean;
+  startupAutoRepairAttempted: boolean;
 }
 
 interface WorkspaceIndexProgress {
@@ -559,6 +561,7 @@ class QgrepService implements vscode.Disposable {
     if (!this.isWorkspaceInitialized(state)) {
       return;
     }
+    state.startupRefreshPending = true;
     state.managedSearchExcludeDirty = true;
     state.autoUpdateDirty = true;
     qgrepLogger.info(`[qgrep.startup-update:${state.folder.name}] queued startup refresh`);
@@ -1571,6 +1574,8 @@ class QgrepService implements vscode.Disposable {
       pendingIndexOperationCount: 0,
       managedSearchExcludeDirty: false,
       restartOnExit: false,
+      startupRefreshPending: false,
+      startupAutoRepairAttempted: false,
     };
   }
 
@@ -1900,6 +1905,8 @@ class QgrepService implements vscode.Disposable {
 
     const queuedCount = state.pendingCreateDeleteCount;
     const shouldSyncManagedSearchExclude = state.managedSearchExcludeDirty;
+    const isStartupRefreshRun = state.startupRefreshPending;
+    state.startupRefreshPending = false;
     state.pendingCreateDeleteCount = 0;
     state.autoUpdateDirty = false;
     state.managedSearchExcludeDirty = false;
@@ -1916,6 +1923,9 @@ class QgrepService implements vscode.Disposable {
       }
     } catch (error) {
       qgrepLogger.warn(`[qgrep.autoupdate:${state.folder.name}] update failed: ${String(error)}`);
+      if (isStartupRefreshRun) {
+        await this.tryStartupAutoRepair(state, error);
+      }
     } finally {
       state.autoUpdateInFlight = false;
     }
@@ -1967,6 +1977,38 @@ class QgrepService implements vscode.Disposable {
       }
     });
     return cancelledByClear ? 'cancelled' : 'done';
+  }
+
+  private async tryStartupAutoRepair(state: WorkspaceQgrepState, error: unknown): Promise<void> {
+    if (!this.isCorruptIndexAssertionError(error)) {
+      qgrepLogger.info(`[qgrep.startup-repair:${state.folder.name}] skip non-corruption error`);
+      return;
+    }
+    if (state.startupAutoRepairAttempted) {
+      qgrepLogger.info(`[qgrep.startup-repair:${state.folder.name}] skip already attempted`);
+      return;
+    }
+    if (this.disposed || this.states.get(state.key) !== state || !this.isWorkspaceInitialized(state)) {
+      qgrepLogger.info(`[qgrep.startup-repair:${state.folder.name}] skip workspace no longer available`);
+      return;
+    }
+
+    state.startupAutoRepairAttempted = true;
+    qgrepLogger.warn(`[qgrep.startup-repair:${state.folder.name}] trigger assertion signature detected; rebuilding index`);
+    try {
+      await this.rebuildWorkspace(state);
+      qgrepLogger.info(`[qgrep.startup-repair:${state.folder.name}] success rebuild completed`);
+    } catch (rebuildError) {
+      qgrepLogger.warn(`[qgrep.startup-repair:${state.folder.name}] fail ${String(rebuildError)}`);
+    }
+  }
+
+  private isCorruptIndexAssertionError(error: unknown): boolean {
+    const message = String(error).toLowerCase();
+    if (!message.includes('assertion failed')) {
+      return false;
+    }
+    return message.includes('filter.cpp') || message.includes('entries.entries');
   }
 
   private async syncManagedSearchExcludeBlock(state: WorkspaceQgrepState): Promise<void> {

@@ -25,6 +25,9 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 - Handshake is required before calling bridged workspace tools.
 - If `Mcp-Session-Id` is stale, run handshake again with current session header.
 - `roots/list` is manager-initiated when client declares `capabilities.roots`.
+- Handshake and direct-call metadata are concise; fallback guidance is returned by tools via `guidance` payload fields and actionable error messages.
+- Manager JSON-RPC errors include actionable `Next step:` recovery hints in `error.message`.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` responses now include `guidance` with `nextSteps` and `recoveryOnError` to drive failure recovery in tool flows.
 
 ### Built-in Tool Summary
 
@@ -45,6 +48,7 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 - `lm_qgrepSearchFiles` does not support `searchPath`.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-init all current workspaces and wait until ready (timeout `150s`).
 - Startup refresh for already initialized workspaces now syncs extension-managed `workspace.cfg` blocks before `qgrep update`.
+- During startup refresh, if qgrep reports a corruption-like assertion signature (`Assertion failed` with `filter.cpp`/`entries.entries`), the extension auto-runs one rebuild attempt per workspace for this startup session.
 - Managed blocks in `workspace.cfg` sync on init/rebuild/startup refresh/search.exclude changes:
   - Unreal include block: `*.ush`, `*.usf`, `*.ini`
   - PowerShell include block: `*.ps1`
@@ -90,7 +94,9 @@ Open VS Code Output panel and select:
 - `workspace not set` or `Unknown Mcp-Session-Id`: rerun handshake.
 - `workspace not matched`: ensure `cwd` is inside target workspace (Windows `cwd` must be a normal absolute path or `\\?\` + normal absolute path; non-normal NT namespace forms are rejected).
 - qgrep waits too long: check `lm_qgrepGetStatus`.
+- If qgrep still reports assertion failures after startup auto-repair, run `LM Tools Bridge: Qgrep Rebuild Indexes` and retry once.
 - `Tool not found or disabled`: ensure tool is both exposed and enabled.
+- For manager/session/direct-call errors, follow the `Next step:` hint in the returned `error.message` before using shell fallback.
 
 ### Change History
 See `CHANGELOG.md`.
@@ -120,6 +126,9 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - 调用 workspace 桥接工具前,必须先握手.
 - `Mcp-Session-Id` 过期时,使用当前 session 头重新握手.
 - 若客户端在 `initialize` 声明 `capabilities.roots`,manager 会主动发起 `roots/list`.
+- 握手与 direct-call 元信息保持精简;fallback 指引主要通过工具返回的 `guidance` 字段和可执行错误信息提供.
+- Manager JSON-RPC 错误会在 `error.message` 中附带可执行的 `Next step:` 恢复提示.
+- 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回会包含 `guidance`(`nextSteps`,`recoveryOnError`),用于在工具失败流程中给出可执行恢复步骤.
 
 ### 内置工具摘要
 
@@ -140,6 +149,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - `lm_qgrepSearchFiles` 不支持 `searchPath`.
 - `lm_qgrepSearchText` 和 `lm_qgrepSearchFiles` 会按需自动初始化当前全部 workspace,并等待到就绪(超时 `150s`).
 - 对已初始化 workspace,扩展启动后的后台刷新会先同步插件受管 `workspace.cfg` 区块,再执行 `qgrep update`.
+- 启动刷新阶段若 qgrep 返回坏索引特征断言(`Assertion failed` 且包含 `filter.cpp`/`entries.entries`),插件会在本次启动周期内对该 workspace 自动尝试一次重建.
 - `workspace.cfg` 受管区块会在 init/rebuild/启动刷新/search.exclude 变更时同步:
   - Unreal include: `*.ush`,`*.usf`,`*.ini`
   - PowerShell include: `*.ps1`
@@ -185,7 +195,9 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - `workspace not set` 或 `Unknown Mcp-Session-Id`: 重新握手.
 - `workspace not matched`: 检查 `cwd` 是否在目标 workspace 内(Windows `cwd` 仅支持普通绝对路径和 `\\?\` + 普通绝对路径,非普通 NT namespace 写法会被拒绝).
 - qgrep 等待过久: 先看 `lm_qgrepGetStatus`.
+- 如果启动自动修复后仍出现 qgrep 断言错误,执行 `LM Tools Bridge: Qgrep Rebuild Indexes` 后重试一次.
 - `Tool not found or disabled`: 确认工具同时处于 exposed 与 enabled.
+- 遇到 manager/session/direct-call 相关错误时,优先按返回 `error.message` 里的 `Next step:` 执行恢复,再考虑 shell fallback.
 
 ### 变更历史
 参见 `CHANGELOG.md`.

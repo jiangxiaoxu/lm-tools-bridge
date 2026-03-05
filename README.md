@@ -46,9 +46,11 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 - `lm_qgrepSearchText`: text search via bundled `bin/qgrep.exe` (`query/caseSensitive/isRegexp/includePattern/maxResults`).
 - `lm_qgrepSearchText` defaults to glob query mode; set `isRegexp=true` to switch to regex mode.
 - In glob mode, `lm_qgrepSearchText.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
+- In text glob mode, `*` and `?` do not match `/`, while `**` can match across `/`.
 - `lm_qgrepSearchText` supports `includePattern` and does not support `searchPath` or `includeIgnoredFiles`.
 - `lm_qgrepSearchFiles`: indexed file search via `query/isRegexp/maxResults` (default glob, optional regex).
 - In glob mode, `lm_qgrepSearchFiles.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
+- In files glob mode, queries without `/` match any depth (for example, `*.md` behaves like `**/*.md`).
 - `lm_qgrepSearchFiles` no longer supports legacy `mode` or `searchPath` inputs.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-init all current workspaces and wait until ready (timeout `150s`).
 - Startup refresh for already initialized workspaces now syncs extension-managed `workspace.cfg` blocks before `qgrep update`.
@@ -151,9 +153,11 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - `lm_qgrepSearchText`: 通过内置 `bin/qgrep.exe` 做文本搜索(`query/caseSensitive/isRegexp/includePattern/maxResults`).
 - `lm_qgrepSearchText` 默认使用 glob 查询模式,传 `isRegexp=true` 切换到 regex 模式.
 - 在 glob 模式下,`lm_qgrepSearchText.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
+- 文本 glob 模式下,`*` 和 `?` 不匹配 `/`,`**` 可以跨 `/` 匹配.
 - `lm_qgrepSearchText` 支持 `includePattern`,不支持 `searchPath` 和 `includeIgnoredFiles`.
 - `lm_qgrepSearchFiles`: 使用 `query/isRegexp/maxResults` 做索引文件搜索(默认 glob,可切 regex).
 - 在 glob 模式下,`lm_qgrepSearchFiles.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
+- 文件 glob 模式下,不含 `/` 的查询会匹配任意目录深度(例如 `*.md` 等价 `**/*.md`).
 - `lm_qgrepSearchFiles` 不再支持旧的 `mode` 和 `searchPath` 输入.
 - `lm_qgrepSearchText` 和 `lm_qgrepSearchFiles` 会按需自动初始化当前全部 workspace,并等待到就绪(超时 `150s`).
 - 对已初始化 workspace,扩展启动后的后台刷新会先同步插件受管 `workspace.cfg` 区块,再执行 `qgrep update`.

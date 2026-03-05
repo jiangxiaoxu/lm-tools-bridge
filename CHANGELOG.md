@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.107] - 2026-03-05
+
+### English
+
+#### Changed
+- Unified qgrep glob parsing for `lm_qgrepSearchText` and `lm_qgrepSearchFiles` so both follow the same VS Code glob token semantics.
+- `lm_qgrepSearchFiles` glob queries without `/` now match at any depth (for example, `*.md` behaves like `**/*.md`), aligning with `lm_findFiles`/ripgrep glob behavior.
+- `lm_qgrepSearchText` glob mode now uses the same slash-aware token behavior (`*`/`?` do not cross `/`, `**` can cross `/`) while preserving substring matching.
+- Added qgrep glob semantic tests and updated docs/tool descriptions to reflect the new behavior.
+
+### 中文
+
+#### 变更
+- 统一 `lm_qgrepSearchText` 与 `lm_qgrepSearchFiles` 的 qgrep glob 解析,两者使用同一套 VS Code glob token 语义.
+- `lm_qgrepSearchFiles` 在 glob 模式下,不含 `/` 的查询现在会匹配任意目录深度(例如 `*.md` 等价 `**/*.md`),与 `lm_findFiles`/ripgrep glob 行为对齐.
+- `lm_qgrepSearchText` 在 glob 模式下改为同样的斜杠敏感 token 行为(`*`/`?` 不跨 `/`,`**` 可跨 `/`),并保持子串匹配.
+- 新增 qgrep glob 语义测试,并同步更新文档与 tool 描述.
+
 ## [1.0.106] - 2026-03-05
 
 ### English

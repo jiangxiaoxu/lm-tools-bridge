@@ -2,6 +2,12 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import {
+  compileGlobToRegexSource,
+  hasUnescapedGlobMeta,
+  normalizeFilesQueryGlobPattern,
+  normalizeWorkspaceSearchGlobPattern,
+} from './qgrepGlob';
 
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
@@ -922,8 +928,8 @@ class QgrepService implements vscode.Disposable {
       throw new Error('query must be a non-empty glob string when isRegexp is false.');
     }
     try {
-      const matcher = compileWorkspaceGlobPathMatcher(trimmed);
-      const regexSource = `^${matcher.pathRegexSource}$`;
+      const normalizedQuery = normalizeFilesQueryGlobPattern(trimmed);
+      const regexSource = `^${compileGlobToRegexSource(normalizedQuery, 'query glob pattern')}$`;
       const syntaxError = validateQgrepConfigRegexSyntax(regexSource);
       if (syntaxError) {
         throw new Error(`generated qgrep regex is not supported (${syntaxError}).`);
@@ -931,6 +937,9 @@ class QgrepService implements vscode.Disposable {
       return regexSource;
     } catch (error) {
       const message = String(error);
+      if (message.startsWith('Invalid query glob pattern')) {
+        throw new Error(message);
+      }
       if (message.startsWith('Invalid includePattern glob pattern')) {
         throw new Error(message.replace('Invalid includePattern glob pattern', 'Invalid query glob pattern'));
       }
@@ -2710,76 +2719,6 @@ function delayMs(durationMs: number): Promise<void> {
   });
 }
 
-interface GlobPatternParserState {
-  pattern: string;
-  index: number;
-}
-
-function isGlobMetaCharacter(char: string): boolean {
-  return char === '*' || char === '?' || char === '[' || char === ']' || char === '{' || char === '}';
-}
-
-function hasUnescapedGlobMeta(pattern: string): boolean {
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    if (char === '\\') {
-      const next = pattern[index + 1];
-      if (next && isGlobMetaCharacter(next)) {
-        index += 1;
-      }
-      continue;
-    }
-    if (isGlobMetaCharacter(char)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function normalizeWorkspaceSearchGlobPattern(pattern: string): string {
-  const trimmed = pattern.trim();
-  let normalized = '';
-  for (let index = 0; index < trimmed.length; index += 1) {
-    const char = trimmed[index];
-    if (char === '/') {
-      normalized += '/';
-      continue;
-    }
-    if (char !== '\\') {
-      normalized += char;
-      continue;
-    }
-
-    const next = trimmed[index + 1];
-    if (next === undefined) {
-      throw new Error('Invalid includePattern glob pattern: trailing escape (\\).');
-    }
-    if (next === '/' || next === '\\') {
-      normalized += '/';
-      index += 1;
-      continue;
-    }
-    if (isGlobMetaCharacter(next) || next === ',') {
-      const previousNormalizedChar = normalized.length > 0 ? normalized[normalized.length - 1] : '';
-      const treatAsEscape = previousNormalizedChar === '' || previousNormalizedChar === '/';
-      if (treatAsEscape) {
-        normalized += `\\${next}`;
-        index += 1;
-        continue;
-      }
-    }
-
-    normalized += '/';
-  }
-
-  const hasUncPrefix = normalized.startsWith('//');
-  const uncSafeNormalized = hasUncPrefix
-    ? `//${normalized.slice(2).replace(/\/{2,}/g, '/')}`
-    : normalized.replace(/\/{2,}/g, '/');
-
-  return uncSafeNormalized.replace(/^\.\//u, '');
-}
-
 function compileWorkspaceGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
   const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
   if (normalizedPattern.length === 0) {
@@ -2832,294 +2771,24 @@ function compileAbsoluteGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
 }
 
 function compileWorkspaceGlobToRegexSource(glob: string): string {
-  const state: GlobPatternParserState = {
-    pattern: glob,
-    index: 0,
-  };
-  const source = parseGlobSequence(state, '');
-  if (state.index !== state.pattern.length) {
-    throw new Error(`Invalid includePattern glob pattern near index ${String(state.index)}.`);
-  }
-  return source;
-}
-
-function parseGlobSequence(state: GlobPatternParserState, stopChars: string): string {
-  let result = '';
-  while (state.index < state.pattern.length) {
-    const char = state.pattern[state.index];
-    if (stopChars.includes(char)) {
-      break;
-    }
-
-    if (char === '\\') {
-      state.index += 1;
-      if (state.index >= state.pattern.length) {
-        throw new Error('Invalid includePattern glob pattern: trailing escape (\\).');
-      }
-      const escaped = state.pattern[state.index];
-      result += escapeRegex(escaped);
-      state.index += 1;
-      continue;
-    }
-
-    if (char === '*') {
-      if (state.pattern[state.index + 1] === '*') {
-        let endIndex = state.index + 1;
-        while (state.pattern[endIndex + 1] === '*') {
-          endIndex += 1;
-        }
-        state.index = endIndex + 1;
-        if (state.pattern[state.index] === '/') {
-          state.index += 1;
-          result += '(.*/)?';
-        } else {
-          result += '.*';
-        }
-        continue;
-      }
-      state.index += 1;
-      result += '[^/]*';
-      continue;
-    }
-
-    if (char === '?') {
-      state.index += 1;
-      result += '[^/]';
-      continue;
-    }
-
-    if (char === '[') {
-      result += parseGlobCharClass(state);
-      continue;
-    }
-
-    if (char === '{') {
-      result += parseGlobBraceGroup(state);
-      continue;
-    }
-
-    if (char === '/') {
-      result += '/';
-      state.index += 1;
-      while (state.pattern[state.index] === '/') {
-        state.index += 1;
-      }
-      continue;
-    }
-
-    result += escapeRegex(char);
-    state.index += 1;
-  }
-  return result;
-}
-
-function parseGlobCharClass(state: GlobPatternParserState): string {
-  state.index += 1;
-  if (state.index >= state.pattern.length) {
-    throw new Error('Invalid includePattern glob pattern: unterminated character class.');
-  }
-
-  let negated = false;
-  const first = state.pattern[state.index];
-  if (first === '!' || first === '^') {
-    negated = true;
-    state.index += 1;
-  }
-
-  let content = '';
-  let hasContent = false;
-  while (state.index < state.pattern.length) {
-    const char = state.pattern[state.index];
-    if (char === ']' && hasContent) {
-      state.index += 1;
-      return `[${negated ? '^' : ''}${content}]`;
-    }
-
-    if (char === '\\') {
-      state.index += 1;
-      if (state.index >= state.pattern.length) {
-        throw new Error('Invalid includePattern glob pattern: unterminated escape in character class.');
-      }
-      content += escapeRegexCharClass(state.pattern[state.index]);
-      hasContent = true;
-      state.index += 1;
-      continue;
-    }
-
-    if (char === '/') {
-      content += '\\/';
-      hasContent = true;
-      state.index += 1;
-      continue;
-    }
-
-    content += escapeRegexCharClass(char);
-    hasContent = true;
-    state.index += 1;
-  }
-
-  throw new Error('Invalid includePattern glob pattern: unterminated character class.');
-}
-
-function parseGlobBraceGroup(state: GlobPatternParserState): string {
-  state.index += 1;
-  const branches: string[] = [];
-  while (true) {
-    const branch = parseGlobSequence(state, ',}');
-    branches.push(branch);
-    if (state.index >= state.pattern.length) {
-      throw new Error('Invalid includePattern glob pattern: unterminated brace expression.');
-    }
-    const token = state.pattern[state.index];
-    if (token === ',') {
-      state.index += 1;
-      continue;
-    }
-    if (token === '}') {
-      state.index += 1;
-      break;
-    }
-  }
-  return `(${branches.join('|')})`;
-}
-
-function escapeRegexCharClass(char: string): string {
-  if (char === '\\' || char === ']' || char === '^') {
-    return `\\${char}`;
-  }
-  return char;
+  return compileGlobToRegexSource(glob, 'includePattern glob pattern');
 }
 
 function compileTextQueryGlobToRegexSource(glob: string): string {
-  const state: GlobPatternParserState = {
-    pattern: glob,
-    index: 0,
-  };
-  const source = parseTextQueryGlobSequence(state, '');
-  if (state.index !== state.pattern.length) {
-    throw new Error(`Invalid query glob pattern near index ${String(state.index)}.`);
-  }
   try {
+    const source = compileGlobToRegexSource(glob, 'query glob pattern');
     // Validate generated regex in JS first for early error reporting.
     // qgrep query execution still uses RE2-compatible matching rules.
     // eslint-disable-next-line no-new
     new RegExp(source, 'u');
+    return source;
   } catch (error) {
-    throw new Error(`Invalid query glob pattern: ${String(error)}`);
+    const message = String(error);
+    if (message.startsWith('Invalid query glob pattern')) {
+      throw new Error(message);
+    }
+    throw new Error(`Invalid query glob pattern: ${message}`);
   }
-  return source;
-}
-
-function parseTextQueryGlobSequence(state: GlobPatternParserState, stopChars: string): string {
-  let result = '';
-  while (state.index < state.pattern.length) {
-    const char = state.pattern[state.index];
-    if (stopChars.includes(char)) {
-      break;
-    }
-
-    if (char === '\\') {
-      state.index += 1;
-      if (state.index >= state.pattern.length) {
-        throw new Error('Invalid query glob pattern: trailing escape (\\).');
-      }
-      result += escapeRegex(state.pattern[state.index]);
-      state.index += 1;
-      continue;
-    }
-
-    if (char === '*') {
-      while (state.pattern[state.index + 1] === '*') {
-        state.index += 1;
-      }
-      state.index += 1;
-      result += '.*';
-      continue;
-    }
-
-    if (char === '?') {
-      state.index += 1;
-      result += '.';
-      continue;
-    }
-
-    if (char === '[') {
-      result += parseTextQueryGlobCharClass(state);
-      continue;
-    }
-
-    if (char === '{') {
-      result += parseTextQueryGlobBraceGroup(state);
-      continue;
-    }
-
-    result += escapeRegex(char);
-    state.index += 1;
-  }
-  return result;
-}
-
-function parseTextQueryGlobCharClass(state: GlobPatternParserState): string {
-  state.index += 1;
-  if (state.index >= state.pattern.length) {
-    throw new Error('Invalid query glob pattern: unterminated character class.');
-  }
-
-  let negated = false;
-  const first = state.pattern[state.index];
-  if (first === '!' || first === '^') {
-    negated = true;
-    state.index += 1;
-  }
-
-  let content = '';
-  let hasContent = false;
-  while (state.index < state.pattern.length) {
-    const char = state.pattern[state.index];
-    if (char === ']' && hasContent) {
-      state.index += 1;
-      return `[${negated ? '^' : ''}${content}]`;
-    }
-
-    if (char === '\\') {
-      state.index += 1;
-      if (state.index >= state.pattern.length) {
-        throw new Error('Invalid query glob pattern: unterminated escape in character class.');
-      }
-      content += escapeRegexCharClass(state.pattern[state.index]);
-      hasContent = true;
-      state.index += 1;
-      continue;
-    }
-
-    content += escapeRegexCharClass(char);
-    hasContent = true;
-    state.index += 1;
-  }
-
-  throw new Error('Invalid query glob pattern: unterminated character class.');
-}
-
-function parseTextQueryGlobBraceGroup(state: GlobPatternParserState): string {
-  state.index += 1;
-  const branches: string[] = [];
-  while (true) {
-    const branch = parseTextQueryGlobSequence(state, ',}');
-    branches.push(branch);
-    if (state.index >= state.pattern.length) {
-      throw new Error('Invalid query glob pattern: unterminated brace expression.');
-    }
-    const token = state.pattern[state.index];
-    if (token === ',') {
-      state.index += 1;
-      continue;
-    }
-    if (token === '}') {
-      state.index += 1;
-      break;
-    }
-  }
-  return `(${branches.join('|')})`;
 }
 
 function normalizeSearchExcludeGlob(pattern: string): string | undefined {

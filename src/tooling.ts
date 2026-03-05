@@ -346,6 +346,7 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep.',
   'Prefer this tool first for workspace text search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
+  'In glob mode, * and ? do not match /, while ** can match across /.',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
   'When caseSensitive=true, search is always case-sensitive. Otherwise smart-case is used (all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive).',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
@@ -375,7 +376,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Text search pattern. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); set isRegexp=true to treat query as a regular expression.',
+      description: 'Text search pattern. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}), where * and ? do not match / and ** can match across /; set isRegexp=true to treat query as a regular expression.',
     },
     caseSensitive: {
       type: 'boolean',
@@ -404,6 +405,7 @@ const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep.',
   'Prefer this tool first for workspace file search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
+  'In glob mode, queries without / are matched at any depth (for example, *.md behaves like **/*.md).',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
   'qgrep indexing and file search are workspace-only; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
@@ -420,7 +422,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); set isRegexp=true to treat query as a regular expression.',
+      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); set isRegexp=true to treat query as a regular expression.',
     },
     isRegexp: {
       type: 'boolean',

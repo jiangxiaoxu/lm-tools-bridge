@@ -17,7 +17,9 @@
 - `lm_qgrepSearchText` always executes the bundled binary at `bin/qgrep.exe` and defaults to glob query mode; set `isRegexp=true` to switch query interpretation to regex.
 - `lm_qgrepSearchText` uses smart-case when `caseSensitive` is false/omitted (all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive); `caseSensitive=true` forces sensitive matching.
 - In glob mode, both `lm_qgrepSearchText.query` and `lm_qgrepSearchFiles.query` follow VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
+- In glob mode for `lm_qgrepSearchText.query`, `*` and `?` do not match `/`, while `**` can match across `/`; query matching remains substring-based (no implicit `^...$` anchoring).
 - `lm_qgrepSearchFiles` accepts `query`/`isRegexp`/`maxResults`; default query semantics are VS Code-style glob and `isRegexp=true` switches to regex.
+- In glob mode for `lm_qgrepSearchFiles.query`, patterns without `/` are treated as any-depth file globs (equivalent to `**/<pattern>`).
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.
 - `lm_qgrepSearchText` uses `maxResultsApplied` as the backend qgrep `search` call limit and clamps to `2000`; payload includes `maxResultsRequested` only when text input is clamped. `lm_qgrepSearchFiles` also clamps `maxResults` to `2000`, then forwards `maxResultsApplied` as the backend qgrep `files` call limit.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true and then `totalAvailable` is a lower bound; `hardLimitHit` is returned only when the backend query limit is hit.
@@ -93,6 +95,7 @@
 - Config scope -> `src/configuration.ts`, `src/extension.ts`.
 - Exposure/enable policy -> `src/tooling.ts`.
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
+- qgrep glob compiler/shared semantics -> `src/qgrepGlob.ts`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
 - Handshake/session routing -> `src/manager.ts`.
 - Diagnostics contract -> `src/tooling.ts`.
@@ -101,7 +104,7 @@
 
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
-- Path-tests: run `npm test` to verify Windows workspace path acceptance and comparable-path normalization for both `G:\...` and `\\?\G:\...`.
+- Tests: run `npm test` to verify Windows workspace path acceptance/comparable-path normalization and qgrep glob semantics (`text` + `files`).
 - Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
 - Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, and rejects non-normal NT namespace formats.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).

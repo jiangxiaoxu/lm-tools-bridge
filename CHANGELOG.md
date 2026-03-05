@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.106] - 2026-03-05
+
+### English
+
+#### Changed
+- `lm_qgrepSearchFiles` input is aligned to a `lm_findFiles`-like shape: `query`/`maxResults`, with optional `isRegexp` (default `false`).
+- In default mode, `lm_qgrepSearchFiles.query` now follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`); `isRegexp=true` switches query parsing to regex.
+- `lm_qgrepSearchFiles` now rejects legacy `mode` and `searchPath` inputs; `includeIgnoredFiles` is tolerated and ignored for compatibility.
+- `lm_qgrepSearchFiles` payload now reports query semantics as `glob-vscode` or `regex`, and includes optional `scope` for scoped regex queries.
+- Documentation and agent instructions now pin the same VS Code glob baseline for both `lm_qgrepSearchText.query` and `lm_qgrepSearchFiles.query`.
+
+### 中文
+
+#### 变更
+- `lm_qgrepSearchFiles` 入参对齐到近似 `lm_findFiles` 形态: `query`/`maxResults`, 并新增可选 `isRegexp`(默认 `false`).
+- 默认模式下, `lm_qgrepSearchFiles.query` 采用 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`), 传 `isRegexp=true` 切换为 regex 解析.
+- `lm_qgrepSearchFiles` 现在会拒绝旧 `mode` 和 `searchPath` 入参; 传 `includeIgnoredFiles` 时仅做兼容并静默忽略.
+- `lm_qgrepSearchFiles` payload 的查询语义标记更新为 `glob-vscode` 或 `regex`, 并在作用域查询时返回可选 `scope`.
+- 文档与指令文件同步固化 glob 基线: `lm_qgrepSearchText.query` 与 `lm_qgrepSearchFiles.query` 均以 VS Code glob 语义为准.
+
 ## [1.0.105] - 2026-03-04
 
 ### English

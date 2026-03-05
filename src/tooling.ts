@@ -343,15 +343,18 @@ const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
 };
 
 const LM_QGREP_SEARCH_DESCRIPTION = [
-  'Search indexed workspace text using qgrep regular expressions.',
+  'Search indexed workspace text using qgrep.',
   'Prefer this tool first for workspace text search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
-  'Default behavior uses smart-case: all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive.',
+  'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
+  'Set isRegexp=true to switch query interpretation to regular expression mode.',
+  'When caseSensitive=true, search is always case-sensitive. Otherwise smart-case is used (all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive).',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
-  'If searchPath is omitted, search runs across all initialized workspace folders.',
-  'searchPath supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., or workspace-relative.',
-  'Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js',
+  'If includePattern is omitted, search runs across all initialized workspace folders.',
+  'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., or workspace-relative.',
+  'includePattern examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js',
+  'includeIgnoredFiles is not supported by this tool.',
 ].join('\n');
 
 const LM_QGREP_GET_STATUS_DESCRIPTION = [
@@ -372,9 +375,18 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Regular expression query string for qgrep search. smart-case is applied by default (all-lowercase = case-insensitive, contains uppercase = case-sensitive).',
+      description: 'Text search pattern. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); set isRegexp=true to treat query as a regular expression.',
     },
-    searchPath: {
+    caseSensitive: {
+      type: 'boolean',
+      description: 'Whether search is case-sensitive. When true, force case-sensitive. When false or omitted, smart-case is used (all-lowercase = case-insensitive, contains uppercase = case-sensitive).',
+    },
+    isRegexp: {
+      type: 'boolean',
+      default: false,
+      description: 'Whether query is treated as a regular expression. Default false means query uses glob mode.',
+    },
+    includePattern: {
       type: 'string',
       description: 'Optional path scope as path or glob: absolute, WorkspaceName/..., or workspace-relative. Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js.',
     },
@@ -389,20 +401,18 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
 };
 
 const LM_QGREP_FILES_DESCRIPTION = [
-  'Search indexed workspace files using qgrep file search modes.',
+  'Search indexed workspace files using qgrep.',
   'Prefer this tool first for workspace file search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
-  'Supports qgrep files modes: fp (path regex), fn (file name regex), fs (space-delimited literal components), ff (fuzzy path).',
+  'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
+  'Set isRegexp=true to switch query interpretation to regular expression mode.',
   'qgrep indexing and file search are workspace-only; external folders cannot be indexed or searched.',
   'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
   'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
-  'If mode is omitted, default mode is fp.',
+  'Legacy mode/searchPath inputs are no longer supported by this tool.',
   'Examples:',
-  '{"query":"manager","mode":"fn"}',
-  '{"query":"manager\\\\.ts$","mode":"fn"}',
-  '{"query":"src/r/lmanager","mode":"ff","maxResults":20}',
-  '{"query":"render manager.c","mode":"fs"}',
-  '{"query":"src/.*controller","mode":"fp","maxResults":50}',
-  '{"query":"src/.*test","mode":"fp"}',
+  '{"query":"**/*.{ts,js}","maxResults":200}',
+  '{"query":"UE5/**/Manager*.h"}',
+  '{"query":"WorkspaceA/src/.*\\\\.ts$","isRegexp":true}',
 ].join('\n');
 
 const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
@@ -410,13 +420,12 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'File search query string. Semantics depend on mode: fp/fn use regex, fs uses space-delimited literal components, ff uses fuzzy path matching. Applied semantics are returned as querySemanticsApplied.',
+      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); set isRegexp=true to treat query as a regular expression.',
     },
-    mode: {
-      type: 'string',
-      enum: ['fp', 'fn', 'fs', 'ff'],
-      default: 'fp',
-      description: 'qgrep files mode. fp=path regex, fn=file name regex, fs=space-delimited literal components, ff=fuzzy path.',
+    isRegexp: {
+      type: 'boolean',
+      default: false,
+      description: 'Whether query is treated as a regular expression. Default false means query uses glob mode.',
     },
     maxResults: {
       type: 'integer',
@@ -2519,7 +2528,7 @@ function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
   const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
   const totalAvailableCapped = payload.totalAvailableCapped === true;
   const hardLimitHit = payload.hardLimitHit === true;
-  const searchPath = typeof payload.searchPath === 'string' ? payload.searchPath : null;
+  const includePattern = typeof payload.includePattern === 'string' ? payload.includePattern : null;
   const maxResultsApplied = typeof payload.maxResultsApplied === 'number'
     ? payload.maxResultsApplied
     : null;
@@ -2528,6 +2537,9 @@ function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
     : null;
   const casePolicy = typeof payload.casePolicy === 'string' ? payload.casePolicy : null;
   const caseModeApplied = typeof payload.caseModeApplied === 'string' ? payload.caseModeApplied : null;
+  const querySemanticsApplied = typeof payload.querySemanticsApplied === 'string'
+    ? payload.querySemanticsApplied
+    : null;
   const matches = Array.isArray(payload.matches) ? payload.matches : [];
   const lines: string[] = [
     'Qgrep search summary',
@@ -2535,8 +2547,9 @@ function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
     ...(hardLimitHit ? ['hardLimitHit: true'] : []),
     ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
     ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
+    ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
     ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
-    `scope: ${searchPath ?? 'all initialized workspaces'}`,
+    `scope: ${includePattern ?? 'all initialized workspaces'}`,
   ];
   if (matches.length === 0) {
     lines.push('No matches found.');
@@ -2715,8 +2728,7 @@ function formatQgrepFilesSummary(payload: Record<string, unknown>): string {
   const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
   const totalAvailableCapped = payload.totalAvailableCapped === true;
   const hardLimitHit = payload.hardLimitHit === true;
-  const searchPath = typeof payload.searchPath === 'string' ? payload.searchPath : null;
-  const mode = typeof payload.mode === 'string' ? payload.mode : 'fp';
+  const scope = typeof payload.scope === 'string' ? payload.scope : null;
   const maxResultsApplied = typeof payload.maxResultsApplied === 'number'
     ? payload.maxResultsApplied
     : null;
@@ -2729,13 +2741,12 @@ function formatQgrepFilesSummary(payload: Record<string, unknown>): string {
   const files = Array.isArray(payload.files) ? payload.files : [];
   const lines: string[] = [
     'Qgrep files summary',
-    `mode: ${mode}`,
     ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
     `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
     ...(hardLimitHit ? ['hardLimitHit: true'] : []),
     ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
     ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
-    `scope: ${searchPath ?? 'all initialized workspaces'}`,
+    `scope: ${scope ?? 'all initialized workspaces'}`,
   ];
   if (files.length === 0) {
     lines.push('No files found.');

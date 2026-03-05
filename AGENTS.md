@@ -42,6 +42,12 @@ npm version patch --no-git-tag-version
 
 - Text used in code (comments and user-facing output) must be in English.
 
+## Qgrep glob baseline
+
+- For `lm_qgrepSearchText.query` in glob mode, use VS Code glob semantics as the baseline: https://code.visualstudio.com/docs/editor/glob-patterns .
+- For `lm_qgrepSearchFiles.query` in glob mode, use VS Code glob semantics as the baseline: https://code.visualstudio.com/docs/editor/glob-patterns .
+- Do not introduce custom glob behavior that intentionally deviates from that baseline for either query field.
+
 ## TypeScript directives
 
 - `// @ts-expect-error` must include a reason and sit directly above the triggering line.

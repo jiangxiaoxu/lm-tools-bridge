@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.108] - 2026-03-05
+
+### English
+
+#### Changed
+- Switched successful `lm_qgrepSearchText`, `lm_qgrepSearchFiles`, and `lm_qgrepGetStatus` responses to text-only output (`LanguageModelTextPart`) to reduce token overhead.
+- Added `beforeContextLines`/`afterContextLines` to `lm_qgrepSearchText` (range `0-20`) and rendered merged multi-line preview blocks with fixed line-number prefixes.
+- Standardized qgrep text/file output formatting to absolute `/` paths, `====` for file switches, and `---` for same-file context blocks.
+- Updated qgrep tool descriptions and schemas to be more concise and input-focused, removing repetitive guidance lines.
+
+### 中文
+
+#### 变更
+- 将 `lm_qgrepSearchText`、`lm_qgrepSearchFiles`、`lm_qgrepGetStatus` 的成功返回改为纯文本(`LanguageModelTextPart`),减少 token 开销。
+- 为 `lm_qgrepSearchText` 增加 `beforeContextLines`/`afterContextLines` 参数(范围 `0-20`),并支持合并后的多行上下文预览与固定行号前缀输出。
+- 统一 qgrep 文本/文件输出格式: 绝对 `/` 路径,文件切换分隔符为 `====`,同文件上下文区块分隔符为 `---`。
+- 精简并收敛 qgrep 工具 description 与 schema 文案,改为更聚焦输入参数的信息表达。
+
 ## [1.0.107] - 2026-03-05
 
 ### English

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { TextDecoder } from 'node:util';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import * as z from 'zod';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
 import { resolveInputFilePath, resolveStructuredPath } from './workspacePath';
@@ -19,6 +20,12 @@ import {
   getConfigurationResource,
   resolveToolsConfigTarget,
 } from './configuration';
+import {
+  buildRenderedSearchBlocks,
+  formatQgrepSearchLine,
+  normalizeQgrepOutputPath,
+  requiresStructuredCustomToolResult,
+} from './qgrepOutput';
 
 type ToolingLogger = {
   info: (message: string) => void;
@@ -344,25 +351,24 @@ const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep.',
-  'Prefer this tool first for workspace text search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
   'In glob mode, * and ? do not match /, while ** can match across /.',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
+  'beforeContextLines/afterContextLines optionally add preview context lines around each match (0-20 each).',
+  'Output is plain text with absolute paths (/) and always includes line numbers.',
   'When caseSensitive=true, search is always case-sensitive. Otherwise smart-case is used (all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive).',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
-  'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
-  'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
   'If includePattern is omitted, search runs across all initialized workspace folders.',
   'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., or workspace-relative.',
   'includePattern examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js',
-  'includeIgnoredFiles is not supported by this tool.',
+  'Supported inputs: query, caseSensitive, isRegexp, includePattern, maxResults, beforeContextLines, afterContextLines.',
 ].join('\n');
 
 const LM_QGREP_GET_STATUS_DESCRIPTION = [
   'Get qgrep binary availability, workspace initialization/watch status, and indexing progress snapshot.',
+  'This tool accepts no input parameters.',
+  'Output is plain text.',
   'Returns status even when qgrep is not initialized yet.',
-  'When no workspace qgrep index is initialized, the returned status includes an auto-initialization hint explaining that lm_qgrepSearchText and lm_qgrepSearchFiles will auto-initialize indexes on actual query calls.',
-  'Use this tool to inspect qgrep readiness before calling qgrep search tools.',
 ].join('\n');
 
 const LM_QGREP_GET_STATUS_SCHEMA: Record<string, unknown> = {
@@ -385,7 +391,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
     isRegexp: {
       type: 'boolean',
       default: false,
-      description: 'Whether query is treated as a regular expression. Default false means query uses glob mode.',
+      description: 'Set true to treat query as a regular expression. Default false keeps glob mode.',
     },
     includePattern: {
       type: 'string',
@@ -395,7 +401,21 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
       type: 'integer',
       default: 300,
       minimum: 1,
-      description: 'Maximum number of matches to return and backend qgrep search call limit. Values above 2000 are clamped to 2000; payload returns maxResultsApplied and, when clamped, maxResultsRequested.',
+      description: 'Maximum number of matches to return and backend qgrep search call limit. Values above 2000 are clamped to 2000; plain-text output includes maxResultsApplied and, when clamped, maxResultsRequested.',
+    },
+    beforeContextLines: {
+      type: 'integer',
+      default: 0,
+      minimum: 0,
+      maximum: 20,
+      description: 'Optional number of context lines shown before each match in plain-text output. Integer between 0 and 20.',
+    },
+    afterContextLines: {
+      type: 'integer',
+      default: 0,
+      minimum: 0,
+      maximum: 20,
+      description: 'Optional number of context lines shown after each match in plain-text output. Integer between 0 and 20.',
     },
   },
   required: ['query'],
@@ -403,14 +423,12 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep.',
-  'Prefer this tool first for workspace file search: it uses qgrep as backend and is usually much faster than ripgrep on indexed workspaces.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
   'In glob mode, queries without / are matched at any depth (for example, *.md behaves like **/*.md).',
+  'Output is plain text with absolute paths (/).',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
   'qgrep indexing and file search are workspace-only; external folders cannot be indexed or searched.',
-  'On first use, this tool may auto-initialize qgrep indexes for all current workspace folders and block until indexing finishes.',
-  'Use lm_qgrepGetStatus to inspect indexing readiness/progress when a call waits or times out.',
-  'Legacy mode/searchPath inputs are no longer supported by this tool.',
+  'Supported inputs: query, isRegexp, maxResults.',
   'Examples:',
   '{"query":"**/*.{ts,js}","maxResults":200}',
   '{"query":"UE5/**/Manager*.h"}',
@@ -427,13 +445,13 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
     isRegexp: {
       type: 'boolean',
       default: false,
-      description: 'Whether query is treated as a regular expression. Default false means query uses glob mode.',
+      description: 'Set true to treat query as a regular expression. Default false keeps glob mode.',
     },
     maxResults: {
       type: 'integer',
       default: 300,
       minimum: 1,
-      description: 'Maximum number of file results to return and backend qgrep files call limit. Values above 2000 are clamped to 2000; payload returns maxResultsApplied and, when clamped, maxResultsRequested.',
+      description: 'Maximum number of file results to return and backend qgrep files call limit. Values above 2000 are clamped to 2000; plain-text output includes maxResultsApplied and, when clamped, maxResultsRequested.',
     },
   },
   required: ['query'],
@@ -1999,6 +2017,14 @@ function buildCustomToolResult(
   return result as unknown as vscode.LanguageModelToolResult;
 }
 
+function buildCustomTextToolResult(text: string): vscode.LanguageModelToolResult {
+  const sanitizedText = sanitizeToolTextForDisplay(text);
+  const result = {
+    content: [new vscode.LanguageModelTextPart(sanitizedText)],
+  };
+  return result as unknown as vscode.LanguageModelToolResult;
+}
+
 async function runFindTextInFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeFindTextInFilesSearch(input);
   return buildCustomToolResult(formatFindTextInFilesSummary(payload), payload);
@@ -2119,18 +2145,19 @@ async function runDebugStartTool(input: Record<string, unknown>): Promise<vscode
 
 async function runQgrepSearchTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeQgrepSearch(input);
-  return buildCustomToolResult(formatQgrepSearchSummary(payload), payload);
+  const textOutput = await formatQgrepSearchSummary(payload);
+  return buildCustomTextToolResult(textOutput);
 }
 
 async function runQgrepGetStatusTool(_input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const status = getQgrepStatusSummary();
   const payload = buildQgrepGetStatusPayload(status);
-  return buildCustomToolResult(formatQgrepGetStatusSummary(payload), payload);
+  return buildCustomTextToolResult(formatQgrepGetStatusSummary(payload));
 }
 
 async function runQgrepFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const payload = await executeQgrepFilesSearch(input);
-  return buildCustomToolResult(formatQgrepFilesSummary(payload), payload);
+  return buildCustomTextToolResult(formatQgrepFilesSummary(payload));
 }
 
 function parseOptionalStringInput(input: Record<string, unknown>, key: string): string | undefined {
@@ -2524,7 +2551,7 @@ function formatFindFilesSummary(payload: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
-function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
+async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promise<string> {
   const count = typeof payload.count === 'number' ? payload.count : 0;
   const capped = payload.capped === true;
   const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
@@ -2542,34 +2569,162 @@ function formatQgrepSearchSummary(payload: Record<string, unknown>): string {
   const querySemanticsApplied = typeof payload.querySemanticsApplied === 'string'
     ? payload.querySemanticsApplied
     : null;
-  const matches = Array.isArray(payload.matches) ? payload.matches : [];
+  const beforeContextLines = typeof payload.beforeContextLines === 'number'
+    ? payload.beforeContextLines
+    : 0;
+  const afterContextLines = typeof payload.afterContextLines === 'number'
+    ? payload.afterContextLines
+    : 0;
+  const groupedMatches = groupQgrepSearchMatchesByPath(payload);
   const lines: string[] = [
-    'Qgrep search summary',
+    'Qgrep search',
+    `query: ${typeof payload.query === 'string' ? payload.query : '<unknown>'}`,
+    ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
+    ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
+    `scope: ${includePattern ?? 'all initialized workspaces'}`,
     `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
     ...(hardLimitHit ? ['hardLimitHit: true'] : []),
     ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
     ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
-    ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
-    ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
-    `scope: ${includePattern ?? 'all initialized workspaces'}`,
+    `context: before=${beforeContextLines}, after=${afterContextLines}`,
   ];
-  if (matches.length === 0) {
+  if (groupedMatches.length === 0) {
     lines.push('No matches found.');
     return lines.join('\n');
   }
+  for (const group of groupedMatches) {
+    const renderedBlocks = await renderQgrepSearchBlocksForFile(
+      group.absolutePath,
+      group.matches,
+      beforeContextLines,
+      afterContextLines,
+    );
+    lines.push('====');
+    lines.push(normalizeQgrepOutputPath(group.absolutePath));
+    for (const block of renderedBlocks) {
+      lines.push('---');
+      for (const line of block.lines) {
+        lines.push(formatQgrepSearchLine(line.lineNumber, line.isMatch, line.text));
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+interface QgrepSearchMatchView {
+  absolutePath: string;
+  line: number;
+  preview: string;
+}
+
+interface QgrepSearchMatchGroup {
+  absolutePath: string;
+  matches: QgrepSearchMatchView[];
+}
+
+function groupQgrepSearchMatchesByPath(payload: Record<string, unknown>): QgrepSearchMatchGroup[] {
+  const matches = Array.isArray(payload.matches) ? payload.matches : [];
+  const grouped = new Map<string, QgrepSearchMatchView[]>();
+  const orderedPaths: string[] = [];
   for (const entry of matches) {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
-    const record = entry as { workspacePath?: unknown; line?: unknown; preview?: unknown };
-    const matchPath = typeof record.workspacePath === 'string' ? record.workspacePath : '<unknown>';
-    const line = typeof record.line === 'number' ? record.line : 0;
-    const preview = typeof record.preview === 'string' ? record.preview.trimEnd() : '';
-    lines.push('---');
-    lines.push(`// ${matchPath}:${line}`);
-    lines.push(preview);
+    const record = entry as { absolutePath?: unknown; line?: unknown; preview?: unknown };
+    const absolutePath = typeof record.absolutePath === 'string'
+      ? normalizeQgrepOutputPath(record.absolutePath)
+      : undefined;
+    const line = typeof record.line === 'number' ? record.line : undefined;
+    if (!absolutePath || !line || !Number.isInteger(line) || line <= 0) {
+      continue;
+    }
+    const preview = typeof record.preview === 'string'
+      ? record.preview.replace(/\r$/u, '')
+      : '';
+    const current = grouped.get(absolutePath);
+    if (current) {
+      current.push({
+        absolutePath,
+        line,
+        preview,
+      });
+      continue;
+    }
+    grouped.set(absolutePath, [{
+      absolutePath,
+      line,
+      preview,
+    }]);
+    orderedPaths.push(absolutePath);
   }
-  return lines.join('\n');
+
+  const result: QgrepSearchMatchGroup[] = [];
+  for (const absolutePath of orderedPaths) {
+    const fileMatches = grouped.get(absolutePath);
+    if (!fileMatches || fileMatches.length === 0) {
+      continue;
+    }
+    result.push({
+      absolutePath,
+      matches: fileMatches,
+    });
+  }
+  return result;
+}
+
+async function renderQgrepSearchBlocksForFile(
+  absolutePath: string,
+  matches: readonly QgrepSearchMatchView[],
+  beforeContextLines: number,
+  afterContextLines: number,
+): Promise<Array<{ lines: Array<{ lineNumber: number; isMatch: boolean; text: string }> }>> {
+  const matchLines = matches.map((entry) => entry.line);
+  try {
+    const fileText = await fs.promises.readFile(absolutePath, 'utf8');
+    const renderedBlocks = buildRenderedSearchBlocks(
+      fileText,
+      matchLines,
+      beforeContextLines,
+      afterContextLines,
+    );
+    if (renderedBlocks.length > 0) {
+      return renderedBlocks.map((block) => ({
+        lines: block.lines.map((line) => ({
+          lineNumber: line.lineNumber,
+          isMatch: line.isMatch,
+          text: line.text,
+        })),
+      }));
+    }
+  } catch {
+    // Fall back to qgrep preview-only rendering when source file read fails.
+  }
+  return buildQgrepSearchFallbackBlocks(matches);
+}
+
+function buildQgrepSearchFallbackBlocks(
+  matches: readonly QgrepSearchMatchView[],
+): Array<{ lines: Array<{ lineNumber: number; isMatch: boolean; text: string }> }> {
+  const seenLines = new Set<number>();
+  const orderedMatches = matches
+    .filter((entry) => Number.isInteger(entry.line) && entry.line > 0)
+    .sort((left, right) => left.line - right.line);
+
+  const blocks: Array<{ lines: Array<{ lineNumber: number; isMatch: boolean; text: string }> }> = [];
+  for (const entry of orderedMatches) {
+    if (seenLines.has(entry.line)) {
+      continue;
+    }
+    seenLines.add(entry.line);
+    blocks.push({
+      lines: [{
+        lineNumber: entry.line,
+        isMatch: true,
+        text: entry.preview.replace(/\r$/u, ''),
+      }],
+    });
+  }
+  return blocks;
 }
 
 function computeQgrepAggregateProgressForTool(status: QgrepStatusSummary): QgrepToolAggregateProgress {
@@ -2650,7 +2805,7 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
     : undefined;
   const workspaceStatuses = Array.isArray(payload.workspaceStatuses) ? payload.workspaceStatuses : [];
   const lines: string[] = [
-    'Qgrep status summary',
+    'Qgrep status',
     `binary: ${binaryAvailable ? 'ok' : 'missing'}`,
     `binaryPath: ${binaryPath}`,
     `workspaces: total=${totalWorkspaces}, initialized=${initializedWorkspaces}, watching=${watchingWorkspaces}`,
@@ -2740,34 +2895,49 @@ function formatQgrepFilesSummary(payload: Record<string, unknown>): string {
   const querySemanticsApplied = typeof payload.querySemanticsApplied === 'string'
     ? payload.querySemanticsApplied
     : null;
-  const files = Array.isArray(payload.files) ? payload.files : [];
+  const query = typeof payload.query === 'string' ? payload.query : '<unknown>';
+  const files = collectQgrepFileOutputPaths(payload);
   const lines: string[] = [
-    'Qgrep files summary',
+    'Qgrep files',
+    `query: ${query}`,
     ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
+    `scope: ${scope ?? 'all initialized workspaces'}`,
     `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
     ...(hardLimitHit ? ['hardLimitHit: true'] : []),
     ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
     ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
-    `scope: ${scope ?? 'all initialized workspaces'}`,
   ];
   if (files.length === 0) {
     lines.push('No files found.');
     return lines.join('\n');
   }
+  lines.push('====');
+  for (const file of files) {
+    lines.push(file);
+  }
+  return lines.join('\n');
+}
+
+function collectQgrepFileOutputPaths(payload: Record<string, unknown>): string[] {
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  const result: string[] = [];
+  const seen = new Set<string>();
   for (const entry of files) {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
-    const record = entry as { workspacePath?: unknown; absolutePath?: unknown };
-    const value = typeof record.workspacePath === 'string'
-      ? record.workspacePath
-      : typeof record.absolutePath === 'string'
-        ? toSummaryPathPreferWorkspace(record.absolutePath)
-        : '<unknown>';
-    lines.push('---');
-    lines.push(value);
+    const record = entry as { absolutePath?: unknown };
+    if (typeof record.absolutePath !== 'string' || record.absolutePath.length === 0) {
+      continue;
+    }
+    const normalized = normalizeQgrepOutputPath(record.absolutePath);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
   }
-  return lines.join('\n');
+  return result;
 }
 
 function getDiagnosticsForFilePaths(
@@ -3628,14 +3798,16 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       if (!textPayload.hasTextPart) {
         throw new Error(`Custom tool '${tool.name}' must include LanguageModelTextPart.`);
       }
+      const structuredRequired = requiresStructuredCustomToolResult(tool.name);
       structuredOutput = resolveStructuredToolResultPayload(result, serialized);
-      if (!structuredOutput) {
+      if (structuredRequired && !structuredOutput) {
         throw new Error(`Custom tool '${tool.name}' must include structuredContent as a JSON object.`);
       }
       outputText = textPayload.text;
+      const passthroughStructuredOutput = structuredRequired ? structuredOutput : undefined;
       debugOutputText = outputText;
-      debugStructuredOutput = structuredOutput;
-      return buildPassthroughToolResult(outputText, true, structuredOutput);
+      debugStructuredOutput = passthroughStructuredOutput;
+      return buildPassthroughToolResult(outputText, true, passthroughStructuredOutput);
     }
 
     const lm = getLanguageModelNamespace();

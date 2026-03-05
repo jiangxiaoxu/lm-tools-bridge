@@ -10,6 +10,7 @@ import {
   normalizeQueryGlobErrorMessage,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
+import { parseOptionalContextLineCount } from './qgrepOutput';
 
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
@@ -371,6 +372,8 @@ class QgrepService implements vscode.Disposable {
     const includePattern = this.parseOptionalIncludePattern(input);
     const isRegexp = this.parseOptionalBooleanInput(input.isRegexp, 'isRegexp') ?? false;
     const caseSensitive = this.parseOptionalBooleanInput(input.caseSensitive, 'caseSensitive');
+    const beforeContextLines = parseOptionalContextLineCount(input.beforeContextLines, 'beforeContextLines');
+    const afterContextLines = parseOptionalContextLineCount(input.afterContextLines, 'afterContextLines');
     const querySemanticsApplied: QgrepTextQuerySemantics = isRegexp ? 'regex' : 'glob';
     const effectiveQuery = isRegexp ? query : compileTextQueryGlobToRegexSource(query);
     const casePolicy: QgrepTextCasePolicy = caseSensitive === true
@@ -392,6 +395,8 @@ class QgrepService implements vscode.Disposable {
         casePolicy,
         useCaseInsensitiveSearch,
         maxResultsPayload,
+        beforeContextLines,
+        afterContextLines,
       );
     }
 
@@ -441,6 +446,8 @@ class QgrepService implements vscode.Disposable {
       querySemanticsApplied,
       casePolicy,
       caseModeApplied: useCaseInsensitiveSearch ? 'insensitive' : 'sensitive',
+      beforeContextLines,
+      afterContextLines,
       matches,
     };
   }
@@ -1095,6 +1102,8 @@ class QgrepService implements vscode.Disposable {
     casePolicy: QgrepTextCasePolicy,
     useCaseInsensitiveSearch: boolean,
     maxResultsPayload: MaxResultsPayload,
+    beforeContextLines: number,
+    afterContextLines: number,
   ): Promise<Record<string, unknown>> {
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
     const targets = this.resolveGlobSearchTargets(includePattern);
@@ -1143,6 +1152,8 @@ class QgrepService implements vscode.Disposable {
       querySemanticsApplied,
       casePolicy,
       caseModeApplied: useCaseInsensitiveSearch ? 'insensitive' : 'sensitive',
+      beforeContextLines,
+      afterContextLines,
       matches,
     };
   }

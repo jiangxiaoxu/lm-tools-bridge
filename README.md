@@ -42,16 +42,19 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 - Severity defaults to `error` + `warning`.
 
 #### Qgrep
-- `lm_qgrepGetStatus`: qgrep binary/workspace/index readiness snapshot.
-- `lm_qgrepSearchText`: text search via bundled `bin/qgrep.exe` (`query/caseSensitive/isRegexp/includePattern/maxResults`).
+- `lm_qgrepGetStatus`: qgrep binary/workspace/index readiness snapshot (plain-text output).
+- `lm_qgrepSearchText`: text search via bundled `bin/qgrep.exe` (`query/caseSensitive/isRegexp/includePattern/maxResults/beforeContextLines/afterContextLines`).
 - `lm_qgrepSearchText` defaults to glob query mode; set `isRegexp=true` to switch to regex mode.
 - In glob mode, `lm_qgrepSearchText.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In text glob mode, `*` and `?` do not match `/`, while `**` can match across `/`.
+- `beforeContextLines` and `afterContextLines` control preview context lines (`0-20`, default `0`), and output always includes line numbers.
 - `lm_qgrepSearchText` supports `includePattern` and does not support `searchPath` or `includeIgnoredFiles`.
-- `lm_qgrepSearchFiles`: indexed file search via `query/isRegexp/maxResults` (default glob, optional regex).
+- `lm_qgrepSearchFiles`: indexed file search via `query/isRegexp/maxResults` (default glob, optional regex, plain-text output).
 - In glob mode, `lm_qgrepSearchFiles.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In files glob mode, queries without `/` match any depth (for example, `*.md` behaves like `**/*.md`).
 - `lm_qgrepSearchFiles` no longer supports legacy `mode` or `searchPath` inputs.
+- qgrep search/files outputs use absolute paths with `/` separators; text output uses `====` for file switches and `---` for same-file context blocks.
+- qgrep files output has a single `====` header separator, followed by one absolute path per line.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-init all current workspaces and wait until ready (timeout `150s`).
 - Startup refresh for already initialized workspaces now syncs extension-managed `workspace.cfg` blocks before `qgrep update`.
 - During startup refresh, if qgrep reports a corruption-like assertion signature (`Assertion failed` with `filter.cpp`/`entries.entries`), the extension auto-runs one rebuild attempt per workspace for this startup session.
@@ -149,16 +152,19 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - `severities` 未传时默认 `error` + `warning`.
 
 #### Qgrep
-- `lm_qgrepGetStatus`: 返回 qgrep binary/workspace/index 就绪快照.
-- `lm_qgrepSearchText`: 通过内置 `bin/qgrep.exe` 做文本搜索(`query/caseSensitive/isRegexp/includePattern/maxResults`).
+- `lm_qgrepGetStatus`: 返回 qgrep binary/workspace/index 就绪快照(纯文本输出).
+- `lm_qgrepSearchText`: 通过内置 `bin/qgrep.exe` 做文本搜索(`query/caseSensitive/isRegexp/includePattern/maxResults/beforeContextLines/afterContextLines`).
 - `lm_qgrepSearchText` 默认使用 glob 查询模式,传 `isRegexp=true` 切换到 regex 模式.
 - 在 glob 模式下,`lm_qgrepSearchText.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
 - 文本 glob 模式下,`*` 和 `?` 不匹配 `/`,`**` 可以跨 `/` 匹配.
+- `beforeContextLines` 和 `afterContextLines` 控制预览上下文行(`0-20`,默认 `0`),输出始终包含行号.
 - `lm_qgrepSearchText` 支持 `includePattern`,不支持 `searchPath` 和 `includeIgnoredFiles`.
-- `lm_qgrepSearchFiles`: 使用 `query/isRegexp/maxResults` 做索引文件搜索(默认 glob,可切 regex).
+- `lm_qgrepSearchFiles`: 使用 `query/isRegexp/maxResults` 做索引文件搜索(默认 glob,可切 regex,纯文本输出).
 - 在 glob 模式下,`lm_qgrepSearchFiles.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
 - 文件 glob 模式下,不含 `/` 的查询会匹配任意目录深度(例如 `*.md` 等价 `**/*.md`).
 - `lm_qgrepSearchFiles` 不再支持旧的 `mode` 和 `searchPath` 输入.
+- qgrep search/files 输出使用绝对路径并统一 `/` 分隔符; 文本搜索里 `====` 用于文件切换,`---` 用于同文件上下文分块.
+- qgrep files 输出仅在头部使用一个 `====`,后续每行一个绝对路径.
 - `lm_qgrepSearchText` 和 `lm_qgrepSearchFiles` 会按需自动初始化当前全部 workspace,并等待到就绪(超时 `150s`).
 - 对已初始化 workspace,扩展启动后的后台刷新会先同步插件受管 `workspace.cfg` 区块,再执行 `qgrep update`.
 - 启动刷新阶段若 qgrep 返回坏索引特征断言(`Assertion failed` 且包含 `filter.cpp`/`entries.entries`),插件会在本次启动周期内对该 workspace 自动尝试一次重建.

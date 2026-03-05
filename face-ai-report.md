@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.94`.
+- Version baseline: `1.0.107`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -18,15 +18,18 @@
 - `lm_qgrepSearchText` uses smart-case when `caseSensitive` is false/omitted (all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive); `caseSensitive=true` forces sensitive matching.
 - In glob mode, both `lm_qgrepSearchText.query` and `lm_qgrepSearchFiles.query` follow VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In glob mode for `lm_qgrepSearchText.query`, `*` and `?` do not match `/`, while `**` can match across `/`; query matching remains substring-based (no implicit `^...$` anchoring).
+- `lm_qgrepSearchText` supports `beforeContextLines`/`afterContextLines` (default `0`, max `20`) and always renders line numbers in text output.
 - `lm_qgrepSearchFiles` accepts `query`/`isRegexp`/`maxResults`; default query semantics are VS Code-style glob and `isRegexp=true` switches to regex.
 - In glob mode for `lm_qgrepSearchFiles.query`, patterns without `/` are treated as any-depth file globs (equivalent to `**/<pattern>`).
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.
 - `lm_qgrepSearchText` uses `maxResultsApplied` as the backend qgrep `search` call limit and clamps to `2000`; payload includes `maxResultsRequested` only when text input is clamped. `lm_qgrepSearchFiles` also clamps `maxResults` to `2000`, then forwards `maxResultsApplied` as the backend qgrep `files` call limit.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true and then `totalAvailable` is a lower bound; `hardLimitHit` is returned only when the backend query limit is hit.
 - `lm_qgrepSearchText` payload includes `querySemanticsApplied`/`casePolicy`/`caseModeApplied`; `lm_qgrepSearchFiles` payload includes `querySemanticsApplied` and optional `scope`.
+- Successful `lm_qgrepSearchText`/`lm_qgrepSearchFiles`/`lm_qgrepGetStatus` responses are text-only (`LanguageModelTextPart`), with no `structuredContent`.
+- qgrep text/file outputs use absolute paths (`/`), `====` as file-switch separator, and `---` as same-file context block separator.
 - qgrep glob input errors normalize to `Invalid query glob pattern: ...` without duplicating the `Error:` prefix from JS error stringification.
 - qgrep text output parsing treats the first `:line:` delimiter as authoritative, so `preview` keeps literal `:number:` segments without corrupting path/line extraction.
-- Custom tool `content.text` summaries are sanitized before returning: ANSI/control/bidi/zero-width characters are stripped for stable rendering; `structuredContent` payloads remain unchanged.
+- Custom tool `content.text` summaries are sanitized before returning: ANSI/control/bidi/zero-width characters are stripped for stable rendering.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; use `lm_qgrepGetStatus` for readiness details.
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
@@ -58,7 +61,7 @@
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps` and `guidance.recoveryOnError` so clients can follow recovery hints from tool return values instead of relying only on static descriptions.
 - Manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.
 - Manager JSON-RPC error messages for stale session/workspace mismatch/offline-unreachable/direct-call input errors now include explicit `Next step:` guidance in `error.message` (no `error.data` change).
-- Built-in `lm_*` path fields in `structuredContent` use absolute paths; `content.text` summaries prefer workspace-relative (`WorkspaceName/...`) display and fall back to absolute paths.
+- Built-in `lm_*` path fields in `structuredContent` use absolute paths when structured payloads are returned; qgrep tools now return text-only absolute-path output.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
 
 ### Primary Entrypoints (Read First)
@@ -86,7 +89,7 @@
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
 - [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool`; Decide: validate `filePaths` resolution (absolute/`WorkspaceName/...`/relative + unique existing match), `maxResults`, and `severities` before suspecting data loss; Verify: payload contains `scope/files/preview` and expected counts after retry.
 - [qgrep init/watch lifecycle] Read: `src/qgrep.ts -> initAllWorkspaces | rebuildAllWorkspaces | startWatchForInitializedWorkspaces | startAutoUpdateWatchersForInitializedWorkspaces | stopAndClearAllWorkspaces | updateWorkspaceProgress | search | files`; Decide: manual init command still works, rebuild/clear menu commands now iterate all current workspaces, qgrep search/files auto-init all workspaces and block until indexing/update readiness, startup refresh for initialized workspaces syncs extension-managed `workspace.cfg` blocks before `qgrep update` and one-shot auto-rebuilds when corruption-like assertion signatures are detected, qgrep `watch` covers existing-file content changes, create/delete events trigger debounced `qgrep update`, `search.exclude=true` rules sync into managed `workspace.cfg` excludes (plus fixed `.git` exclude), and clear command disables by deleting `.vscode/qgrep`; Verify: `workspace.cfg` presence controls watch/auto-update startup and tool calls wait during indexing before returning results.
-- [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: payload includes `binaryAvailable`, `workspaceStatuses`, and aggregate progress summary.
+- [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: text output reports `binary`, workspace counts, aggregate progress, and per-workspace lines.
 - [qgrep search scope rejected] Read: `src/qgrep.ts -> resolveIncludePattern | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported`; Decide: `lm_qgrepSearchText.includePattern` enforces existing path/glob rules while legacy `searchPath`/`includeIgnoredFiles` are ignored on text search; `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath`; Verify: text outside/ambiguous includePattern returns expected tool error, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
 - [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
 - [Roots sync not triggered] Read: `src/manager.ts -> dispatchRootsListRequest`; Decide: requires client roots capability + trigger events; Verify: logs contain `roots.list.request/result/error/skip/timeout`.

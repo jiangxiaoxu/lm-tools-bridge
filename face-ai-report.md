@@ -24,6 +24,7 @@
 - `lm_qgrepSearchText` uses `maxResultsApplied` as the backend qgrep `search` call limit and clamps to `2000`; payload includes `maxResultsRequested` only when text input is clamped. `lm_qgrepSearchFiles` also clamps `maxResults` to `2000`, then forwards `maxResultsApplied` as the backend qgrep `files` call limit.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true and then `totalAvailable` is a lower bound; `hardLimitHit` is returned only when the backend query limit is hit.
 - `lm_qgrepSearchText` payload includes `querySemanticsApplied`/`casePolicy`/`caseModeApplied`; `lm_qgrepSearchFiles` payload includes `querySemanticsApplied` and optional `scope`.
+- qgrep glob input errors normalize to `Invalid query glob pattern: ...` without duplicating the `Error:` prefix from JS error stringification.
 - qgrep text output parsing treats the first `:line:` delimiter as authoritative, so `preview` keeps literal `:number:` segments without corrupting path/line extraction.
 - Custom tool `content.text` summaries are sanitized before returning: ANSI/control/bidi/zero-width characters are stripped for stable rendering; `structuredContent` payloads remain unchanged.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; use `lm_qgrepGetStatus` for readiness details.

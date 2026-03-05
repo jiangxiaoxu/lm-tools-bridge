@@ -15,6 +15,32 @@ interface GlobPatternParserState {
   contextLabel: string;
 }
 
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+export function normalizeQueryGlobErrorMessage(error: unknown): string {
+  const message = getErrorMessage(error);
+  if (message.startsWith('Invalid query glob pattern')) {
+    return message;
+  }
+  return `Invalid query glob pattern: ${message}`;
+}
+
+export function normalizeFilesQueryGlobErrorMessage(error: unknown): string {
+  const message = getErrorMessage(error);
+  if (message.startsWith('Invalid query glob pattern')) {
+    return message;
+  }
+  if (message.startsWith('Invalid includePattern glob pattern')) {
+    return message.replace('Invalid includePattern glob pattern', 'Invalid query glob pattern');
+  }
+  return `Invalid query glob pattern: ${message}`;
+}
+
 export function isGlobMetaCharacter(char: string): boolean {
   return char === '*' || char === '?' || char === '[' || char === ']' || char === '{' || char === '}';
 }

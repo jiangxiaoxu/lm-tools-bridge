@@ -5,7 +5,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   compileGlobToRegexSource,
   hasUnescapedGlobMeta,
+  normalizeFilesQueryGlobErrorMessage,
   normalizeFilesQueryGlobPattern,
+  normalizeQueryGlobErrorMessage,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
 
@@ -936,14 +938,7 @@ class QgrepService implements vscode.Disposable {
       }
       return regexSource;
     } catch (error) {
-      const message = String(error);
-      if (message.startsWith('Invalid query glob pattern')) {
-        throw new Error(message);
-      }
-      if (message.startsWith('Invalid includePattern glob pattern')) {
-        throw new Error(message.replace('Invalid includePattern glob pattern', 'Invalid query glob pattern'));
-      }
-      throw new Error(`Invalid query glob pattern: ${message}`);
+      throw new Error(normalizeFilesQueryGlobErrorMessage(error));
     }
   }
 
@@ -2783,11 +2778,7 @@ function compileTextQueryGlobToRegexSource(glob: string): string {
     new RegExp(source, 'u');
     return source;
   } catch (error) {
-    const message = String(error);
-    if (message.startsWith('Invalid query glob pattern')) {
-      throw new Error(message);
-    }
-    throw new Error(`Invalid query glob pattern: ${message}`);
+    throw new Error(normalizeQueryGlobErrorMessage(error));
   }
 }
 

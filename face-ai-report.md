@@ -36,8 +36,8 @@
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
-- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus a temp-copied multi-root fixture and currently skips on non-Windows platforms.
-- The multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from character-oriented runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, deep `Private/**/*.cpp` matching, and cross-workspace target glob aggregation.
+- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus a temp-copied multi-root fixture, polls workspace-folder readiness to reduce startup flakiness, and currently skips on non-Windows platforms.
+- The multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from character-oriented runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, deep `Private/**/*.cpp` matching, cross-workspace target glob aggregation, no-result summaries, capped file-search summaries, and `absolutePath`/`workspacePath`/`workspaceFolder` consistency checks.
 - The integration runner deletes temporary VS Code user-data, extensions, and copied fixture directories with retry-based cleanup to tolerate transient Windows file locks after the extension host exits.
 - qgrep auto-maintenance still depends on initialized workspaces (`<workspace>/.vscode/qgrep/workspace.cfg`), but `lm_qgrepSearchText`/`lm_qgrepSearchFiles` now auto-initialize all current workspaces on demand before searching.
 - On extension startup, already-initialized qgrep workspaces auto-queue one background refresh that syncs extension-managed `workspace.cfg` blocks before running `qgrep update` for current-session progress/file totals.
@@ -110,6 +110,7 @@
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
 - qgrep glob compiler/shared semantics -> `src/qgrepGlob.ts`.
 - qgrep files query parsing/fail-fast validation -> `src/qgrepFilesQuery.ts`.
+- qgrep output formatting/helpers -> `src/qgrepOutput.ts`, `src/tooling.ts`.
 - VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/fixtures/multi-root/*`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
 - Handshake/session routing -> `src/manager.ts`.
@@ -127,7 +128,7 @@
 - qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearchText` sees expected changes without manual rebuild.
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
 - qgrep-status-ui: verify server status and qgrep status render as separate status bar items, and qgrep tooltip shows per-workspace `A/B` lines.
-- qgrep-failure: verify `lm_qgrepSearchText` outside-workspace `includePattern` returns expected error, legacy `searchPath`/`includeIgnoredFiles` on text search are ignored, `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath` while ignoring `includeIgnoredFiles`, and no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately.
+- qgrep-failure: verify `lm_qgrepSearchText` outside-workspace `includePattern` returns expected error, legacy `searchPath`/`includeIgnoredFiles` on text search are ignored, `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath` while ignoring `includeIgnoredFiles`, no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately, and file-search summaries keep `count/totalAvailable/capped/hardLimitHit/maxResultsApplied` self-consistent.
 - qgrep-startup-repair: verify startup auto-update assertion signature (`Assertion failed` + `filter.cpp`/`entries.entries`) triggers one rebuild attempt per workspace per startup, and non-signature update failures do not trigger rebuild.
 - Docs: verify update triggers against `AGENTS.md`.
 

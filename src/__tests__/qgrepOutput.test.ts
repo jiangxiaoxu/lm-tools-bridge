@@ -4,6 +4,8 @@ import {
   buildQgrepSearchLineMatcher,
   buildMergedLineWindows,
   buildRenderedSearchBlocks,
+  collectQgrepFileOutputPaths,
+  formatQgrepFilesSummary,
   formatQgrepSearchLine,
   parseOptionalContextLineCount,
   requiresStructuredCustomToolResult,
@@ -107,6 +109,84 @@ test('invalid local regex matcher falls back to undefined', () => {
 test('search line formatter uses fixed four-space separator', () => {
   assert.equal(formatQgrepSearchLine(42, true, 'match text'), '42:    match text');
   assert.equal(formatQgrepSearchLine(43, false, 'context text'), '43-    context text');
+});
+
+test('file output path collector normalizes separators and removes duplicates', () => {
+  const paths = collectQgrepFileOutputPaths({
+    files: [
+      { absolutePath: 'G:\\repo\\Game\\Source\\Game.Target.cs' },
+      { absolutePath: 'G:/repo/Game/Source/Game.Target.cs' },
+      { absolutePath: 'G:/repo/Game/Source/GameEditor.Target.cs' },
+      { workspacePath: 'Game/Source/Game.Target.cs' },
+      null,
+    ],
+  });
+
+  assert.deepEqual(paths, [
+    'G:/repo/Game/Source/Game.Target.cs',
+    'G:/repo/Game/Source/GameEditor.Target.cs',
+  ]);
+});
+
+test('qgrep files summary renders header, counts, flags, and file list', () => {
+  const text = formatQgrepFilesSummary({
+    query: 'Game/Source/**/*.Build.cs',
+    querySemanticsApplied: 'glob-vscode',
+    scope: 'Game',
+    count: 2,
+    totalAvailable: 2,
+    capped: false,
+    maxResultsApplied: 20,
+    files: [
+      { absolutePath: 'G:\\repo\\game\\Source\\GameEditor\\GameEditor.Build.cs' },
+      { absolutePath: 'G:/repo/game/Source/GameRuntime/GameRuntime.Build.cs' },
+    ],
+  });
+
+  assert.equal(
+    text,
+    [
+      'Qgrep files',
+      'query: Game/Source/**/*.Build.cs',
+      'querySemanticsApplied: glob-vscode',
+      'scope: Game',
+      'count: 2/2',
+      'maxResultsApplied: 20',
+      '====',
+      'G:/repo/game/Source/GameEditor/GameEditor.Build.cs',
+      'G:/repo/game/Source/GameRuntime/GameRuntime.Build.cs',
+    ].join('\n'),
+  );
+});
+
+test('qgrep files summary renders no-result and capped output states', () => {
+  const text = formatQgrepFilesSummary({
+    query: 'Game/Source/**/*.missing',
+    count: 0,
+    totalAvailable: 0,
+    capped: false,
+    scope: 'Game',
+    querySemanticsApplied: 'glob-vscode',
+    hardLimitHit: true,
+    totalAvailableCapped: true,
+    maxResultsRequested: 5000,
+    maxResultsApplied: 2000,
+    files: [],
+  });
+
+  assert.equal(
+    text,
+    [
+      'Qgrep files',
+      'query: Game/Source/**/*.missing',
+      'querySemanticsApplied: glob-vscode',
+      'scope: Game',
+      'count: 0/0+','hardLimitHit: true',
+      'maxResultsRequested: 5000',
+      'maxResultsApplied: 2000',
+      'No files found.',
+    ].join('\n'),
+  );
 });
 
 test('only qgrep custom tools are text-only', () => {

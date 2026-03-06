@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 import * as vscode from 'vscode';
 
 const EXTENSION_ID = 'jiangxiaoxu.lm-tools-bridge';
+const DEFAULT_WAIT_TIMEOUT_MS = 10_000;
+const DEFAULT_POLL_INTERVAL_MS = 100;
 
 export interface IntegrationTestCase {
   name: string;
@@ -40,6 +43,14 @@ export function assertCommandRegistered(commands: readonly string[], commandId: 
 }
 
 export async function waitForWorkspaceFolderNames(expectedNames: readonly string[]): Promise<void> {
-  const actualNames = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.name);
+  let actualNames: string[] = [];
+  const deadline = Date.now() + DEFAULT_WAIT_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    actualNames = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.name);
+    if (actualNames.length === expectedNames.length && actualNames.every((name, index) => name === expectedNames[index])) {
+      return;
+    }
+    await delay(DEFAULT_POLL_INTERVAL_MS);
+  }
   assert.deepEqual(actualNames, [...expectedNames]);
 }

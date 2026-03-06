@@ -23,6 +23,8 @@ import {
 import {
   buildQgrepSearchLineMatcher,
   buildRenderedSearchBlocks,
+  collectQgrepFileOutputPaths,
+  formatQgrepFilesSummary,
   formatQgrepSearchLine,
   normalizeQgrepOutputPath,
   requiresStructuredCustomToolResult,
@@ -2885,67 +2887,6 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
     lines.push(`${workspaceName}: --/-- (--%), watching=${watching}, indexing=${indexing}`);
   }
   return lines.join('\n');
-}
-
-function formatQgrepFilesSummary(payload: Record<string, unknown>): string {
-  const count = typeof payload.count === 'number' ? payload.count : 0;
-  const capped = payload.capped === true;
-  const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
-  const totalAvailableCapped = payload.totalAvailableCapped === true;
-  const hardLimitHit = payload.hardLimitHit === true;
-  const scope = typeof payload.scope === 'string' ? payload.scope : null;
-  const maxResultsApplied = typeof payload.maxResultsApplied === 'number'
-    ? payload.maxResultsApplied
-    : null;
-  const maxResultsRequested = typeof payload.maxResultsRequested === 'number'
-    ? payload.maxResultsRequested
-    : null;
-  const querySemanticsApplied = typeof payload.querySemanticsApplied === 'string'
-    ? payload.querySemanticsApplied
-    : null;
-  const query = typeof payload.query === 'string' ? payload.query : '<unknown>';
-  const files = collectQgrepFileOutputPaths(payload);
-  const lines: string[] = [
-    'Qgrep files',
-    `query: ${query}`,
-    ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
-    `scope: ${scope ?? 'all initialized workspaces'}`,
-    `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
-    ...(hardLimitHit ? ['hardLimitHit: true'] : []),
-    ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
-    ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
-  ];
-  if (files.length === 0) {
-    lines.push('No files found.');
-    return lines.join('\n');
-  }
-  lines.push('====');
-  for (const file of files) {
-    lines.push(file);
-  }
-  return lines.join('\n');
-}
-
-function collectQgrepFileOutputPaths(payload: Record<string, unknown>): string[] {
-  const files = Array.isArray(payload.files) ? payload.files : [];
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of files) {
-    if (!entry || typeof entry !== 'object') {
-      continue;
-    }
-    const record = entry as { absolutePath?: unknown };
-    if (typeof record.absolutePath !== 'string' || record.absolutePath.length === 0) {
-      continue;
-    }
-    const normalized = normalizeQgrepOutputPath(record.absolutePath);
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    result.push(normalized);
-  }
-  return result;
 }
 
 function getDiagnosticsForFilePaths(

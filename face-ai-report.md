@@ -36,6 +36,9 @@
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
+- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus a temp-copied multi-root fixture and currently skips on non-Windows platforms.
+- The multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from character-oriented runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, deep `Private/**/*.cpp` matching, and cross-workspace target glob aggregation.
+- The integration runner deletes temporary VS Code user-data, extensions, and copied fixture directories with retry-based cleanup to tolerate transient Windows file locks after the extension host exits.
 - qgrep auto-maintenance still depends on initialized workspaces (`<workspace>/.vscode/qgrep/workspace.cfg`), but `lm_qgrepSearchText`/`lm_qgrepSearchFiles` now auto-initialize all current workspaces on demand before searching.
 - On extension startup, already-initialized qgrep workspaces auto-queue one background refresh that syncs extension-managed `workspace.cfg` blocks before running `qgrep update` for current-session progress/file totals.
 - Startup refresh now includes one-shot auto-repair for corruption-like qgrep assertion failures: when update errors contain `Assertion failed` plus `filter.cpp`/`entries.entries`, the extension auto-attempts one per-workspace rebuild in the same startup session.
@@ -73,6 +76,8 @@
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
 - `src/qgrepFilesQuery.ts -> buildFilesQueryDraft | ensureFilesLegacyParamsUnsupported`
+- `src/test/integration/index.ts -> main | createSmokeRun | createMultiRootRun | executeIntegrationRun`
+- `src/test/integration/extensionHost/*.ts -> smokeRunner | multiRootRunner | testHarness`
 - `src/manager.ts -> handleMcpHttpRequest | dispatchRootsListRequest`
 - `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath | resolveComparablePath`
 
@@ -105,6 +110,7 @@
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
 - qgrep glob compiler/shared semantics -> `src/qgrepGlob.ts`.
 - qgrep files query parsing/fail-fast validation -> `src/qgrepFilesQuery.ts`.
+- VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/fixtures/multi-root/*`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
 - Handshake/session routing -> `src/manager.ts`.
 - Diagnostics contract -> `src/tooling.ts`.
@@ -113,7 +119,7 @@
 
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
-- Tests: run `npm test` to verify Windows workspace path acceptance/comparable-path normalization and qgrep glob semantics (`text` + `files`).
+- Tests: run `npm run test:unit` for pure unit coverage, `npm run test:integration` for VS Code smoke + multi-root fixture coverage on Windows, and `npm run test:all` for the combined path.
 - Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
 - Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, and rejects non-normal NT namespace formats.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).

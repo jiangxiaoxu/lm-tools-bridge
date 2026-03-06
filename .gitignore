@@ -18,6 +18,7 @@ pnpm-debug.log*
 !.vscode/tasks.json
 !.vscode/settings.json
 !.vscode/extensions.json
+.vscode-test/
 
 # environment
 .env

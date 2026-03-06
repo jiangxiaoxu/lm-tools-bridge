@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.111] - 2026-03-06
+
+### English
+
+#### Tests
+- Added VS Code integration test infrastructure with a repo-root smoke workspace and a temp-copied multi-root fixture runner on Windows.
+- Expanded the multi-root fixture into an anonymized Unreal-style `Source` tree with scoped glob, deep `Private/**/*.cpp`, and cross-workspace target-glob coverage.
+
+### 中文
+
+#### Tests
+- 新增 VS Code 集成测试基础设施, 在 Windows 上提供基于仓库根目录的 smoke workspace 和基于临时复制 multi-root fixture 的测试 runner。
+- 扩充 multi-root fixture 为脱敏的 Unreal 风格 `Source` 目录, 覆盖 scoped glob, 深层 `Private/**/*.cpp` 和跨 workspace `Target` glob 聚合场景。
+
 ## [1.0.110] - 2026-03-06
 
 ### English

@@ -1,0 +1,16 @@
+{
+  "folders": [
+    {
+      "name": "Game",
+      "path": "game"
+    },
+    {
+      "name": "Engine",
+      "path": "engine"
+    }
+  ],
+  "settings": {
+    "lmToolsBridge.server.autoStart": false,
+    "lmToolsBridge.debug": "off"
+  }
+}

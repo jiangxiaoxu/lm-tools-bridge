@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  compileFilesQueryGlobToRegexSource,
   compileGlobToRegexSource,
   normalizeFilesQueryGlobPattern,
 } from '../qgrepGlob';
@@ -14,6 +15,24 @@ function compileFilesGlobRegex(glob: string): RegExp {
 function compileTextGlobRegex(glob: string): RegExp {
   const source = compileGlobToRegexSource(glob, 'query glob pattern');
   return new RegExp(source, 'u');
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
+
+function normalizePathForRegex(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/u, '');
+}
+
+function compileWorkspaceAnchoredFilesGlobRegex(workspaceRoot: string, glob: string): RegExp {
+  const source = compileFilesQueryGlobToRegexSource(glob);
+  return new RegExp(`^${escapeRegex(normalizePathForRegex(workspaceRoot))}/${source}$`, 'iu');
+}
+
+function compileAbsoluteFilesGlobRegex(glob: string): RegExp {
+  const source = compileFilesQueryGlobToRegexSource(glob);
+  return new RegExp(`^${source}$`, 'iu');
 }
 
 test('files glob without slash matches any depth', () => {
@@ -60,4 +79,57 @@ test('text glob keeps ? and {} semantics with slash boundary', () => {
   assert.equal(regex.test('zzabXczz'), true);
   assert.equal(regex.test('zzabYdzz'), true);
   assert.equal(regex.test('zzab/czz'), false);
+});
+
+test('workspace-anchored files glob scopes nested paths to the selected workspace root', () => {
+  const regex = compileWorkspaceAnchoredFilesGlobRegex(
+    'g:/workspace/game-project',
+    'Source/**/*.{Target.cs,Build.cs,h,cpp,cs}',
+  );
+
+  assert.equal(
+    regex.test('g:/workspace/game-project/Source/GameProject.Target.cs'),
+    true,
+  );
+  assert.equal(
+    regex.test('g:/workspace/game-project/Source/GameEditor/GameEditor.Build.cs'),
+    true,
+  );
+  assert.equal(
+    regex.test('g:/workspace/engine-project/Source/GameProject.Target.cs'),
+    false,
+  );
+});
+
+test('workspace-anchored files glob keeps workspace-relative semantics for shared patterns', () => {
+  const regex = compileWorkspaceAnchoredFilesGlobRegex('g:/repo/app', 'src/**/*.ts');
+
+  assert.equal(regex.test('g:/repo/app/src/main.ts'), true);
+  assert.equal(regex.test('g:/repo/app/src/lib/main.ts'), true);
+  assert.equal(regex.test('g:/repo/other/src/main.ts'), false);
+});
+
+test('workspace-anchored files glob normalizes Windows separators in relative patterns', () => {
+  const regex = compileWorkspaceAnchoredFilesGlobRegex('g:\\repo\\game', 'Source\\**\\*.cs');
+
+  assert.equal(regex.test('g:/repo/game/Source/Game.cs'), true);
+  assert.equal(regex.test('g:/repo/game/Source/Subdir/GameMode.cs'), true);
+  assert.equal(regex.test('g:/repo/other/Source/Game.cs'), false);
+});
+
+test('absolute files glob remains absolute instead of rebasing to a workspace root', () => {
+  const regex = compileAbsoluteFilesGlobRegex('g:/workspace/game-project/Source/**/*.{Target.cs,Build.cs,h,cpp,cs}');
+
+  assert.equal(
+    regex.test('g:/workspace/game-project/Source/GameProject.Target.cs'),
+    true,
+  );
+  assert.equal(
+    regex.test('g:/workspace/game-project/Source/GameEditor/GameEditor.Build.cs'),
+    true,
+  );
+  assert.equal(
+    regex.test('g:/workspace/engine-project/Source/GameProject.Target.cs'),
+    false,
+  );
 });

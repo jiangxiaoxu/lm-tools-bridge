@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.110] - 2026-03-06
+
+### English
+
+#### Fixed
+- Updated `lm_qgrepSearchFiles` so `WorkspaceName/<glob>` is applied as workspace-relative path scoping in multi-root workspaces by anchoring non-absolute globs to the selected workspace root.
+- Updated `lm_qgrepSearchFiles` to fail fast on invalid legacy params and malformed workspace-prefixed glob/regex queries before waiting for qgrep readiness.
+
+#### Tests
+- Added files-query draft parsing coverage for workspace-prefixed glob/regex queries and fail-fast validation.
+
+### 中文
+
+#### Fixed
+- 更新 `lm_qgrepSearchFiles`, 使 `WorkspaceName/<glob>` 在 multi-root workspace 中按 workspace-relative path 生效, 并将非 absolute glob 绑定到选定 workspace root。
+- 更新 `lm_qgrepSearchFiles`, 使其在等待 qgrep ready 之前就能对无效 legacy 参数和错误的 workspace 前缀 glob/regex 查询快速报错。
+
+#### Tests
+- 新增 files-query draft 解析测试, 覆盖 workspace 前缀 glob/regex 查询和 fail-fast 校验。
+
 ## [1.0.109] - 2026-03-06
 
 ### English

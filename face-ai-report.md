@@ -22,6 +22,7 @@
 - `lm_qgrepSearchText` context rendering re-checks lines inside the selected context windows with the applied query semantics/case mode, so extra true matches inside those windows still render with `:`; this does not expand windows or affect counts/caps.
 - `lm_qgrepSearchFiles` accepts `query`/`isRegexp`/`maxResults`; default query semantics are VS Code-style glob and `isRegexp=true` switches to regex.
 - In glob mode for `lm_qgrepSearchFiles.query`, patterns without `/` are treated as any-depth file globs (equivalent to `**/<pattern>`).
+- In glob mode for `lm_qgrepSearchFiles.query`, non-absolute patterns are matched against workspace-relative paths and then anchored to each target workspace root; in multi-root workspaces, `WorkspaceName/<glob>` scopes to that workspace before applying the remainder as a workspace-relative glob.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.
 - `lm_qgrepSearchText` uses `maxResultsApplied` as the backend qgrep `search` call limit and clamps to `2000`; payload includes `maxResultsRequested` only when text input is clamped. `lm_qgrepSearchFiles` also clamps `maxResults` to `2000`, then forwards `maxResultsApplied` as the backend qgrep `files` call limit.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true and then `totalAvailable` is a lower bound; `hardLimitHit` is returned only when the backend query limit is hit.
@@ -52,6 +53,7 @@
 - `lm_qgrepSearchText.includePattern` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), and glob inputs are force-compiled into qgrep-compatible `fi` regex filters that run before qgrep output truncation.
 - `lm_qgrepSearchText` uses `includePattern` for path/glob scope; legacy `searchPath` and `includeIgnoredFiles` inputs are ignored and do not affect query behavior.
 - `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath` inputs; `includeIgnoredFiles` is tolerated but ignored.
+- `lm_qgrepSearchFiles` validates legacy file-search params plus glob/regex query parsing before qgrep readiness wait or auto-init, so invalid requests fail fast without blocking on indexing.
 - `lm_qgrepSearchFiles` supports regex workspace scoping via `WorkspaceName/<regex>` when `isRegexp=true`; the prefix is a literal scope selector and only the remainder is evaluated as regex.
 - Status bar is split: server item (`LM Tools Bridge`) and dedicated qgrep item (`qgrep <circle> <percent> <A/B>`).
 - qgrep status bar shows `qgrep not initialized` when there is no initialized workspace.
@@ -70,6 +72,7 @@
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
+- `src/qgrepFilesQuery.ts -> buildFilesQueryDraft | ensureFilesLegacyParamsUnsupported`
 - `src/manager.ts -> handleMcpHttpRequest | dispatchRootsListRequest`
 - `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath | resolveComparablePath`
 
@@ -101,6 +104,7 @@
 - Exposure/enable policy -> `src/tooling.ts`.
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
 - qgrep glob compiler/shared semantics -> `src/qgrepGlob.ts`.
+- qgrep files query parsing/fail-fast validation -> `src/qgrepFilesQuery.ts`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
 - Handshake/session routing -> `src/manager.ts`.
 - Diagnostics contract -> `src/tooling.ts`.

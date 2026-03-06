@@ -3,13 +3,19 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
+  compileFilesQueryGlobToRegexSource,
   compileGlobToRegexSource,
   compileTextQueryGlobToRegexSource,
   hasUnescapedGlobMeta,
   normalizeFilesQueryGlobErrorMessage,
-  normalizeFilesQueryGlobPattern,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
+import {
+  buildFilesQueryDraft,
+  ensureFilesLegacyParamsUnsupported,
+  type FilesQueryDraft,
+  type QgrepFilesQuerySemantics,
+} from './qgrepFilesQuery';
 import { parseOptionalContextLineCount } from './qgrepOutput';
 
 const QGREP_DIR_NAME = 'qgrep';
@@ -180,8 +186,6 @@ interface ParsedQgrepResultSummary {
 
 type QgrepTextQuerySemantics = 'glob' | 'regex';
 type QgrepTextCasePolicy = 'smart-case' | 'explicit-case-sensitive';
-type QgrepFilesQuerySemantics = 'glob-vscode' | 'regex';
-
 interface ParsedQgrepFile {
   absolutePath: string;
 }
@@ -454,11 +458,12 @@ class QgrepService implements vscode.Disposable {
 
   public async files(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const query = this.parseFilesQuery(input);
-    const filesQueryPlan = this.buildFilesQueryPlan(input, query);
+    const filesQueryDraft = this.buildFilesQueryDraft(input, query);
     const maxResults = this.parseMaxResults(input);
     const maxResultsPayload = this.buildFilesMaxResultsPayload(maxResults);
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
     await this.ensureToolSearchReady();
+    const filesQueryPlan = this.materializeFilesQueryPlan(filesQueryDraft);
 
     if (filesQueryPlan.targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
@@ -815,26 +820,14 @@ class QgrepService implements vscode.Disposable {
     return rounded;
   }
 
-  private buildFilesQueryPlan(input: Record<string, unknown>, query: string): FilesQueryPlan {
-    this.ensureFilesLegacyParamsUnsupported(input);
+  private buildFilesQueryDraft(input: Record<string, unknown>, query: string): FilesQueryDraft {
+    ensureFilesLegacyParamsUnsupported(input);
     const isRegexp = this.parseOptionalBooleanInput(input.isRegexp, 'isRegexp') ?? false;
-    if (isRegexp) {
-      return this.buildRegexFilesQueryPlan(query);
-    }
-    return this.buildGlobFilesQueryPlan(query);
-  }
-
-  private ensureFilesLegacyParamsUnsupported(input: Record<string, unknown>): void {
-    if (Object.prototype.hasOwnProperty.call(input, 'mode') && input.mode !== undefined) {
-      throw new Error(
-        'mode is no longer supported for lm_qgrepSearchFiles. Use query with optional isRegexp instead.',
-      );
-    }
-    if (Object.prototype.hasOwnProperty.call(input, 'searchPath') && input.searchPath !== undefined) {
-      throw new Error(
-        'searchPath is no longer supported for lm_qgrepSearchFiles. Use query with WorkspaceName/... scoping.',
-      );
-    }
+    return buildFilesQueryDraft(
+      query,
+      isRegexp,
+      (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.name),
+    );
   }
 
   private applySearchMaxResultsLimit(maxResults: number): number {
@@ -863,72 +856,31 @@ class QgrepService implements vscode.Disposable {
     return { maxResultsApplied };
   }
 
-  private buildRegexFilesQueryPlan(query: string): FilesQueryPlan {
-    const scoped = this.tryResolveWorkspacePrefixedRegexQuery(query);
-    if (scoped) {
-      const state = this.requireInitializedState(scoped.folder);
-      return {
-        targets: [{ state, queryRegex: scoped.regexQuery }],
-        scope: scoped.folder.name,
-        semantics: 'regex',
-      };
-    }
+  private materializeFilesQueryPlan(filesQueryDraft: FilesQueryDraft): FilesQueryPlan {
     return {
-      targets: this.getInitializedStates().map((state) => ({ state, queryRegex: query })),
-      scope: null,
-      semantics: 'regex',
+      targets: filesQueryDraft.targets.map((target) => {
+        const folder = this.requireWorkspaceFolderByName(target.workspaceName);
+        const state = this.requireInitializedState(folder);
+        if (target.kind === 'regex') {
+          return {
+            state,
+            queryRegex: target.queryRegex,
+          };
+        }
+        if (target.kind === 'glob-absolute') {
+          return {
+            state,
+            queryRegex: this.compileFilesGlobQueryToRegex(target.pattern),
+          };
+        }
+        return {
+          state,
+          queryRegex: this.compileWorkspaceAnchoredFilesGlobQueryToRegex(folder, target.pattern),
+        };
+      }),
+      scope: filesQueryDraft.scope,
+      semantics: filesQueryDraft.semantics,
     };
-  }
-
-  private buildGlobFilesQueryPlan(query: string): FilesQueryPlan {
-    const prefixed = this.tryResolveWorkspacePrefixedGlobPattern(query);
-    if (prefixed) {
-      const state = this.requireInitializedState(prefixed.folder);
-      return {
-        targets: [{ state, queryRegex: this.compileFilesGlobQueryToRegex(prefixed.pattern) }],
-        scope: prefixed.folder.name,
-        semantics: 'glob-vscode',
-      };
-    }
-    const queryRegex = this.compileFilesGlobQueryToRegex(query);
-    return {
-      targets: this.getInitializedStates().map((state) => ({
-        state,
-        queryRegex,
-      })),
-      scope: null,
-      semantics: 'glob-vscode',
-    };
-  }
-
-  private tryResolveWorkspacePrefixedRegexQuery(inputQuery: string): {
-    folder: vscode.WorkspaceFolder;
-    regexQuery: string;
-  } | undefined {
-    const folders = vscode.workspace.workspaceFolders ?? [];
-    if (folders.length === 0) {
-      return undefined;
-    }
-    const trimmed = inputQuery.trim();
-    if (trimmed.length === 0) {
-      return undefined;
-    }
-    const normalizedInput = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
-    for (const folder of folders) {
-      const workspaceName = process.platform === 'win32' ? folder.name.toLowerCase() : folder.name;
-      if (!normalizedInput.startsWith(`${workspaceName}/`) && !normalizedInput.startsWith(`${workspaceName}\\`)) {
-        continue;
-      }
-      const remainder = trimmed.slice(folder.name.length + 1).replace(/^[\\/]+/u, '');
-      if (remainder.length === 0) {
-        throw new Error(`query regex is empty after workspace prefix '${folder.name}/'.`);
-      }
-      return {
-        folder,
-        regexQuery: remainder,
-      };
-    }
-    return undefined;
   }
 
   private compileFilesGlobQueryToRegex(query: string): string {
@@ -937,8 +889,29 @@ class QgrepService implements vscode.Disposable {
       throw new Error('query must be a non-empty glob string when isRegexp is false.');
     }
     try {
-      const normalizedQuery = normalizeFilesQueryGlobPattern(trimmed);
-      const regexSource = `^${compileGlobToRegexSource(normalizedQuery, 'query glob pattern')}$`;
+      const regexSource = `^${compileFilesQueryGlobToRegexSource(trimmed)}$`;
+      const syntaxError = validateQgrepConfigRegexSyntax(regexSource);
+      if (syntaxError) {
+        throw new Error(`generated qgrep regex is not supported (${syntaxError}).`);
+      }
+      return regexSource;
+    } catch (error) {
+      throw new Error(normalizeFilesQueryGlobErrorMessage(error));
+    }
+  }
+
+  private compileWorkspaceAnchoredFilesGlobQueryToRegex(
+    folder: vscode.WorkspaceFolder,
+    query: string,
+  ): string {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) {
+      throw new Error('query must be a non-empty glob string when isRegexp is false.');
+    }
+    try {
+      const workspaceRoot = normalizeSlash(path.resolve(folder.uri.fsPath));
+      const relativeRegexSource = compileFilesQueryGlobToRegexSource(trimmed);
+      const regexSource = `^${escapeRegex(workspaceRoot)}/${relativeRegexSource}$`;
       const syntaxError = validateQgrepConfigRegexSyntax(regexSource);
       if (syntaxError) {
         throw new Error(`generated qgrep regex is not supported (${syntaxError}).`);
@@ -1564,6 +1537,14 @@ class QgrepService implements vscode.Disposable {
       const folderName = process.platform === 'win32' ? folder.name.toLowerCase() : folder.name;
       return folderName === expected;
     });
+  }
+
+  private requireWorkspaceFolderByName(name: string): vscode.WorkspaceFolder {
+    const folder = this.findWorkspaceFolderByName(name);
+    if (!folder) {
+      throw new Error(`Workspace '${name}' is no longer available.`);
+    }
+    return folder;
   }
 
   private requireInitializedState(folder: vscode.WorkspaceFolder): WorkspaceQgrepState {

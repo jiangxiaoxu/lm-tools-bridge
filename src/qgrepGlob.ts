@@ -126,6 +126,11 @@ export function normalizeFilesQueryGlobPattern(pattern: string): string {
   return withoutLeadingSlash;
 }
 
+export function compileFilesQueryGlobToRegexSource(pattern: string): string {
+  const normalized = normalizeFilesQueryGlobPattern(pattern);
+  return compileGlobToRegexSource(normalized, 'query glob pattern');
+}
+
 export function compileTextQueryGlobToRegexSource(glob: string): string {
   try {
     const source = compileGlobToRegexSource(glob, 'query glob pattern');

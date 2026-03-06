@@ -21,6 +21,7 @@ import {
   resolveToolsConfigTarget,
 } from './configuration';
 import {
+  buildQgrepSearchLineMatcher,
   buildRenderedSearchBlocks,
   formatQgrepSearchLine,
   normalizeQgrepOutputPath,
@@ -2569,16 +2570,20 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
   const querySemanticsApplied = typeof payload.querySemanticsApplied === 'string'
     ? payload.querySemanticsApplied
     : null;
+  const query = typeof payload.query === 'string' ? payload.query : null;
   const beforeContextLines = typeof payload.beforeContextLines === 'number'
     ? payload.beforeContextLines
     : 0;
   const afterContextLines = typeof payload.afterContextLines === 'number'
     ? payload.afterContextLines
     : 0;
+  const lineMatcher = query && querySemanticsApplied && caseModeApplied
+    ? buildQgrepSearchLineMatcher(query, querySemanticsApplied, caseModeApplied)
+    : undefined;
   const groupedMatches = groupQgrepSearchMatchesByPath(payload);
   const lines: string[] = [
     'Qgrep search',
-    `query: ${typeof payload.query === 'string' ? payload.query : '<unknown>'}`,
+    `query: ${query ?? '<unknown>'}`,
     ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
     ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
     `scope: ${includePattern ?? 'all initialized workspaces'}`,
@@ -2598,6 +2603,7 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
       group.matches,
       beforeContextLines,
       afterContextLines,
+      lineMatcher,
     );
     lines.push('====');
     lines.push(normalizeQgrepOutputPath(group.absolutePath));
@@ -2677,6 +2683,7 @@ async function renderQgrepSearchBlocksForFile(
   matches: readonly QgrepSearchMatchView[],
   beforeContextLines: number,
   afterContextLines: number,
+  lineMatcher?: (lineText: string) => boolean,
 ): Promise<Array<{ lines: Array<{ lineNumber: number; isMatch: boolean; text: string }> }>> {
   const matchLines = matches.map((entry) => entry.line);
   try {
@@ -2686,6 +2693,7 @@ async function renderQgrepSearchBlocksForFile(
       matchLines,
       beforeContextLines,
       afterContextLines,
+      lineMatcher,
     );
     if (renderedBlocks.length > 0) {
       return renderedBlocks.map((block) => ({

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildQgrepSearchLineMatcher,
   buildMergedLineWindows,
   buildRenderedSearchBlocks,
   formatQgrepSearchLine,
@@ -47,6 +48,60 @@ test('rendered blocks include context and mark match lines', () => {
       '5:C:e',
     ],
   );
+});
+
+test('context rendering marks additional true matches inside the selected window', () => {
+  const matcher = buildQgrepSearchLineMatcher('foo', 'glob', 'insensitive');
+  assert.ok(matcher);
+
+  const blocks = buildRenderedSearchBlocks('zero\nfoo\nFOO\nfour', [2], 1, 1, matcher);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].startLine, 1);
+  assert.equal(blocks[0].endLine, 3);
+  assert.deepEqual(
+    blocks[0].lines.map((entry) => `${entry.lineNumber}:${entry.isMatch ? 'M' : 'C'}:${entry.text}`),
+    [
+      '1:C:zero',
+      '2:M:foo',
+      '3:M:FOO',
+    ],
+  );
+});
+
+test('additional local matches do not expand context windows', () => {
+  const matcher = buildQgrepSearchLineMatcher('foo', 'glob', 'insensitive');
+  assert.ok(matcher);
+
+  const blocks = buildRenderedSearchBlocks('zero\nfoo\ntwo\nFOO\nfour', [2], 1, 1, matcher);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].startLine, 1);
+  assert.equal(blocks[0].endLine, 3);
+  assert.deepEqual(
+    blocks[0].lines.map((entry) => `${entry.lineNumber}:${entry.isMatch ? 'M' : 'C'}:${entry.text}`),
+    [
+      '1:C:zero',
+      '2:M:foo',
+      '3:C:two',
+    ],
+  );
+});
+
+test('line matcher respects glob smart-case sensitive matching', () => {
+  const matcher = buildQgrepSearchLineMatcher('Foo', 'glob', 'sensitive');
+  assert.ok(matcher);
+  assert.equal(matcher('prefix Foo suffix'), true);
+  assert.equal(matcher('prefix foo suffix'), false);
+});
+
+test('line matcher supports regex queries', () => {
+  const matcher = buildQgrepSearchLineMatcher('foo|bar', 'regex', 'insensitive');
+  assert.ok(matcher);
+  assert.equal(matcher('zzzBARzzz'), true);
+  assert.equal(matcher('zzzbazzzz'), false);
+});
+
+test('invalid local regex matcher falls back to undefined', () => {
+  assert.equal(buildQgrepSearchLineMatcher('(', 'regex', 'sensitive'), undefined);
 });
 
 test('search line formatter uses fixed four-space separator', () => {

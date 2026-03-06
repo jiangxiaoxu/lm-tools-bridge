@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.107`.
+- Version baseline: `1.0.109`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -19,6 +19,7 @@
 - In glob mode, both `lm_qgrepSearchText.query` and `lm_qgrepSearchFiles.query` follow VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In glob mode for `lm_qgrepSearchText.query`, `*` and `?` do not match `/`, while `**` can match across `/`; query matching remains substring-based (no implicit `^...$` anchoring).
 - `lm_qgrepSearchText` supports `beforeContextLines`/`afterContextLines` (default `0`, max `20`) and always renders line numbers in text output.
+- `lm_qgrepSearchText` context rendering re-checks lines inside the selected context windows with the applied query semantics/case mode, so extra true matches inside those windows still render with `:`; this does not expand windows or affect counts/caps.
 - `lm_qgrepSearchFiles` accepts `query`/`isRegexp`/`maxResults`; default query semantics are VS Code-style glob and `isRegexp=true` switches to regex.
 - In glob mode for `lm_qgrepSearchFiles.query`, patterns without `/` are treated as any-depth file globs (equivalent to `**/<pattern>`).
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.

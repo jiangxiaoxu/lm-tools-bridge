@@ -1,3 +1,5 @@
+import { compileTextQueryGlobToRegexSource } from './qgrepGlob';
+
 export const QGREP_SEARCH_CONTEXT_LINES_LIMIT = 20;
 
 const QGREP_TEXT_ONLY_TOOL_NAMES = new Set<string>([
@@ -24,6 +26,7 @@ export interface QgrepLineWindow {
 }
 
 export type CustomToolResponseMode = 'text-only' | 'text-and-structured';
+export type QgrepSearchLineMatcher = (lineText: string) => boolean;
 
 /**
  * Parses optional context line counts for qgrep search preview rendering.
@@ -60,6 +63,30 @@ export function normalizeQgrepOutputPath(pathValue: string): string {
   return pathValue.replace(/\\/g, '/');
 }
 
+export function buildQgrepSearchLineMatcher(
+  query: string,
+  querySemanticsApplied: string,
+  caseModeApplied: string,
+): QgrepSearchLineMatcher | undefined {
+  if (querySemanticsApplied !== 'glob' && querySemanticsApplied !== 'regex') {
+    return undefined;
+  }
+  if (caseModeApplied !== 'sensitive' && caseModeApplied !== 'insensitive') {
+    return undefined;
+  }
+
+  try {
+    const flags = caseModeApplied === 'insensitive' ? 'iu' : 'u';
+    const regexSource = querySemanticsApplied === 'glob'
+      ? compileTextQueryGlobToRegexSource(query)
+      : query;
+    const matcher = new RegExp(regexSource, flags);
+    return (lineText: string) => matcher.test(lineText);
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildMergedLineWindows(
   matchLines: readonly number[],
   beforeContextLines: number,
@@ -93,6 +120,7 @@ export function buildRenderedSearchBlocks(
   matchLines: readonly number[],
   beforeContextLines: number,
   afterContextLines: number,
+  lineMatcher?: QgrepSearchLineMatcher,
 ): QgrepRenderedBlock[] {
   const normalizedText = fileText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const allLines = normalizedText.split('\n');
@@ -115,10 +143,11 @@ export function buildRenderedSearchBlocks(
   return windows.map((window) => {
     const lines: QgrepRenderedLine[] = [];
     for (let lineNumber = window.startLine; lineNumber <= window.endLine; lineNumber += 1) {
+      const text = allLines[lineNumber - 1] ?? '';
       lines.push({
         lineNumber,
-        isMatch: matchSet.has(lineNumber),
-        text: allLines[lineNumber - 1] ?? '',
+        isMatch: matchSet.has(lineNumber) || (lineMatcher?.(text) ?? false),
+        text,
       });
     }
     return {

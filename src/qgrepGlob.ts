@@ -126,6 +126,19 @@ export function normalizeFilesQueryGlobPattern(pattern: string): string {
   return withoutLeadingSlash;
 }
 
+export function compileTextQueryGlobToRegexSource(glob: string): string {
+  try {
+    const source = compileGlobToRegexSource(glob, 'query glob pattern');
+    // Validate generated regex in JS first for early error reporting.
+    // qgrep query execution still uses RE2-compatible matching rules.
+    // eslint-disable-next-line no-new
+    new RegExp(source, 'u');
+    return source;
+  } catch (error) {
+    throw new Error(normalizeQueryGlobErrorMessage(error));
+  }
+}
+
 export function compileGlobToRegexSource(glob: string, contextLabel: string): string {
   const state: GlobPatternParserState = {
     pattern: glob,

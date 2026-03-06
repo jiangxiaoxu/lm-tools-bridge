@@ -48,6 +48,7 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 - In glob mode, `lm_qgrepSearchText.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In text glob mode, `*` and `?` do not match `/`, while `**` can match across `/`.
 - `beforeContextLines` and `afterContextLines` control preview context lines (`0-20`, default `0`), and output always includes line numbers.
+- When context lines are enabled, extra true matches that fall inside the selected context windows are still rendered as match lines (`:`); this does not expand windows or change result counts.
 - `lm_qgrepSearchText` supports `includePattern` and does not support `searchPath` or `includeIgnoredFiles`.
 - `lm_qgrepSearchFiles`: indexed file search via `query/isRegexp/maxResults` (default glob, optional regex, plain-text output).
 - In glob mode, `lm_qgrepSearchFiles.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
@@ -158,6 +159,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - 在 glob 模式下,`lm_qgrepSearchText.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
 - 文本 glob 模式下,`*` 和 `?` 不匹配 `/`,`**` 可以跨 `/` 匹配.
 - `beforeContextLines` 和 `afterContextLines` 控制预览上下文行(`0-20`,默认 `0`),输出始终包含行号.
+- 开启上下文行后,若所选上下文窗口内还有额外真实命中,这些行也会继续按命中行(`:`)显示,但不会扩展窗口或改变结果计数.
 - `lm_qgrepSearchText` 支持 `includePattern`,不支持 `searchPath` 和 `includeIgnoredFiles`.
 - `lm_qgrepSearchFiles`: 使用 `query/isRegexp/maxResults` 做索引文件搜索(默认 glob,可切 regex,纯文本输出).
 - 在 glob 模式下,`lm_qgrepSearchFiles.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).

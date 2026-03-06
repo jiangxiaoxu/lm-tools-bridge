@@ -4,10 +4,10 @@ import * as path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   compileGlobToRegexSource,
+  compileTextQueryGlobToRegexSource,
   hasUnescapedGlobMeta,
   normalizeFilesQueryGlobErrorMessage,
   normalizeFilesQueryGlobPattern,
-  normalizeQueryGlobErrorMessage,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
 import { parseOptionalContextLineCount } from './qgrepOutput';
@@ -2778,19 +2778,6 @@ function compileAbsoluteGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
 
 function compileWorkspaceGlobToRegexSource(glob: string): string {
   return compileGlobToRegexSource(glob, 'includePattern glob pattern');
-}
-
-function compileTextQueryGlobToRegexSource(glob: string): string {
-  try {
-    const source = compileGlobToRegexSource(glob, 'query glob pattern');
-    // Validate generated regex in JS first for early error reporting.
-    // qgrep query execution still uses RE2-compatible matching rules.
-    // eslint-disable-next-line no-new
-    new RegExp(source, 'u');
-    return source;
-  } catch (error) {
-    throw new Error(normalizeQueryGlobErrorMessage(error));
-  }
 }
 
 function normalizeSearchExcludeGlob(pattern: string): string | undefined {

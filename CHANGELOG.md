@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.109] - 2026-03-06
+
+### English
+
+#### Fixed
+- Updated `lm_qgrepSearchText` context rendering so extra true matches inside selected context windows are still marked as match lines (`:`) without expanding windows or changing result counts.
+
+#### Tests
+- Added qgrep context-rendering coverage for local line re-checking, window-boundary stability, and glob/regex matcher fallback behavior.
+
+### 中文
+
+#### 修复
+- 调整 `lm_qgrepSearchText` 的上下文渲染, 让所选上下文窗口内的额外真实命中仍按命中行(`:`)显示, 同时不扩展窗口, 也不改变结果计数。
+
+#### 测试
+- 补充 qgrep 上下文渲染测试, 覆盖本地逐行复判、窗口边界稳定性, 以及 glob/regex matcher 的降级行为。
+
 ## [1.0.108] - 2026-03-05
 
 ### English

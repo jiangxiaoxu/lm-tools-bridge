@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.112] - 2026-03-08
+
+### English
+
+#### Docs
+- Clarified `lm_qgrepSearchText` glob matching in tool descriptions and README as substring-based text matching without implicit `^...$` anchoring.
+- Clarified `lm_qgrepSearchFiles` glob matching in tool descriptions and README as whole-path file matching rather than substring text matching.
+
+### 中文
+
+#### Docs
+- 在工具描述和 README 中补充 `lm_qgrepSearchText` 的 glob 匹配说明, 明确其为 substring 形式的文本匹配, 不会隐式添加 `^...$` 锚定.
+- 在工具描述和 README 中补充 `lm_qgrepSearchFiles` 的 glob 匹配说明, 明确其为整路径的文件匹配, 不是 substring 形式的文本匹配.
+
 ## [1.0.111] - 2026-03-06
 
 ### English

@@ -356,6 +356,7 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
   'In glob mode, * and ? do not match /, while ** can match across /.',
+  'In text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring.',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
   'beforeContextLines/afterContextLines optionally add preview context lines around each match (0-20 each).',
   'Output is plain text with absolute paths (/) and always includes line numbers.',
@@ -385,7 +386,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Text search pattern. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}), where * and ? do not match / and ** can match across /; set isRegexp=true to treat query as a regular expression.',
+      description: 'Text search pattern. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}), where * and ? do not match / and ** can match across /; in text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring; set isRegexp=true to treat query as a regular expression.',
     },
     caseSensitive: {
       type: 'boolean',
@@ -428,6 +429,7 @@ const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
   'In glob mode, queries without / are matched at any depth (for example, *.md behaves like **/*.md).',
+  'In files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching.',
   'Output is plain text with absolute paths (/).',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
   'qgrep indexing and file search are workspace-only; external folders cannot be indexed or searched.',
@@ -443,7 +445,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); set isRegexp=true to treat query as a regular expression.',
+      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; set isRegexp=true to treat query as a regular expression.',
     },
     isRegexp: {
       type: 'boolean',

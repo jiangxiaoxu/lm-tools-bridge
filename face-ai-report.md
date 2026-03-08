@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.109`.
+- Version baseline: `1.0.112`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -32,7 +32,7 @@
 - qgrep glob input errors normalize to `Invalid query glob pattern: ...` without duplicating the `Error:` prefix from JS error stringification.
 - qgrep text output parsing treats the first `:line:` delimiter as authoritative, so `preview` keeps literal `:number:` segments without corrupting path/line extraction.
 - Custom tool `content.text` summaries are sanitized before returning: ANSI/control/bidi/zero-width characters are stripped for stable rendering.
-- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; use `lm_qgrepGetStatus` for readiness details.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; `lm_qgrepSearchText` descriptions explicitly note substring-based glob matching without implicit `^...$` anchoring, and `lm_qgrepSearchFiles` descriptions explicitly note whole-path-anchored path matching instead of substring matching; use `lm_qgrepGetStatus` for readiness details.
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.

@@ -20,6 +20,7 @@ async function main(): Promise<void> {
   const runs = await Promise.all([
     createSmokeRun(repoRoot),
     createMultiRootRun(repoRoot),
+    createMultiRootBraceRun(repoRoot),
   ]);
 
   try {
@@ -92,6 +93,20 @@ async function createMultiRootRun(repoRoot: string): Promise<IntegrationRun> {
     name: 'multi-root',
     workspacePath: path.join(tempDir, 'multi-root.code-workspace'),
     extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/multiRootRunner'),
+    cleanup: async () => {
+      await removeDirectoryWithRetries(tempDir);
+    },
+  };
+}
+
+async function createMultiRootBraceRun(repoRoot: string): Promise<IntegrationRun> {
+  const sourceDir = path.join(repoRoot, 'src/test/fixtures/multi-root-brace');
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-multi-root-brace-'));
+  await copyDirectory(sourceDir, tempDir);
+  return {
+    name: 'multi-root-brace',
+    workspacePath: path.join(tempDir, 'multi-root-brace.code-workspace'),
+    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/multiRootBraceRunner'),
     cleanup: async () => {
       await removeDirectoryWithRetries(tempDir);
     },

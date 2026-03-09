@@ -2,6 +2,7 @@ import {
   compileFilesQueryGlobToRegexSource,
   normalizeFilesQueryGlobErrorMessage,
 } from './qgrepGlob';
+import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
 
 export type QgrepFilesQuerySemantics = 'glob-vscode' | 'regex';
 
@@ -79,16 +80,16 @@ function buildGlobFilesQueryDraft(
   workspaceNames: readonly string[],
 ): FilesQueryDraft {
   const trimmed = query.trim();
-  const scoped = tryResolveWorkspacePrefixedGlobPattern(trimmed, workspaceNames);
+  const scoped = tryResolveWorkspaceScopePattern(trimmed, workspaceNames);
   if (scoped) {
     validateFilesGlobPattern(scoped.pattern);
     return {
-      targets: [{
-        workspaceName: scoped.workspaceName,
-        kind: 'glob-relative',
+      targets: scoped.workspaceNames.map((workspaceName) => ({
+        workspaceName,
+        kind: 'glob-relative' as const,
         pattern: scoped.pattern,
-      }],
-      scope: scoped.workspaceName,
+      })),
+      scope: scoped.scopeLabel,
       semantics: 'glob-vscode',
     };
   }
@@ -143,37 +144,6 @@ function tryResolveWorkspacePrefixedRegexQuery(
       workspaceName,
       regexQuery: remainder,
     };
-  }
-  return undefined;
-}
-
-function tryResolveWorkspacePrefixedGlobPattern(
-  inputPath: string,
-  workspaceNames: readonly string[],
-): {
-  workspaceName: string;
-  pattern: string;
-} | undefined {
-  const trimmed = inputPath.trim().replace(/^[\\/]+/u, '');
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-  const normalizedInput = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
-  for (const workspaceName of workspaceNames) {
-    const expectedName = process.platform === 'win32' ? workspaceName.toLowerCase() : workspaceName;
-    if (normalizedInput === expectedName) {
-      return {
-        workspaceName,
-        pattern: '**/*',
-      };
-    }
-    if (normalizedInput.startsWith(`${expectedName}/`) || normalizedInput.startsWith(`${expectedName}\\`)) {
-      const remainder = trimmed.slice(workspaceName.length + 1).replace(/^[\\/]+/u, '');
-      return {
-        workspaceName,
-        pattern: remainder.length > 0 ? remainder : '**/*',
-      };
-    }
   }
   return undefined;
 }

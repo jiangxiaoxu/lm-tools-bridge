@@ -6,6 +6,34 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.113] - 2026-03-09
+
+### English
+
+#### Features
+- Added brace-scoped multi-workspace glob support for qgrep so `lm_qgrepSearchFiles.query` and `lm_qgrepSearchText.includePattern` now accept selectors like `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}`.
+- Kept single-workspace glob scoping and regex workspace scoping behavior unchanged while normalizing multi-workspace scope labels in qgrep file-search summaries.
+
+#### Tests
+- Added unit coverage for brace-scoped workspace selector parsing, including the contract pattern `{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}`.
+- Added an anonymized multi-root integration fixture and runner to verify brace-scoped qgrep file and text searches across selected workspaces only.
+
+#### Docs
+- Updated qgrep tool descriptions, README, and face-ai-report preload guidance to document brace-scoped multi-workspace glob examples with anonymized workspace names.
+
+### 中文
+
+#### Features
+- 为 qgrep 新增 brace 形式的 multi-workspace glob scope, 现在 `lm_qgrepSearchFiles.query` 和 `lm_qgrepSearchText.includePattern` 都支持 `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` 这类 selector.
+- 保持原有单 workspace glob scope 和 regex workspace scope 行为不变, 同时让 qgrep file search summary 中的多 workspace `scope` 以规范化形式输出.
+
+#### Tests
+- 新增 brace-scoped workspace selector 的单测覆盖, 包括 `{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}` 这个 contract pattern.
+- 新增脱敏的 multi-root 集成夹具与 runner, 验证 brace-scoped qgrep file search 和 text search 只会命中被选中的 workspace.
+
+#### Docs
+- 更新 qgrep tool description, README 和 face-ai-report 预载说明, 使用脱敏 workspace 名补充 brace-scoped multi-workspace glob 示例.
+
 ## [1.0.112] - 2026-03-08
 
 ### English

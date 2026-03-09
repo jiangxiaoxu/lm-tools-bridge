@@ -363,8 +363,8 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'When caseSensitive=true, search is always case-sensitive. Otherwise smart-case is used (all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive).',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
   'If includePattern is omitted, search runs across all initialized workspace folders.',
-  'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., or workspace-relative.',
-  'includePattern examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js',
+  'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative.',
+  'includePattern examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js',
   'Supported inputs: query, caseSensitive, isRegexp, includePattern, maxResults, beforeContextLines, afterContextLines.',
 ].join('\n');
 
@@ -399,7 +399,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
     },
     includePattern: {
       type: 'string',
-      description: 'Optional path scope as path or glob: absolute, WorkspaceName/..., or workspace-relative. Glob examples: WorkspaceName/** (for example, UE5/**), **/*.{js,ts}, src/**, **/foo/**/*.js.',
+      description: 'Optional path scope as path or glob: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative. Glob examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js.',
     },
     maxResults: {
       type: 'integer',
@@ -429,6 +429,7 @@ const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep.',
   'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
   'In glob mode, queries without / are matched at any depth (for example, *.md behaves like **/*.md).',
+  'In multi-root workspaces, WorkspaceName/<glob> scopes to one workspace, and {WorkspaceA,WorkspaceB}/<glob> aggregates the selected workspaces only.',
   'In files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching.',
   'Output is plain text with absolute paths (/).',
   'Set isRegexp=true to switch query interpretation to regular expression mode.',
@@ -436,7 +437,8 @@ const LM_QGREP_FILES_DESCRIPTION = [
   'Supported inputs: query, isRegexp, maxResults.',
   'Examples:',
   '{"query":"**/*.{ts,js}","maxResults":200}',
-  '{"query":"UE5/**/Manager*.h"}',
+  '{"query":"WorkspaceName/**/Manager*.h"}',
+  '{"query":"{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}"}',
   '{"query":"WorkspaceA/src/.*\\\\.ts$","isRegexp":true}',
 ].join('\n');
 
@@ -445,7 +447,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; set isRegexp=true to treat query as a regular expression.',
+      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in multi-root workspaces, WorkspaceName/<glob> scopes to one workspace and {WorkspaceA,WorkspaceB}/<glob> aggregates selected workspaces only; in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; set isRegexp=true to treat query as a regular expression.',
     },
     isRegexp: {
       type: 'boolean',

@@ -1,0 +1,16 @@
+{
+  "folders": [
+    {
+      "name": "WorkspaceA",
+      "path": "workspace-a"
+    },
+    {
+      "name": "WorkspaceB",
+      "path": "workspace-b"
+    }
+  ],
+  "settings": {
+    "lmToolsBridge.server.autoStart": false,
+    "lmToolsBridge.debug": "off"
+  }
+}

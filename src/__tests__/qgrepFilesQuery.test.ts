@@ -76,6 +76,31 @@ test('glob draft normalizes Windows separators in WorkspaceName-prefixed pattern
   });
 });
 
+test('glob draft expands brace-scoped multi-workspace patterns', () => {
+  const draft = buildFilesQueryDraft(
+    '{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}',
+    false,
+    ['CthulhuGame', 'UE5', 'Tools'],
+  );
+
+  assert.deepEqual(draft, {
+    targets: [
+      {
+        workspaceName: 'CthulhuGame',
+        kind: 'glob-relative',
+        pattern: '**/*.{h,cpp,cs,as}',
+      },
+      {
+        workspaceName: 'UE5',
+        kind: 'glob-relative',
+        pattern: '**/*.{h,cpp,cs,as}',
+      },
+    ],
+    scope: '{CthulhuGame,UE5}',
+    semantics: 'glob-vscode',
+  });
+});
+
 test('regex draft scopes WorkspaceName-prefixed queries to a single workspace', () => {
   const draft = buildFilesQueryDraft('Game/Source/.+\\.cs$', true, ['Game', 'Engine']);
 

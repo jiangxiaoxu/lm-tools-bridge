@@ -16,6 +16,7 @@ import {
   type FilesQueryDraft,
   type QgrepFilesQuerySemantics,
 } from './qgrepFilesQuery';
+import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
 import { parseOptionalContextLineCount } from './qgrepOutput';
 
 const QGREP_DIR_NAME = 'qgrep';
@@ -1138,11 +1139,16 @@ class QgrepService implements vscode.Disposable {
       return this.getInitializedStates().map((state) => this.createGlobSearchTarget(state, matcher));
     }
 
-    const prefixed = this.tryResolveWorkspacePrefixedGlobPattern(trimmed);
-    if (prefixed) {
-      const state = this.requireInitializedState(prefixed.folder);
-      const matcher = compileWorkspaceGlobPathMatcher(prefixed.pattern);
-      return [this.createGlobSearchTarget(state, matcher)];
+    const scoped = tryResolveWorkspaceScopePattern(
+      trimmed,
+      (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.name),
+    );
+    if (scoped) {
+      const matcher = compileWorkspaceGlobPathMatcher(scoped.pattern);
+      return scoped.workspaceNames.map((workspaceName) => {
+        const state = this.requireInitializedState(this.requireWorkspaceFolderByName(workspaceName));
+        return this.createGlobSearchTarget(state, matcher);
+      });
     }
 
     const matcher = compileWorkspaceGlobPathMatcher(trimmed);
@@ -1270,41 +1276,6 @@ class QgrepService implements vscode.Disposable {
       folder,
       remainder,
     };
-  }
-
-  private tryResolveWorkspacePrefixedGlobPattern(inputPath: string): {
-    folder: vscode.WorkspaceFolder;
-    pattern: string;
-  } | undefined {
-    const folders = vscode.workspace.workspaceFolders ?? [];
-    if (folders.length === 0) {
-      return undefined;
-    }
-
-    const trimmed = inputPath.trim().replace(/^[\\/]+/u, '');
-    if (trimmed.length === 0) {
-      return undefined;
-    }
-
-    const normalizedInput = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
-    for (const folder of folders) {
-      const workspaceName = process.platform === 'win32' ? folder.name.toLowerCase() : folder.name;
-      if (normalizedInput === workspaceName) {
-        return {
-          folder,
-          pattern: '**/*',
-        };
-      }
-      if (normalizedInput.startsWith(`${workspaceName}/`) || normalizedInput.startsWith(`${workspaceName}\\`)) {
-        const remainder = trimmed.slice(folder.name.length + 1).replace(/^[\\/]+/u, '');
-        return {
-          folder,
-          pattern: remainder.length > 0 ? remainder : '**/*',
-        };
-      }
-    }
-
-    return undefined;
   }
 
   private buildFilterRegex(folder: vscode.WorkspaceFolder, absolutePath: string): string | undefined {

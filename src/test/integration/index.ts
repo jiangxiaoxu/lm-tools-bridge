@@ -1,7 +1,8 @@
+import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { runTests } from '@vscode/test-electron';
+import { downloadAndUnzipVSCode } from '@vscode/test-electron';
 
 interface IntegrationRun {
   name: string;
@@ -9,6 +10,8 @@ interface IntegrationRun {
   extensionTestsPath: string;
   cleanup: () => Promise<void>;
 }
+
+let vscodeExecutablePathPromise: Promise<string> | undefined;
 
 async function main(): Promise<void> {
   if (process.platform !== 'win32') {
@@ -39,24 +42,67 @@ async function executeIntegrationRun(repoRoot: string, run: IntegrationRun): Pro
   const extensionsDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-ext-'));
   try {
     console.log(`Running VS Code integration suite: ${run.name}`);
-    await runTests({
-      extensionDevelopmentPath: repoRoot,
-      extensionTestsPath: run.extensionTestsPath,
-      launchArgs: [
-        run.workspacePath,
-        '--disable-workspace-trust',
-        '--skip-welcome',
-        '--skip-release-notes',
-        '--user-data-dir',
-        userDataDir,
-        '--extensions-dir',
-        extensionsDir,
-      ],
-    });
+    const vscodeExecutablePath = await getVSCodeExecutablePath();
+    await launchIntegrationHost(vscodeExecutablePath, buildIntegrationLaunchArgs(repoRoot, run, userDataDir, extensionsDir));
+    console.log(`Completed VS Code integration suite: ${run.name}`);
   } finally {
     await removeDirectoryWithRetries(userDataDir);
     await removeDirectoryWithRetries(extensionsDir);
   }
+}
+
+async function getVSCodeExecutablePath(): Promise<string> {
+  vscodeExecutablePathPromise ??= downloadAndUnzipVSCode();
+  return await vscodeExecutablePathPromise;
+}
+
+function buildIntegrationLaunchArgs(
+  repoRoot: string,
+  run: IntegrationRun,
+  userDataDir: string,
+  extensionsDir: string,
+): string[] {
+  return [
+    run.workspacePath,
+    '--disable-workspace-trust',
+    '--skip-welcome',
+    '--skip-release-notes',
+    '--user-data-dir',
+    userDataDir,
+    '--extensions-dir',
+    extensionsDir,
+    '--no-sandbox',
+    '--disable-gpu-sandbox',
+    '--disable-updates',
+    `--extensionTestsPath=${run.extensionTestsPath}`,
+    `--extensionDevelopmentPath=${repoRoot}`,
+  ];
+}
+
+async function launchIntegrationHost(vscodeExecutablePath: string, args: readonly string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = cp.spawn(vscodeExecutablePath, [...args], {
+      env: { ...process.env },
+      shell: false,
+      windowsHide: true,
+      stdio: 'inherit',
+    });
+
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          signal
+            ? `VS Code integration host terminated with signal ${signal}.`
+            : `VS Code integration host exited with code ${String(code)}.`,
+        ),
+      );
+    });
+  });
 }
 
 async function createSmokeRun(repoRoot: string): Promise<IntegrationRun> {

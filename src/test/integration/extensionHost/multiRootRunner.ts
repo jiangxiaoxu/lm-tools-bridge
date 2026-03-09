@@ -52,6 +52,13 @@ const buildCsFixturePaths = [
   'Game/Source/GameRuntime/GameRuntime.Build.cs',
 ];
 
+const targetAndBuildCsFixturePaths = [
+  'Game/Source/Game.Target.cs',
+  'Game/Source/GameEditor.Target.cs',
+  'Game/Source/GameEditor/GameEditor.Build.cs',
+  'Game/Source/GameRuntime/GameRuntime.Build.cs',
+];
+
 const targetFixturePaths = [
   'Engine/Source/Engine.Target.cs',
   'Game/Source/Game.Target.cs',
@@ -268,6 +275,56 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'matches Target.cs and Build.cs files within the scoped workspace using regex',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+
+        const payload = await executeQgrepFilesSearch({
+          query: 'Game/Source/.+\\.(Target|Build)\\.cs$',
+          isRegexp: true,
+          maxResults: 20,
+        });
+
+        assertSummary(payload, {
+          scope: 'Game',
+          querySemanticsApplied: 'regex',
+          count: targetAndBuildCsFixturePaths.length,
+          totalAvailable: targetAndBuildCsFixturePaths.length,
+          capped: false,
+          totalAvailableCapped: false,
+          hardLimitHit: false,
+          maxResultsApplied: 20,
+        });
+        assertFileRecordsMatch(payload, targetAndBuildCsFixturePaths);
+      },
+    },
+    {
+      name: 'matches scoped Private cpp files using regex',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+
+        const payload = await executeQgrepFilesSearch({
+          query: 'Game/Source/.+/Private/.+\\.cpp$',
+          isRegexp: true,
+          maxResults: 20,
+        });
+
+        assertSummary(payload, {
+          scope: 'Game',
+          querySemanticsApplied: 'regex',
+          count: privateCppFixturePaths.length,
+          totalAvailable: privateCppFixturePaths.length,
+          capped: false,
+          totalAvailableCapped: false,
+          hardLimitHit: false,
+          maxResultsApplied: 20,
+        });
+        assertFileRecordsMatch(payload, privateCppFixturePaths);
+      },
+    },
+    {
       name: 'keeps non-scoped target globs aggregated across workspaces',
       run: async () => {
         await activateExtension();
@@ -292,6 +349,31 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'keeps non-scoped Target regex queries aggregated across workspaces',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+
+        const payload = await executeQgrepFilesSearch({
+          query: 'Source/.+Target\\.cs$',
+          isRegexp: true,
+          maxResults: 20,
+        });
+
+        assertSummary(payload, {
+          scope: null,
+          querySemanticsApplied: 'regex',
+          count: targetFixturePaths.length,
+          totalAvailable: targetFixturePaths.length,
+          capped: false,
+          totalAvailableCapped: false,
+          hardLimitHit: false,
+          maxResultsApplied: 20,
+        });
+        assertFileRecordsMatch(payload, targetFixturePaths);
+      },
+    },
+    {
       name: 'returns no files with a consistent summary when nothing matches',
       run: async () => {
         await activateExtension();
@@ -305,6 +387,31 @@ export async function run(): Promise<void> {
         assertSummary(payload, {
           scope: 'Game',
           querySemanticsApplied: 'glob-vscode',
+          count: 0,
+          totalAvailable: 0,
+          capped: false,
+          totalAvailableCapped: false,
+          hardLimitHit: false,
+          maxResultsApplied: 20,
+        });
+        assert.deepEqual(collectFileRecords(payload), []);
+      },
+    },
+    {
+      name: 'returns no files with a consistent summary when scoped regex finds nothing',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+
+        const payload = await executeQgrepFilesSearch({
+          query: 'Game/Source/.+\\.missing$',
+          isRegexp: true,
+          maxResults: 20,
+        });
+
+        assertSummary(payload, {
+          scope: 'Game',
+          querySemanticsApplied: 'regex',
           count: 0,
           totalAvailable: 0,
           capped: false,

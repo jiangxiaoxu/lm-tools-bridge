@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.112`.
+- Version baseline: `1.0.113`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -36,9 +36,9 @@
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
-- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus temp-copied multi-root fixtures, polls workspace-folder readiness to reduce startup flakiness, and currently skips on non-Windows platforms.
-- The main multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from character-oriented runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, deep `Private/**/*.cpp` matching, cross-workspace target glob aggregation, no-result summaries, capped file-search summaries, and `absolutePath`/`workspacePath`/`workspaceFolder` consistency checks.
-- An additional anonymized brace-scope fixture (`WorkspaceA`, `WorkspaceB`) covers `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` file aggregation and matching `lm_qgrepSearchText.includePattern` filtering across selected workspaces only.
+- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus temp-copied multi-root fixtures, polls workspace-folder readiness to reduce startup flakiness, launches the VS Code test host via direct child-process spawn (`shell: false`, `windowsHide: true`) to avoid Windows shell/open-with popups, and currently skips on non-Windows platforms.
+- The main multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, scoped `WorkspaceName/<regex>` file searches, deep `Private/**/*.cpp` matching, cross-workspace target aggregation in both glob and regex modes, no-result summaries, capped file-search summaries, and `absolutePath`/`workspacePath`/`workspaceFolder` consistency checks.
+- An additional anonymized brace-scope fixture (`WorkspaceA`, `WorkspaceB`) uses a large real-source-derived corpus under anonymized workspace names; it covers `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` file aggregation, brace-selector normalization, `lm_qgrepSearchText.includePattern` filtering, and regex text-search integration (smart-case and explicit case-sensitive) across the selected workspaces only.
 - The integration runner deletes temporary VS Code user-data, extensions, and copied fixture directories with retry-based cleanup to tolerate transient Windows file locks after the extension host exits.
 - qgrep auto-maintenance still depends on initialized workspaces (`<workspace>/.vscode/qgrep/workspace.cfg`), but `lm_qgrepSearchText`/`lm_qgrepSearchFiles` now auto-initialize all current workspaces on demand before searching.
 - On extension startup, already-initialized qgrep workspaces auto-queue one background refresh that syncs extension-managed `workspace.cfg` blocks before running `qgrep update` for current-session progress/file totals.

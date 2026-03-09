@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as vscode from 'vscode';
@@ -18,18 +19,14 @@ import {
 const QGREP_READY_TIMEOUT_MS = 30_000;
 const QGREP_READY_POLL_INTERVAL_MS = 100;
 const BRACE_SCOPED_QUERY = '{WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
-const BRACE_SCOPED_SIGNAL = 'BraceWorkspaceSignal';
-
-const braceScopedFixturePaths = [
-  'WorkspaceA/Source/Runtime/Private/ScopeAnchor.cpp',
-  'WorkspaceA/Source/Runtime/Public/ScopeAnchor.h',
-  'WorkspaceA/Source/Scripting/ScopeAnchor.as',
-  'WorkspaceA/Source/Tools/ScopeAnchor.cs',
-  'WorkspaceB/Source/Editor/Private/BridgeAnchor.cpp',
-  'WorkspaceB/Source/Editor/Public/BridgeAnchor.h',
-  'WorkspaceB/Source/Scripting/BridgeAnchor.as',
-  'WorkspaceB/Source/Tools/BridgeAnchor.cs',
-];
+const BRACE_SCOPED_NORMALIZED_QUERY = '{WorkspaceB,WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
+const BRACE_SCOPED_TEXT_QUERY = '#include';
+const BRACE_SCOPED_REGEX_INCLUDE_QUERY = '#include\\s+"[^"]+"';
+const BRACE_SCOPED_REGEX_GAME_SETTING_QUERY = 'GameSetting(Value|Registry)';
+const BRACE_WORKSPACE_NAMES = ['WorkspaceA', 'WorkspaceB'];
+const BRACE_SCOPED_EXTENSIONS = new Set<string>(['.h', '.cpp', '.cs', '.as']);
+const MIN_EXPECTED_BRACE_SCOPED_FILES = 100;
+const MIN_EXPECTED_PER_WORKSPACE_FILES = 20;
 
 interface QgrepFileRecord {
   absolutePath: string;
@@ -42,13 +39,123 @@ interface QgrepMatchRecord extends QgrepFileRecord {
   preview: string;
 }
 
+interface ExpectedFixtureFile extends QgrepFileRecord {}
+
+interface ExpectedFixtureMatch extends QgrepMatchRecord {}
+
 function normalizePath(pathValue: string): string {
   return pathValue.replace(/\\/gu, '/');
 }
 
-function getWorkspaceRootMap(): Map<string, string> {
+function getBraceWorkspaceFolders(): vscode.WorkspaceFolder[] {
   const folders = vscode.workspace.workspaceFolders ?? [];
-  return new Map(folders.map((folder) => [folder.name, normalizePath(path.resolve(folder.uri.fsPath))]));
+  return folders.filter((folder) => BRACE_WORKSPACE_NAMES.includes(folder.name));
+}
+
+async function collectFilesRecursively(directoryPath: string): Promise<string[]> {
+  const entries = await fs.promises.readdir(directoryPath, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(directoryPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectFilesRecursively(entryPath));
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+async function collectBraceScopedFixtureFiles(): Promise<ExpectedFixtureFile[]> {
+  const files: ExpectedFixtureFile[] = [];
+  for (const folder of getBraceWorkspaceFolders()) {
+    const sourceRoot = path.join(folder.uri.fsPath, 'Source');
+    const sourceFiles = await collectFilesRecursively(sourceRoot);
+    for (const absolutePath of sourceFiles) {
+      if (!BRACE_SCOPED_EXTENSIONS.has(path.extname(absolutePath).toLowerCase())) {
+        continue;
+      }
+      const normalizedAbsolutePath = normalizePath(path.resolve(absolutePath));
+      const relativePath = normalizePath(path.relative(folder.uri.fsPath, absolutePath));
+      files.push({
+        absolutePath: normalizedAbsolutePath,
+        workspacePath: `${folder.name}/${relativePath}`,
+        workspaceFolder: folder.name,
+      });
+    }
+  }
+  files.sort(compareFileRecords);
+  return files;
+}
+
+async function collectBraceScopedFixtureMatches(query: string): Promise<ExpectedFixtureMatch[]> {
+  const normalizedQuery = query.toLowerCase();
+  const matches: ExpectedFixtureMatch[] = [];
+  for (const file of await collectBraceScopedFixtureFiles()) {
+    const fileText = await fs.promises.readFile(file.absolutePath, 'utf8');
+    const lines = fileText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    for (let index = 0; index < lines.length; index += 1) {
+      const lineText = lines[index] ?? '';
+      if (!lineText.toLowerCase().includes(normalizedQuery)) {
+        continue;
+      }
+      matches.push({
+        ...file,
+        line: index + 1,
+        preview: lineText,
+      });
+    }
+  }
+  matches.sort(compareMatchRecords);
+  return matches;
+}
+
+async function collectBraceScopedFixtureRegexMatches(
+  query: string,
+  caseSensitive?: boolean,
+): Promise<ExpectedFixtureMatch[]> {
+  const matches: ExpectedFixtureMatch[] = [];
+  const flags = shouldUseCaseInsensitiveRegexQuery(query, caseSensitive) ? 'iu' : 'u';
+  const matcher = new RegExp(query, flags);
+
+  for (const file of await collectBraceScopedFixtureFiles()) {
+    const fileText = await fs.promises.readFile(file.absolutePath, 'utf8');
+    const lines = fileText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    for (let index = 0; index < lines.length; index += 1) {
+      const lineText = lines[index] ?? '';
+      if (!matcher.test(lineText)) {
+        continue;
+      }
+      matches.push({
+        ...file,
+        line: index + 1,
+        preview: lineText,
+      });
+    }
+  }
+
+  matches.sort(compareMatchRecords);
+  return matches;
+}
+
+function assertFixtureRichEnough(expectedFiles: readonly ExpectedFixtureFile[]): void {
+  assert.ok(
+    expectedFiles.length >= MIN_EXPECTED_BRACE_SCOPED_FILES,
+    `Expected at least ${String(MIN_EXPECTED_BRACE_SCOPED_FILES)} brace-scoped fixture files, received ${String(expectedFiles.length)}.`,
+  );
+  const countsByWorkspace = new Map<string, number>();
+  for (const file of expectedFiles) {
+    countsByWorkspace.set(file.workspaceFolder, (countsByWorkspace.get(file.workspaceFolder) ?? 0) + 1);
+  }
+  for (const workspaceName of BRACE_WORKSPACE_NAMES) {
+    const workspaceCount = countsByWorkspace.get(workspaceName) ?? 0;
+    assert.ok(
+      workspaceCount >= MIN_EXPECTED_PER_WORKSPACE_FILES,
+      `Expected workspace '${workspaceName}' to contribute at least ${String(MIN_EXPECTED_PER_WORKSPACE_FILES)} files, received ${String(workspaceCount)}.`,
+    );
+  }
 }
 
 function collectFileRecords(payload: Record<string, unknown>): QgrepFileRecord[] {
@@ -97,37 +204,52 @@ function collectMatchRecords(payload: Record<string, unknown>): QgrepMatchRecord
   });
 }
 
-function assertFileRecordsMatch(payload: Record<string, unknown>, expectedWorkspacePaths: readonly string[]): void {
-  const records = collectFileRecords(payload);
-  const roots = getWorkspaceRootMap();
-  const actualPaths = records.map((record) => record.workspacePath).sort();
-  assert.deepEqual(actualPaths, [...expectedWorkspacePaths].sort());
-
-  const recordsByWorkspacePath = new Map(records.map((record) => [record.workspacePath, record]));
-  for (const expectedWorkspacePath of expectedWorkspacePaths) {
-    const record = recordsByWorkspacePath.get(expectedWorkspacePath);
-    assert.ok(record, `Expected file result '${expectedWorkspacePath}' to be present.`);
-
-    const [workspaceFolder, ...relativeSegments] = expectedWorkspacePath.split('/');
-    assert.equal(record.workspaceFolder, workspaceFolder);
-
-    const workspaceRoot = roots.get(workspaceFolder);
-    assert.ok(workspaceRoot, `Expected workspace root for '${workspaceFolder}'.`);
-
-    const expectedAbsolutePath = normalizePath(path.join(workspaceRoot, ...relativeSegments));
-    assert.equal(record.absolutePath, expectedAbsolutePath);
-  }
+function compareFileRecords(left: QgrepFileRecord, right: QgrepFileRecord): number {
+  return left.workspacePath.localeCompare(right.workspacePath);
 }
 
-function assertMatchRecordsMatch(payload: Record<string, unknown>, expectedWorkspacePaths: readonly string[]): void {
-  const records = collectMatchRecords(payload);
-  const actualPaths = records.map((record) => record.workspacePath).sort();
-  assert.deepEqual(actualPaths, [...expectedWorkspacePaths].sort());
-
-  for (const record of records) {
-    assert.equal(record.line, 1, `Expected '${record.workspacePath}' to match on line 1.`);
-    assert.ok(record.preview.includes(BRACE_SCOPED_SIGNAL), `Expected preview for '${record.workspacePath}' to contain the brace-scoped signal.`);
+function compareMatchRecords(left: QgrepMatchRecord, right: QgrepMatchRecord): number {
+  const workspacePathResult = left.workspacePath.localeCompare(right.workspacePath);
+  if (workspacePathResult !== 0) {
+    return workspacePathResult;
   }
+  return left.line - right.line;
+}
+
+function shouldUseCaseInsensitiveRegexQuery(query: string, caseSensitive?: boolean): boolean {
+  if (caseSensitive === true) {
+    return false;
+  }
+  return !/[A-Z]/u.test(query);
+}
+
+function assertFileRecordsMatch(payload: Record<string, unknown>, expectedFiles: readonly ExpectedFixtureFile[]): void {
+  const records = collectFileRecords(payload);
+  const sortedActual = [...records].sort(compareFileRecords);
+  assert.deepEqual(
+    sortedActual.map(({ workspacePath, absolutePath, workspaceFolder }) => ({ workspacePath, absolutePath, workspaceFolder })),
+    expectedFiles.map(({ workspacePath, absolutePath, workspaceFolder }) => ({ workspacePath, absolutePath, workspaceFolder })),
+  );
+}
+
+function assertMatchRecordsMatch(payload: Record<string, unknown>, expectedMatches: readonly ExpectedFixtureMatch[]): void {
+  const records = [...collectMatchRecords(payload)].sort(compareMatchRecords);
+  assert.deepEqual(
+    records.map(({ workspacePath, absolutePath, workspaceFolder, line, preview }) => ({
+      workspacePath,
+      absolutePath,
+      workspaceFolder,
+      line,
+      preview,
+    })),
+    expectedMatches.map(({ workspacePath, absolutePath, workspaceFolder, line, preview }) => ({
+      workspacePath,
+      absolutePath,
+      workspaceFolder,
+      line,
+      preview,
+    })),
+  );
 }
 
 async function ensureQgrepReady(): Promise<void> {
@@ -174,21 +296,45 @@ export async function run(): Promise<void> {
       run: async () => {
         await activateExtension();
         await ensureQgrepReady();
+        const expectedFiles = await collectBraceScopedFixtureFiles();
+        assertFixtureRichEnough(expectedFiles);
 
         const payload = await executeQgrepFilesSearch({
           query: BRACE_SCOPED_QUERY,
-          maxResults: 20,
+          maxResults: 400,
         });
 
         assert.equal(payload.scope, '{WorkspaceA,WorkspaceB}');
         assert.equal(payload.querySemanticsApplied, 'glob-vscode');
-        assert.equal(payload.count, braceScopedFixturePaths.length);
-        assert.equal(payload.totalAvailable, braceScopedFixturePaths.length);
+        assert.equal(payload.count, expectedFiles.length);
+        assert.equal(payload.totalAvailable, expectedFiles.length);
         assert.equal(payload.capped === true, false);
         assert.equal(payload.totalAvailableCapped === true, false);
         assert.equal(payload.hardLimitHit === true, false);
-        assert.equal(payload.maxResultsApplied, 20);
-        assertFileRecordsMatch(payload, braceScopedFixturePaths);
+        assert.equal(payload.maxResultsApplied, 400);
+        assertFileRecordsMatch(payload, expectedFiles);
+      },
+    },
+    {
+      name: 'normalizes brace-scoped workspace selectors with repeated workspace names',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedFiles = await collectBraceScopedFixtureFiles();
+
+        const payload = await executeQgrepFilesSearch({
+          query: BRACE_SCOPED_NORMALIZED_QUERY,
+          maxResults: 400,
+        });
+
+        assert.equal(payload.scope, '{WorkspaceB,WorkspaceA}');
+        assert.equal(payload.count, expectedFiles.length);
+        assert.equal(payload.totalAvailable, expectedFiles.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 400);
+        assertFileRecordsMatch(payload, expectedFiles);
       },
     },
     {
@@ -196,24 +342,86 @@ export async function run(): Promise<void> {
       run: async () => {
         await activateExtension();
         await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatches(BRACE_SCOPED_TEXT_QUERY);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain text matches.');
 
         const payload = await executeQgrepSearch({
-          query: BRACE_SCOPED_SIGNAL,
+          query: BRACE_SCOPED_TEXT_QUERY,
           includePattern: BRACE_SCOPED_QUERY,
-          maxResults: 20,
+          maxResults: 1500,
         });
 
         assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'glob');
         assert.equal(payload.casePolicy, 'smart-case');
-        assert.equal(payload.caseModeApplied, 'sensitive');
-        assert.equal(payload.count, braceScopedFixturePaths.length);
-        assert.equal(payload.totalAvailable, braceScopedFixturePaths.length);
+        assert.equal(payload.caseModeApplied, 'insensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
         assert.equal(payload.capped === true, false);
         assert.equal(payload.totalAvailableCapped === true, false);
         assert.equal(payload.hardLimitHit === true, false);
-        assert.equal(payload.maxResultsApplied, 20);
-        assertMatchRecordsMatch(payload, braceScopedFixturePaths);
+        assert.equal(payload.maxResultsApplied, 1500);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'applies brace-scoped includePattern filtering to qgrep regex text search with smart-case',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureRegexMatches(BRACE_SCOPED_REGEX_INCLUDE_QUERY);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain regex text matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_REGEX_INCLUDE_QUERY,
+          isRegexp: true,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 1500,
+        });
+
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'regex');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'insensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 1500);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'keeps explicit case-sensitive regex text search scoped to brace-selected workspaces',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureRegexMatches(
+          BRACE_SCOPED_REGEX_GAME_SETTING_QUERY,
+          true,
+        );
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain case-sensitive regex matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_REGEX_GAME_SETTING_QUERY,
+          isRegexp: true,
+          caseSensitive: true,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 1500,
+        });
+
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'regex');
+        assert.equal(payload.casePolicy, 'explicit-case-sensitive');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 1500);
+        assertMatchRecordsMatch(payload, expectedMatches);
       },
     },
   ]);

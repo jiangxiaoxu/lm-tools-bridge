@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.116] - 2026-03-09
+
+### English
+
+#### Changed
+- Published a follow-up patch release that keeps the `querySyntax` search contract and glob/path fail-fast validation from `1.0.115` without additional behavior changes.
+
+### 中文
+
+#### 变更
+- 发布了一个跟进 patch 版本,沿用 `1.0.115` 中的 `querySyntax` 搜索 contract 与 glob/path fail-fast 校验,本次没有新增行为变化。
+
 ## [1.0.115] - 2026-03-09
 
 ### English

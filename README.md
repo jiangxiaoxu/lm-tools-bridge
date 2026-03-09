@@ -33,7 +33,11 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 
 #### Search
 - `lm_findFiles`: VS Code workspace file search (ripgrep backend).
+- `lm_findFiles.query` always uses glob semantics and does not support `|` alternation; use brace globs such as `{A,B}`.
 - `lm_findTextInFiles`: VS Code workspace text search (ripgrep backend).
+- `lm_findTextInFiles` accepts `query/caseSensitive/querySyntax/includePattern/maxResults/includeIgnoredFiles`.
+- `lm_findTextInFiles` defaults to `querySyntax='literal'`; set `querySyntax='regex'` for regular expressions. `includePattern` is a path-or-glob scope and does not support `|` alternation.
+- `lm_findTextInFiles` no longer supports legacy `isRegexp`.
 - Default policy: both are exposed by default, but not enabled by default.
 
 #### Diagnostics
@@ -43,21 +47,23 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 
 #### Qgrep
 - `lm_qgrepGetStatus`: qgrep binary/workspace/index readiness snapshot (plain-text output).
-- `lm_qgrepSearchText`: text search via bundled `bin/qgrep.exe` (`query/caseSensitive/isRegexp/includePattern/maxResults/beforeContextLines/afterContextLines`).
-- `lm_qgrepSearchText` defaults to glob query mode; set `isRegexp=true` to switch to regex mode.
+- `lm_qgrepSearchText`: text search via bundled `bin/qgrep.exe` (`query/caseSensitive/querySyntax/includePattern/maxResults/beforeContextLines/afterContextLines`).
+- `lm_qgrepSearchText` defaults to `querySyntax='glob'`; set `querySyntax='regex'` to switch to regex mode.
 - In glob mode, `lm_qgrepSearchText.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In text glob mode, `*` and `?` do not match `/`, while `**` can match across `/`.
 - In text glob mode, matching is substring-based and does not apply implicit `^...$` anchoring.
 - `beforeContextLines` and `afterContextLines` control preview context lines (`0-20`, default `0`), and output always includes line numbers.
 - When context lines are enabled, extra true matches that fall inside the selected context windows are still rendered as match lines (`:`); this does not expand windows or change result counts.
 - `lm_qgrepSearchText` supports `includePattern` and does not support `searchPath` or `includeIgnoredFiles`.
-- `lm_qgrepSearchText.includePattern` accepts absolute paths, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, and workspace-relative globs.
-- `lm_qgrepSearchFiles`: indexed file search via `query/isRegexp/maxResults` (default glob, optional regex, plain-text output).
+- `lm_qgrepSearchText.includePattern` accepts absolute paths, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, and workspace-relative globs. It does not support `|` alternation; use brace globs such as `{A,B}` or move alternation into `query` with `querySyntax='regex'`.
+- `lm_qgrepSearchText` no longer supports legacy `isRegexp`.
+- `lm_qgrepSearchFiles`: indexed file search via `query/querySyntax/maxResults` (default glob, optional regex, plain-text output).
 - In glob mode, `lm_qgrepSearchFiles.query` follows VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In files glob mode, queries without `/` match any depth (for example, `*.md` behaves like `**/*.md`).
 - In multi-root workspaces, `WorkspaceName/<glob>` scopes to one workspace, and `{WorkspaceA,WorkspaceB}/<glob>` aggregates only the selected workspaces.
 - In files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching.
-- `lm_qgrepSearchFiles` no longer supports legacy `mode` or `searchPath` inputs.
+- In files glob mode, `lm_qgrepSearchFiles.query` does not support `|` alternation; use brace globs such as `{A,B}` or set `querySyntax='regex'`.
+- `lm_qgrepSearchFiles` defaults to `querySyntax='glob'`, supports `querySyntax='regex'`, and no longer supports legacy `mode`, `searchPath`, or `isRegexp` inputs.
 - qgrep search/files outputs use absolute paths with `/` separators; text output uses `====` for file switches and `---` for same-file context blocks.
 - qgrep files output has a single `====` header separator, followed by one absolute path per line.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-init all current workspaces and wait until ready (timeout `150s`).
@@ -148,7 +154,11 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 
 #### 搜索
 - `lm_findFiles`: 使用 VS Code workspace 文件搜索(后端 ripgrep).
+- `lm_findFiles.query` 始终使用 glob 语义,不支持 `|` alternation; 需要多分支请用 `{A,B}`.
 - `lm_findTextInFiles`: 使用 VS Code workspace 文本搜索(后端 ripgrep).
+- `lm_findTextInFiles` 支持 `query/caseSensitive/querySyntax/includePattern/maxResults/includeIgnoredFiles`.
+- `lm_findTextInFiles` 默认 `querySyntax='literal'`; 传 `querySyntax='regex'` 切换到 regex. `includePattern` 是 path-or-glob scope,不支持 `|` alternation.
+- `lm_findTextInFiles` 不再支持旧的 `isRegexp` 输入.
 - 默认策略: 两者默认 exposed,默认不 enabled.
 
 #### 诊断
@@ -158,21 +168,23 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 
 #### Qgrep
 - `lm_qgrepGetStatus`: 返回 qgrep binary/workspace/index 就绪快照(纯文本输出).
-- `lm_qgrepSearchText`: 通过内置 `bin/qgrep.exe` 做文本搜索(`query/caseSensitive/isRegexp/includePattern/maxResults/beforeContextLines/afterContextLines`).
-- `lm_qgrepSearchText` 默认使用 glob 查询模式,传 `isRegexp=true` 切换到 regex 模式.
+- `lm_qgrepSearchText`: 通过内置 `bin/qgrep.exe` 做文本搜索(`query/caseSensitive/querySyntax/includePattern/maxResults/beforeContextLines/afterContextLines`).
+- `lm_qgrepSearchText` 默认使用 `querySyntax='glob'`; 传 `querySyntax='regex'` 切换到 regex 模式.
 - 在 glob 模式下,`lm_qgrepSearchText.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
 - 文本 glob 模式下,`*` 和 `?` 不匹配 `/`,`**` 可以跨 `/` 匹配.
 - 文本 glob 模式下,匹配采用 substring 方式,不会隐式添加 `^...$` 锚定.
 - `beforeContextLines` 和 `afterContextLines` 控制预览上下文行(`0-20`,默认 `0`),输出始终包含行号.
 - 开启上下文行后,若所选上下文窗口内还有额外真实命中,这些行也会继续按命中行(`:`)显示,但不会扩展窗口或改变结果计数.
 - `lm_qgrepSearchText` 支持 `includePattern`,不支持 `searchPath` 和 `includeIgnoredFiles`.
-- `lm_qgrepSearchText.includePattern` 支持 absolute path,`WorkspaceName/...`,`{WorkspaceA,WorkspaceB}/...` 和 workspace-relative glob.
-- `lm_qgrepSearchFiles`: 使用 `query/isRegexp/maxResults` 做索引文件搜索(默认 glob,可切 regex,纯文本输出).
+- `lm_qgrepSearchText.includePattern` 支持 absolute path,`WorkspaceName/...`,`{WorkspaceA,WorkspaceB}/...` 和 workspace-relative glob. 它不支持 `|` alternation; 需要多分支请用 `{A,B}`,或把 alternation 放到 `query` 并设置 `querySyntax='regex'`.
+- `lm_qgrepSearchText` 不再支持旧的 `isRegexp` 输入.
+- `lm_qgrepSearchFiles`: 使用 `query/querySyntax/maxResults` 做索引文件搜索(默认 glob,可切 regex,纯文本输出).
 - 在 glob 模式下,`lm_qgrepSearchFiles.query` 遵循 VS Code glob 语义(`*`,`?`,`**`,`[]`,`[!...]`,`{a,b}`).
 - 文件 glob 模式下,不含 `/` 的查询会匹配任意目录深度(例如 `*.md` 等价 `**/*.md`).
 - 在 multi-root workspace 中,`WorkspaceName/<glob>` 会限定到单个 workspace,`{WorkspaceA,WorkspaceB}/<glob>` 只会聚合被选中的 workspace.
 - 文件 glob 模式下,匹配对象是 file path 而不是 file content,并且采用整路径锚定匹配,不是 substring 匹配.
-- `lm_qgrepSearchFiles` 不再支持旧的 `mode` 和 `searchPath` 输入.
+- 文件 glob 模式下,`lm_qgrepSearchFiles.query` 不支持 `|` alternation; 需要多分支请用 `{A,B}`,或者切到 `querySyntax='regex'`.
+- `lm_qgrepSearchFiles` 默认 `querySyntax='glob'`,支持 `querySyntax='regex'`,并且不再支持旧的 `mode`,`searchPath` 和 `isRegexp` 输入.
 - qgrep search/files 输出使用绝对路径并统一 `/` 分隔符; 文本搜索里 `====` 用于文件切换,`---` 用于同文件上下文分块.
 - qgrep files 输出仅在头部使用一个 `====`,后续每行一个绝对路径.
 - `lm_qgrepSearchText` 和 `lm_qgrepSearchFiles` 会按需自动初始化当前全部 workspace,并等待到就绪(超时 `150s`).

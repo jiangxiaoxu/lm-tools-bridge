@@ -164,6 +164,7 @@ const LM_FIND_FILES_DESCRIPTION = [
   'Search for files in the workspace by glob pattern. This only returns the paths of matching files.',
   'Backend uses VS Code workspace file search (ripgrep-based).',
   'Use this tool when you know the exact filename pattern of the files you\'re searching for.',
+  "query always uses glob semantics and does not support '|' alternation. Use brace globs such as {A,B} for alternatives.",
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
   'Glob patterns match from the root of the workspace folder. Examples:',
@@ -178,7 +179,7 @@ const LM_FIND_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Search for files with names or paths matching this glob pattern. Supports WorkspaceName/** to scope search to a specific workspace folder in multi-root workspaces.',
+      description: "Search for files with names or paths matching this glob pattern. Supports WorkspaceName/** to scope search to a specific workspace folder in multi-root workspaces. query does not support '|' alternation; use brace globs such as '{A,B}'.",
     },
     maxResults: {
       type: 'number',
@@ -195,14 +196,16 @@ const LM_FIND_FILES_SCHEMA: Record<string, unknown> = {
 const LM_FIND_TEXT_IN_FILES_DESCRIPTION = [
   'Do a fast text search in the workspace. Use this tool when you want to search with an exact string or regex.',
   'Backend uses VS Code workspace text search (ripgrep-based).',
-  'If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.',
-  'For example, use \'function|method|procedure\' to look for all of those words at once.',
-  'Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path.',
+  "querySyntax controls how query is interpreted. Omit it or set querySyntax='literal' for exact text, or set querySyntax='regex' for regular expressions.",
+  "If you are not sure what words will appear in the workspace, prefer querySyntax='regex' with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.",
+  "For example, use querySyntax='regex' with query='function|method|procedure' to look for all of those words at once.",
+  'Use includePattern as a path or glob scope to search within matching files, or in a specific file.',
   'In multi-root workspaces, includePattern also supports WorkspaceName/** (for example, UE5/**) to limit search to a specific workspace folder.',
   'Glob patterns match from the root of the workspace folder. Examples:',
   '- **/*.{js,ts} to match all js/ts files in the workspace.',
   '- src/** to match all files under the top-level src folder.',
   '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
+  "includePattern does not support '|' alternation. Use brace globs such as {A,B} instead.",
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
   'When caseSensitive is false, smart-case is used by default (including regex searches). Set caseSensitive to true to force case-sensitive matching.',
@@ -214,19 +217,21 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'The pattern to search for in files in the workspace. Use regex with alternation (e.g., \'word1|word2|word3\') or character classes to find multiple potential words in a single search. Be sure to set the isRegexp property properly to declare whether it\'s a regex or plain text pattern. When caseSensitive is false, smart-case is used by default. If you need case-sensitive matching, set caseSensitive to true or use a regex pattern with an inline case-sensitivity flag.',
+      description: "The pattern to search for in files in the workspace. Use querySyntax='literal' for exact text or querySyntax='regex' for regular expressions. When caseSensitive is false, smart-case is used by default. If you need case-sensitive matching, set caseSensitive to true or use a regex pattern with an inline case-sensitivity flag.",
     },
     caseSensitive: {
       type: 'boolean',
       description: 'Whether the search should be case-sensitive. When false, smart-case is used by default (including regex). Regex inline flags can override this setting.',
     },
-    isRegexp: {
-      type: 'boolean',
-      description: 'Whether the pattern is a regex.',
+    querySyntax: {
+      type: 'string',
+      enum: ['literal', 'regex'],
+      default: 'literal',
+      description: "Controls how query is interpreted. Use 'literal' for exact text or 'regex' for regular expressions.",
     },
     includePattern: {
       type: 'string',
-      description: 'Search files matching this glob pattern. Will be applied to the relative path of files within the workspace. Supports WorkspaceName/** in multi-root workspaces to scope to a specific workspace folder. To search recursively inside a folder, use a proper glob pattern like "src/folder/**". Do not use | in includePattern.',
+      description: "Optional path or glob scope. Supports absolute paths, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., and workspace-relative patterns. To search recursively inside a folder, use a proper glob pattern like 'src/folder/**'. includePattern does not support '|' alternation; use brace globs such as '{A,B}'.",
     },
     maxResults: {
       type: 'number',
@@ -238,7 +243,7 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
       description: 'Whether to include files that would normally be ignored according to .gitignore, other ignore files and `files.exclude` and `search.exclude` settings. Warning: using this may cause the search to be slower. Only set it when you want to search in ignored folders like node_modules or build outputs.',
     },
   },
-  required: ['query', 'isRegexp'],
+  required: ['query'],
 };
 
 const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for specific files or across all files. Use this tool to inspect the same Problems diagnostics the user sees, analyze all current issues when no file is specified, and validate changes after edits. The optional filePaths parameter filters diagnostics to specific files and supports workspace-root relative paths, WorkspaceName/... paths, and absolute paths. In multi-root workspaces, relative paths must resolve to a unique existing match or use WorkspaceName/... to disambiguate.';
@@ -354,18 +359,19 @@ const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep.',
-  'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
+  "By default, querySyntax='glob' and query is interpreted using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).",
   'In glob mode, * and ? do not match /, while ** can match across /.',
   'In text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring.',
-  'Set isRegexp=true to switch query interpretation to regular expression mode.',
+  "Set querySyntax='regex' to switch query interpretation to regular expression mode.",
   'beforeContextLines/afterContextLines optionally add preview context lines around each match (0-20 each).',
   'Output is plain text with absolute paths (/) and always includes line numbers.',
   'When caseSensitive=true, search is always case-sensitive. Otherwise smart-case is used (all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive).',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
   'If includePattern is omitted, search runs across all initialized workspace folders.',
   'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative.',
+  "includePattern does not support '|' alternation. Use brace globs such as {A,B}, or move alternation into query with querySyntax='regex'.",
   'includePattern examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js',
-  'Supported inputs: query, caseSensitive, isRegexp, includePattern, maxResults, beforeContextLines, afterContextLines.',
+  'Supported inputs: query, caseSensitive, querySyntax, includePattern, maxResults, beforeContextLines, afterContextLines.',
 ].join('\n');
 
 const LM_QGREP_GET_STATUS_DESCRIPTION = [
@@ -386,20 +392,21 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'Text search pattern. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}), where * and ? do not match / and ** can match across /; in text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring; set isRegexp=true to treat query as a regular expression.',
+      description: "Text search pattern. Default mode uses querySyntax='glob' with VS Code glob semantics (*, ?, **, [], [!...], {a,b}), where * and ? do not match / and ** can match across /; in text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring; set querySyntax='regex' to treat query as a regular expression.",
     },
     caseSensitive: {
       type: 'boolean',
       description: 'Whether search is case-sensitive. When true, force case-sensitive. When false or omitted, smart-case is used (all-lowercase = case-insensitive, contains uppercase = case-sensitive).',
     },
-    isRegexp: {
-      type: 'boolean',
-      default: false,
-      description: 'Set true to treat query as a regular expression. Default false keeps glob mode.',
+    querySyntax: {
+      type: 'string',
+      enum: ['glob', 'regex'],
+      default: 'glob',
+      description: "Controls how query is interpreted. Use 'glob' for VS Code-style glob matching or 'regex' for regular expressions.",
     },
     includePattern: {
       type: 'string',
-      description: 'Optional path scope as path or glob: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative. Glob examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js.',
+      description: "Optional path or glob scope: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative. Glob examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js. includePattern does not support '|' alternation; use brace globs such as '{A,B}'.",
     },
     maxResults: {
       type: 'integer',
@@ -427,19 +434,20 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_FILES_DESCRIPTION = [
   'Search indexed workspace files using qgrep.',
-  'By default, query is interpreted as a glob pattern using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).',
+  "By default, querySyntax='glob' and query is interpreted using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).",
   'In glob mode, queries without / are matched at any depth (for example, *.md behaves like **/*.md).',
   'In multi-root workspaces, WorkspaceName/<glob> scopes to one workspace, and {WorkspaceA,WorkspaceB}/<glob> aggregates the selected workspaces only.',
   'In files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching.',
+  "In files glob mode, query does not support '|' alternation. Use brace globs such as {A,B}, or set querySyntax='regex'.",
   'Output is plain text with absolute paths (/).',
-  'Set isRegexp=true to switch query interpretation to regular expression mode.',
+  "Set querySyntax='regex' to switch query interpretation to regular expression mode.",
   'qgrep indexing and file search are workspace-only; external folders cannot be indexed or searched.',
-  'Supported inputs: query, isRegexp, maxResults.',
+  'Supported inputs: query, querySyntax, maxResults.',
   'Examples:',
   '{"query":"**/*.{ts,js}","maxResults":200}',
   '{"query":"WorkspaceName/**/Manager*.h"}',
   '{"query":"{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}"}',
-  '{"query":"WorkspaceA/src/.*\\\\.ts$","isRegexp":true}',
+  '{"query":"WorkspaceA/src/.*\\\\.ts$","querySyntax":"regex"}',
 ].join('\n');
 
 const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
@@ -447,12 +455,13 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: 'File search query string. Default mode treats query as a glob pattern with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in multi-root workspaces, WorkspaceName/<glob> scopes to one workspace and {WorkspaceA,WorkspaceB}/<glob> aggregates selected workspaces only; in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; set isRegexp=true to treat query as a regular expression.',
+      description: "File search query string. Default mode uses querySyntax='glob' with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in multi-root workspaces, WorkspaceName/<glob> scopes to one workspace and {WorkspaceA,WorkspaceB}/<glob> aggregates selected workspaces only; in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; glob mode does not support '|' alternation, so use brace globs such as '{A,B}' or set querySyntax='regex'.",
     },
-    isRegexp: {
-      type: 'boolean',
-      default: false,
-      description: 'Set true to treat query as a regular expression. Default false keeps glob mode.',
+    querySyntax: {
+      type: 'string',
+      enum: ['glob', 'regex'],
+      default: 'glob',
+      description: "Controls how query is interpreted. Use 'glob' for VS Code-style glob matching or 'regex' for regular expressions.",
     },
     maxResults: {
       type: 'integer',

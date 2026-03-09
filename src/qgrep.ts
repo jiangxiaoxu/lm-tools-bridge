@@ -16,6 +16,11 @@ import {
   type FilesQueryDraft,
   type QgrepFilesQuerySemantics,
 } from './qgrepFilesQuery';
+import {
+  parseOptionalIncludePattern,
+  parseQuerySyntax,
+  type QgrepQuerySyntax,
+} from './searchInput';
 import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
 import { parseOptionalContextLineCount } from './qgrepOutput';
 
@@ -374,13 +379,13 @@ class QgrepService implements vscode.Disposable {
 
   public async search(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const query = this.parseQuery(input);
-    const includePattern = this.parseOptionalIncludePattern(input);
-    const isRegexp = this.parseOptionalBooleanInput(input.isRegexp, 'isRegexp') ?? false;
+    const includePattern = parseOptionalIncludePattern(input);
+    const querySyntax = this.parseTextQuerySyntax(input);
     const caseSensitive = this.parseOptionalBooleanInput(input.caseSensitive, 'caseSensitive');
     const beforeContextLines = parseOptionalContextLineCount(input.beforeContextLines, 'beforeContextLines');
     const afterContextLines = parseOptionalContextLineCount(input.afterContextLines, 'afterContextLines');
-    const querySemanticsApplied: QgrepTextQuerySemantics = isRegexp ? 'regex' : 'glob';
-    const effectiveQuery = isRegexp ? query : compileTextQueryGlobToRegexSource(query);
+    const querySemanticsApplied: QgrepTextQuerySemantics = querySyntax === 'regex' ? 'regex' : 'glob';
+    const effectiveQuery = querySyntax === 'regex' ? query : compileTextQueryGlobToRegexSource(query);
     const casePolicy: QgrepTextCasePolicy = caseSensitive === true
       ? 'explicit-case-sensitive'
       : 'smart-case';
@@ -791,19 +796,22 @@ class QgrepService implements vscode.Disposable {
     return value;
   }
 
-  private parseOptionalIncludePattern(input: Record<string, unknown>): string | undefined {
-    const value = input.includePattern;
-    if (value === undefined || value === null) {
-      return undefined;
-    }
-    if (typeof value !== 'string') {
-      throw new Error('includePattern must be a string when provided.');
-    }
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      throw new Error('includePattern must be a non-empty string when provided.');
-    }
-    return trimmed;
+  private parseTextQuerySyntax(input: Record<string, unknown>): QgrepQuerySyntax {
+    return parseQuerySyntax({
+      input,
+      toolName: 'lm_qgrepSearchText',
+      allowed: ['glob', 'regex'],
+      defaultSyntax: 'glob',
+    });
+  }
+
+  private parseFilesQuerySyntax(input: Record<string, unknown>): QgrepQuerySyntax {
+    return parseQuerySyntax({
+      input,
+      toolName: 'lm_qgrepSearchFiles',
+      allowed: ['glob', 'regex'],
+      defaultSyntax: 'glob',
+    });
   }
 
   private parseMaxResults(input: Record<string, unknown>): number {
@@ -823,10 +831,10 @@ class QgrepService implements vscode.Disposable {
 
   private buildFilesQueryDraft(input: Record<string, unknown>, query: string): FilesQueryDraft {
     ensureFilesLegacyParamsUnsupported(input);
-    const isRegexp = this.parseOptionalBooleanInput(input.isRegexp, 'isRegexp') ?? false;
+    const querySyntax = this.parseFilesQuerySyntax(input);
     return buildFilesQueryDraft(
       query,
-      isRegexp,
+      querySyntax,
       (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.name),
     );
   }
@@ -887,7 +895,7 @@ class QgrepService implements vscode.Disposable {
   private compileFilesGlobQueryToRegex(query: string): string {
     const trimmed = query.trim();
     if (trimmed.length === 0) {
-      throw new Error('query must be a non-empty glob string when isRegexp is false.');
+      throw new Error("query must be a non-empty glob string when querySyntax is 'glob'.");
     }
     try {
       const regexSource = `^${compileFilesQueryGlobToRegexSource(trimmed)}$`;
@@ -907,7 +915,7 @@ class QgrepService implements vscode.Disposable {
   ): string {
     const trimmed = query.trim();
     if (trimmed.length === 0) {
-      throw new Error('query must be a non-empty glob string when isRegexp is false.');
+      throw new Error("query must be a non-empty glob string when querySyntax is 'glob'.");
     }
     try {
       const workspaceRoot = normalizeSlash(path.resolve(folder.uri.fsPath));

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as vscode from 'vscode';
+import { executeFindFilesSearch } from '../../../searchTools';
 import {
   executeQgrepFilesSearch,
   getQgrepStatusSummary,
@@ -282,7 +283,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepFilesSearch({
           query: 'Game/Source/.+\\.(Target|Build)\\.cs$',
-          isRegexp: true,
+          querySyntax: 'regex',
           maxResults: 20,
         });
 
@@ -307,7 +308,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepFilesSearch({
           query: 'Game/Source/.+/Private/.+\\.cpp$',
-          isRegexp: true,
+          querySyntax: 'regex',
           maxResults: 20,
         });
 
@@ -356,7 +357,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepFilesSearch({
           query: 'Source/.+Target\\.cs$',
-          isRegexp: true,
+          querySyntax: 'regex',
           maxResults: 20,
         });
 
@@ -405,7 +406,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepFilesSearch({
           query: 'Game/Source/.+\\.missing$',
-          isRegexp: true,
+          querySyntax: 'regex',
           maxResults: 20,
         });
 
@@ -448,6 +449,19 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'keeps lm_findFiles glob queries fail-fast on bare pipe alternation',
+      run: async () => {
+        await activateExtension();
+        await assert.rejects(
+          () => executeFindFilesSearch({
+            query: 'Game/Source/**/*.cs|Game/Source/**/*.cpp',
+            maxResults: 20,
+          }),
+          /query does not support '\|' alternation in glob mode/u,
+        );
+      },
+    },
+    {
       name: 'keeps invalid legacy mode params fail-fast inside the extension host',
       run: async () => {
         await activateExtension();
@@ -470,6 +484,19 @@ export async function run(): Promise<void> {
             searchPath: 'Game/Source',
           }),
           /searchPath is no longer supported for lm_qgrepSearchFiles/u,
+        );
+      },
+    },
+    {
+      name: 'keeps qgrep file glob queries fail-fast on bare pipe alternation',
+      run: async () => {
+        await activateExtension();
+        await assert.rejects(
+          () => executeQgrepFilesSearch({
+            query: 'Game/Source/**/*.cs|Game/Source/**/*.cpp',
+            maxResults: 20,
+          }),
+          /query does not support '\|' alternation when querySyntax='glob'/u,
         );
       },
     },

@@ -1,8 +1,7 @@
-import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { downloadAndUnzipVSCode, runTests } from '@vscode/test-electron';
 
 interface IntegrationRun {
   name: string;
@@ -43,7 +42,12 @@ async function executeIntegrationRun(repoRoot: string, run: IntegrationRun): Pro
   try {
     console.log(`Running VS Code integration suite: ${run.name}`);
     const vscodeExecutablePath = await getVSCodeExecutablePath();
-    await launchIntegrationHost(vscodeExecutablePath, buildIntegrationLaunchArgs(repoRoot, run, userDataDir, extensionsDir));
+    await withSanitizedVsCodeLaunchEnv(async () => runTests({
+      vscodeExecutablePath,
+      extensionDevelopmentPath: repoRoot,
+      extensionTestsPath: run.extensionTestsPath,
+      launchArgs: buildIntegrationLaunchArgs(run, userDataDir, extensionsDir),
+    }));
     console.log(`Completed VS Code integration suite: ${run.name}`);
   } finally {
     await removeDirectoryWithRetries(userDataDir);
@@ -57,7 +61,6 @@ async function getVSCodeExecutablePath(): Promise<string> {
 }
 
 function buildIntegrationLaunchArgs(
-  repoRoot: string,
   run: IntegrationRun,
   userDataDir: string,
   extensionsDir: string,
@@ -74,35 +77,29 @@ function buildIntegrationLaunchArgs(
     '--no-sandbox',
     '--disable-gpu-sandbox',
     '--disable-updates',
-    `--extensionTestsPath=${run.extensionTestsPath}`,
-    `--extensionDevelopmentPath=${repoRoot}`,
   ];
 }
 
-async function launchIntegrationHost(vscodeExecutablePath: string, args: readonly string[]): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = cp.spawn(vscodeExecutablePath, [...args], {
-      env: { ...process.env },
-      shell: false,
-      windowsHide: true,
-      stdio: 'inherit',
-    });
+async function withSanitizedVsCodeLaunchEnv<T>(operation: () => Promise<T>): Promise<T> {
+  const savedEntries = new Map<string, string | undefined>();
+  const inheritedNames = Object.keys(process.env).filter((name) => name === 'ELECTRON_RUN_AS_NODE' || name.startsWith('VSCODE_'));
+  for (const name of inheritedNames) {
+    savedEntries.set(name, process.env[name]);
+    delete process.env[name];
+  }
 
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
+  try {
+    return await operation();
+  } finally {
+    for (const name of inheritedNames) {
+      const savedValue = savedEntries.get(name);
+      if (savedValue === undefined) {
+        delete process.env[name];
+        continue;
       }
-      reject(
-        new Error(
-          signal
-            ? `VS Code integration host terminated with signal ${signal}.`
-            : `VS Code integration host exited with code ${String(code)}.`,
-        ),
-      );
-    });
-  });
+      process.env[name] = savedValue;
+    }
+  }
 }
 
 async function createSmokeRun(repoRoot: string): Promise<IntegrationRun> {
@@ -124,7 +121,7 @@ async function createSmokeRun(repoRoot: string): Promise<IntegrationRun> {
   return {
     name: 'smoke',
     workspacePath,
-    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/smokeRunner'),
+    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/smokeRunner.js'),
     cleanup: async () => {
       await removeDirectoryWithRetries(tempDir);
     },
@@ -138,7 +135,7 @@ async function createMultiRootRun(repoRoot: string): Promise<IntegrationRun> {
   return {
     name: 'multi-root',
     workspacePath: path.join(tempDir, 'multi-root.code-workspace'),
-    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/multiRootRunner'),
+    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/multiRootRunner.js'),
     cleanup: async () => {
       await removeDirectoryWithRetries(tempDir);
     },
@@ -152,7 +149,7 @@ async function createMultiRootBraceRun(repoRoot: string): Promise<IntegrationRun
   return {
     name: 'multi-root-brace',
     workspacePath: path.join(tempDir, 'multi-root-brace.code-workspace'),
-    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/multiRootBraceRunner'),
+    extensionTestsPath: path.join(repoRoot, 'out/test/integration/extensionHost/multiRootBraceRunner.js'),
     cleanup: async () => {
       await removeDirectoryWithRetries(tempDir);
     },

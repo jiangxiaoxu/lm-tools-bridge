@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.115] - 2026-03-09
+
+### English
+
+#### Changed
+- Replaced the legacy `isRegexp` toggle with `querySyntax` across search tools so query syntax is explicit and scoped to the `query` field.
+- Tightened glob/path validation to fail fast on bare `|` alternation in `includePattern`, `lm_findFiles.query`, and `lm_qgrepSearchFiles.query` when glob semantics apply, with guidance to use brace globs or regex mode where supported.
+
+#### Tests
+- Added unit and VS Code integration coverage for glob/path fail-fast validation and the new `querySyntax` contract.
+
+### 中文
+
+#### 变更
+- 在搜索工具中用 `querySyntax` 替代旧的 `isRegexp`,让 `query` 的语法选择更明确,并且只作用于 `query` 字段本身。
+- 收紧了 glob/path 输入校验: 对 `includePattern`,`lm_findFiles.query` 以及使用 glob 语义的 `lm_qgrepSearchFiles.query` 中的裸 `|` 直接 fail-fast,并提示改用 brace glob 或受支持的 regex 模式。
+
+#### 测试
+- 为 glob/path fail-fast 校验和新的 `querySyntax` contract 增加了 unit 与 VS Code integration 覆盖。
+
 ## [1.0.114] - 2026-03-09
 
 ### English

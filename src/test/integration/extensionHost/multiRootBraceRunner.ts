@@ -374,7 +374,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_REGEX_INCLUDE_QUERY,
-          isRegexp: true,
+          querySyntax: 'regex',
           includePattern: BRACE_SCOPED_QUERY,
           maxResults: 1500,
         });
@@ -393,6 +393,22 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'fails fast when includePattern uses pipe alternation',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+
+        await assert.rejects(
+          () => executeQgrepSearch({
+            query: BRACE_SCOPED_TEXT_QUERY,
+            includePattern: 'WorkspaceA/Source/**/*.{h,cpp}|WorkspaceB/Source/**/*.{h,cpp}',
+            maxResults: 20,
+          }),
+          /includePattern does not support '\|' alternation/u,
+        );
+      },
+    },
+    {
       name: 'keeps explicit case-sensitive regex text search scoped to brace-selected workspaces',
       run: async () => {
         await activateExtension();
@@ -405,7 +421,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_REGEX_GAME_SETTING_QUERY,
-          isRegexp: true,
+          querySyntax: 'regex',
           caseSensitive: true,
           includePattern: BRACE_SCOPED_QUERY,
           maxResults: 1500,

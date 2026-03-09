@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.113`.
+- Version baseline: `1.0.114`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -14,15 +14,18 @@
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
-- `lm_qgrepSearchText` always executes the bundled binary at `bin/qgrep.exe` and defaults to glob query mode; set `isRegexp=true` to switch query interpretation to regex.
+- `lm_findFiles.query` always uses glob semantics and rejects bare `|` alternation with guidance to use brace globs such as `{A,B}`.
+- `lm_findTextInFiles` uses VS Code workspace text search, defaults to `querySyntax='literal'`, supports `querySyntax='regex'`, and treats `includePattern` as path/glob scope with fail-fast rejection for bare `|` alternation.
+- `lm_qgrepSearchText` always executes the bundled binary at `bin/qgrep.exe` and defaults to `querySyntax='glob'`; set `querySyntax='regex'` to switch query interpretation to regex.
 - `lm_qgrepSearchText` uses smart-case when `caseSensitive` is false/omitted (all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive); `caseSensitive=true` forces sensitive matching.
 - In glob mode, both `lm_qgrepSearchText.query` and `lm_qgrepSearchFiles.query` follow VS Code glob semantics (`*`, `?`, `**`, `[]`, `[!...]`, `{a,b}`).
 - In glob mode for `lm_qgrepSearchText.query`, `*` and `?` do not match `/`, while `**` can match across `/`; query matching remains substring-based (no implicit `^...$` anchoring).
 - `lm_qgrepSearchText` supports `beforeContextLines`/`afterContextLines` (default `0`, max `20`) and always renders line numbers in text output.
 - `lm_qgrepSearchText` context rendering re-checks lines inside the selected context windows with the applied query semantics/case mode, so extra true matches inside those windows still render with `:`; this does not expand windows or affect counts/caps.
-- `lm_qgrepSearchFiles` accepts `query`/`isRegexp`/`maxResults`; default query semantics are VS Code-style glob and `isRegexp=true` switches to regex.
+- `lm_qgrepSearchFiles` accepts `query`/`querySyntax`/`maxResults`; default query semantics are VS Code-style glob and `querySyntax='regex'` switches to regex.
 - In glob mode for `lm_qgrepSearchFiles.query`, patterns without `/` are treated as any-depth file globs (equivalent to `**/<pattern>`).
 - In glob mode for `lm_qgrepSearchFiles.query`, non-absolute patterns are matched against workspace-relative paths and then anchored to each target workspace root; in multi-root workspaces, `WorkspaceName/<glob>` scopes to that workspace, while `{WorkspaceA,WorkspaceB}/<glob>` scopes to the selected workspace set before applying the remainder as a workspace-relative glob.
+- In glob mode for `lm_qgrepSearchFiles.query`, bare `|` alternation is rejected with guidance to use `{A,B}` or switch to `querySyntax='regex'`.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` use default `maxResults=300` when input omits `maxResults`.
 - `lm_qgrepSearchText` uses `maxResultsApplied` as the backend qgrep `search` call limit and clamps to `2000`; payload includes `maxResultsRequested` only when text input is clamped. `lm_qgrepSearchFiles` also clamps `maxResults` to `2000`, then forwards `maxResultsApplied` as the backend qgrep `files` call limit.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` payload always includes `totalAvailable`; `totalAvailableCapped` is returned only when true and then `totalAvailable` is a lower bound; `hardLimitHit` is returned only when the backend query limit is hit.
@@ -36,7 +39,7 @@
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
-- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus temp-copied multi-root fixtures, polls workspace-folder readiness to reduce startup flakiness, launches the VS Code test host via direct child-process spawn (`shell: false`, `windowsHide: true`) to avoid Windows shell/open-with popups, and currently skips on non-Windows platforms.
+- VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus temp-copied multi-root fixtures, polls workspace-folder readiness to reduce startup flakiness, launches suites through `runTests`, sanitizes inherited `ELECTRON_RUN_AS_NODE` and `VSCODE_*` variables before each launch, and currently skips on non-Windows platforms.
 - The main multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, scoped `WorkspaceName/<regex>` file searches, deep `Private/**/*.cpp` matching, cross-workspace target aggregation in both glob and regex modes, no-result summaries, capped file-search summaries, and `absolutePath`/`workspacePath`/`workspaceFolder` consistency checks.
 - An additional anonymized brace-scope fixture (`WorkspaceA`, `WorkspaceB`) uses a large real-source-derived corpus under anonymized workspace names; it covers `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` file aggregation, brace-selector normalization, `lm_qgrepSearchText.includePattern` filtering, and regex text-search integration (smart-case and explicit case-sensitive) across the selected workspaces only.
 - The integration runner deletes temporary VS Code user-data, extensions, and copied fixture directories with retry-based cleanup to tolerate transient Windows file locks after the extension host exits.
@@ -54,11 +57,12 @@
 - qgrep multi-root storage is per-workspace under `<workspace>/.vscode/qgrep`; `Qgrep Stop And Clear Indexes` removes that directory for all current workspaces and disables maintenance until re-init.
 - qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server/manager logs remain in `lm-tools-bridge`.
 - qgrep clear-cancel control flow logs (`... cancelled during clear`) are expected `info` entries and should not be treated as qgrep command failures.
-- `lm_qgrepSearchText.includePattern` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` and `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), and glob inputs are force-compiled into qgrep-compatible `fi` regex filters that run before qgrep output truncation.
+- `lm_qgrepSearchText.includePattern` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` and `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), and glob inputs are force-compiled into qgrep-compatible `fi` regex filters that run before qgrep output truncation; bare `|` alternation is rejected with guidance to use `{A,B}` or move alternation into `querySyntax='regex'`.
 - `lm_qgrepSearchText` uses `includePattern` for path/glob scope; legacy `searchPath` and `includeIgnoredFiles` inputs are ignored and do not affect query behavior.
+- `lm_findTextInFiles`, `lm_qgrepSearchText`, and `lm_qgrepSearchFiles` reject legacy `isRegexp` input and require `querySyntax` instead.
 - `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath` inputs; `includeIgnoredFiles` is tolerated but ignored.
 - `lm_qgrepSearchFiles` validates legacy file-search params plus glob/regex query parsing before qgrep readiness wait or auto-init, so invalid requests fail fast without blocking on indexing.
-- `lm_qgrepSearchFiles` supports regex workspace scoping via `WorkspaceName/<regex>` when `isRegexp=true`; the prefix is a literal scope selector and only the remainder is evaluated as regex.
+- `lm_qgrepSearchFiles` supports regex workspace scoping via `WorkspaceName/<regex>` when `querySyntax='regex'`; the prefix is a literal scope selector and only the remainder is evaluated as regex.
 - Status bar is split: server item (`LM Tools Bridge`) and dedicated qgrep item (`qgrep <circle> <percent> <A/B>`).
 - qgrep status bar shows `qgrep not initialized` when there is no initialized workspace.
 - qgrep tooltip reports binary readiness, aggregate file progress, and one per-workspace line in `A/B (percent)` format.
@@ -101,7 +105,7 @@
 - [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool`; Decide: validate `filePaths` resolution (absolute/`WorkspaceName/...`/relative + unique existing match), `maxResults`, and `severities` before suspecting data loss; Verify: payload contains `scope/files/preview` and expected counts after retry.
 - [qgrep init/watch lifecycle] Read: `src/qgrep.ts -> initAllWorkspaces | rebuildAllWorkspaces | startWatchForInitializedWorkspaces | startAutoUpdateWatchersForInitializedWorkspaces | stopAndClearAllWorkspaces | updateWorkspaceProgress | search | files`; Decide: manual init command still works, rebuild/clear menu commands now iterate all current workspaces, qgrep search/files auto-init all workspaces and block until indexing/update readiness, startup refresh for initialized workspaces syncs extension-managed `workspace.cfg` blocks before `qgrep update` and one-shot auto-rebuilds when corruption-like assertion signatures are detected, qgrep `watch` covers existing-file content changes, create/delete events trigger debounced `qgrep update`, `search.exclude=true` rules sync into managed `workspace.cfg` excludes (plus fixed `.git` exclude), and clear command disables by deleting `.vscode/qgrep`; Verify: `workspace.cfg` presence controls watch/auto-update startup and tool calls wait during indexing before returning results.
 - [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: text output reports `binary`, workspace counts, aggregate progress, and per-workspace lines.
-- [qgrep search scope rejected] Read: `src/qgrep.ts -> resolveIncludePattern | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported`; Decide: `lm_qgrepSearchText.includePattern` enforces existing path/glob rules while legacy `searchPath`/`includeIgnoredFiles` are ignored on text search; `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath`; Verify: text outside/ambiguous includePattern returns expected tool error, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
+- [qgrep search scope rejected] Read: `src/qgrep.ts -> resolveIncludePattern | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported`; Decide: `lm_qgrepSearchText.includePattern` enforces existing path/glob rules, rejects bare `|` alternation, and ignores legacy `searchPath`/`includeIgnoredFiles`; `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp`; Verify: text outside/ambiguous includePattern or `|` alternation returns expected tool error, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
 - [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
 - [Roots sync not triggered] Read: `src/manager.ts -> dispatchRootsListRequest`; Decide: requires client roots capability + trigger events; Verify: logs contain `roots.list.request/result/error/skip/timeout`.
 
@@ -113,6 +117,7 @@
 - qgrep workspace-scope parsing -> `src/qgrepWorkspaceScope.ts`.
 - qgrep glob compiler/shared semantics -> `src/qgrepGlob.ts`.
 - qgrep files query parsing/fail-fast validation -> `src/qgrepFilesQuery.ts`.
+- Shared search input parsing -> `src/searchInput.ts`.
 - qgrep output formatting/helpers -> `src/qgrepOutput.ts`, `src/tooling.ts`.
 - VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/fixtures/multi-root/*`, `src/test/fixtures/multi-root-brace/*`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
@@ -131,7 +136,7 @@
 - qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearchText` sees expected changes without manual rebuild.
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
 - qgrep-status-ui: verify server status and qgrep status render as separate status bar items, and qgrep tooltip shows per-workspace `A/B` lines.
-- qgrep-failure: verify `lm_qgrepSearchText` outside-workspace `includePattern` returns expected error, legacy `searchPath`/`includeIgnoredFiles` on text search are ignored, `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath` while ignoring `includeIgnoredFiles`, no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately, and file-search summaries keep `count/totalAvailable/capped/hardLimitHit/maxResultsApplied` self-consistent.
+- qgrep-failure: verify `lm_qgrepSearchText` outside-workspace `includePattern` or bare `|` alternation returns expected error, `lm_findFiles.query` rejects bare `|` alternation, legacy `searchPath`/`includeIgnoredFiles` on text search are ignored, `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp` while ignoring `includeIgnoredFiles`, no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately, and file-search summaries keep `count/totalAvailable/capped/hardLimitHit/maxResultsApplied` self-consistent.
 - qgrep-startup-repair: verify startup auto-update assertion signature (`Assertion failed` + `filter.cpp`/`entries.entries`) triggers one rebuild attempt per workspace per startup, and non-signature update failures do not trigger rebuild.
 - Docs: verify update triggers against `AGENTS.md`.
 

@@ -5,7 +5,7 @@ import { buildFilesQueryDraft, ensureFilesLegacyParamsUnsupported } from '../qgr
 test('glob draft scopes WorkspaceName-prefixed patterns to a single workspace', () => {
   const draft = buildFilesQueryDraft(
     'Game/Source/**/*.{Target.cs,Build.cs,h,cpp,cs}',
-    false,
+    'glob',
     ['Game', 'Engine'],
   );
 
@@ -21,7 +21,7 @@ test('glob draft scopes WorkspaceName-prefixed patterns to a single workspace', 
 });
 
 test('glob draft keeps unscoped relative patterns on all workspaces', () => {
-  const draft = buildFilesQueryDraft('src/**/*.ts', false, ['App', 'Docs']);
+  const draft = buildFilesQueryDraft('src/**/*.ts', 'glob', ['App', 'Docs']);
 
   assert.deepEqual(draft, {
     targets: [
@@ -42,7 +42,7 @@ test('glob draft keeps unscoped relative patterns on all workspaces', () => {
 });
 
 test('glob draft keeps absolute patterns absolute for all workspaces', () => {
-  const draft = buildFilesQueryDraft('g:/workspace/game-project/Source/**/*.cs', false, ['Game', 'Engine']);
+  const draft = buildFilesQueryDraft('g:/workspace/game-project/Source/**/*.cs', 'glob', ['Game', 'Engine']);
 
   assert.deepEqual(draft, {
     targets: [
@@ -63,7 +63,7 @@ test('glob draft keeps absolute patterns absolute for all workspaces', () => {
 });
 
 test('glob draft normalizes Windows separators in WorkspaceName-prefixed patterns', () => {
-  const draft = buildFilesQueryDraft('Game\\Source\\**\\*.cs', false, ['Game', 'Engine']);
+  const draft = buildFilesQueryDraft('Game\\Source\\**\\*.cs', 'glob', ['Game', 'Engine']);
 
   assert.deepEqual(draft, {
     targets: [{
@@ -79,7 +79,7 @@ test('glob draft normalizes Windows separators in WorkspaceName-prefixed pattern
 test('glob draft expands brace-scoped multi-workspace patterns', () => {
   const draft = buildFilesQueryDraft(
     '{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}',
-    false,
+    'glob',
     ['CthulhuGame', 'UE5', 'Tools'],
   );
 
@@ -102,7 +102,7 @@ test('glob draft expands brace-scoped multi-workspace patterns', () => {
 });
 
 test('regex draft scopes WorkspaceName-prefixed queries to a single workspace', () => {
-  const draft = buildFilesQueryDraft('Game/Source/.+\\.cs$', true, ['Game', 'Engine']);
+  const draft = buildFilesQueryDraft('Game/Source/.+\\.cs$', 'regex', ['Game', 'Engine']);
 
   assert.deepEqual(draft, {
     targets: [{
@@ -117,22 +117,29 @@ test('regex draft scopes WorkspaceName-prefixed queries to a single workspace', 
 
 test('invalid glob throws before workspace initialization is relevant', () => {
   assert.throws(
-    () => buildFilesQueryDraft('Game/[abc', false, ['Game']),
+    () => buildFilesQueryDraft('Game/[abc', 'glob', ['Game']),
     /Invalid query glob pattern:/u,
   );
 });
 
 test('workspace-prefixed regex requires a non-empty remainder', () => {
   assert.throws(
-    () => buildFilesQueryDraft('Game/', true, ['Game']),
+    () => buildFilesQueryDraft('Game/', 'regex', ['Game']),
     /query regex is empty after workspace prefix 'Game\/'\./u,
   );
 });
 
 test('glob draft rejects empty patterns before any workspace binding', () => {
   assert.throws(
-    () => buildFilesQueryDraft('   ', false, ['Game']),
-    /query must be a non-empty glob string when isRegexp is false\./u,
+    () => buildFilesQueryDraft('   ', 'glob', ['Game']),
+    /query must be a non-empty glob string when querySyntax is 'glob'\./u,
+  );
+});
+
+test('glob draft rejects bare pipe alternation before any workspace binding', () => {
+  assert.throws(
+    () => buildFilesQueryDraft('Game/Source/**/*.cs|Game/Source/**/*.cpp', 'glob', ['Game', 'Engine']),
+    /query does not support '\|' alternation when querySyntax='glob'/u,
   );
 });
 

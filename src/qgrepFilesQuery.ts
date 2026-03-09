@@ -2,6 +2,7 @@ import {
   compileFilesQueryGlobToRegexSource,
   normalizeFilesQueryGlobErrorMessage,
 } from './qgrepGlob';
+import { ensureNoBarePipeAlternation, type QgrepQuerySyntax } from './searchInput';
 import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
 
 export type QgrepFilesQuerySemantics = 'glob-vscode' | 'regex';
@@ -26,10 +27,10 @@ export type FilesQueryDraftTarget =
 
 export function buildFilesQueryDraft(
   query: string,
-  isRegexp: boolean,
+  querySyntax: QgrepQuerySyntax,
   workspaceNames: readonly string[],
 ): FilesQueryDraft {
-  if (isRegexp) {
+  if (querySyntax === 'regex') {
     return buildRegexFilesQueryDraft(query, workspaceNames);
   }
   return buildGlobFilesQueryDraft(query, workspaceNames);
@@ -38,7 +39,7 @@ export function buildFilesQueryDraft(
 export function ensureFilesLegacyParamsUnsupported(input: Record<string, unknown>): void {
   if (Object.prototype.hasOwnProperty.call(input, 'mode') && input.mode !== undefined) {
     throw new Error(
-      'mode is no longer supported for lm_qgrepSearchFiles. Use query with optional isRegexp instead.',
+      "mode is no longer supported for lm_qgrepSearchFiles. Use query with optional querySyntax='regex' instead.",
     );
   }
   if (Object.prototype.hasOwnProperty.call(input, 'searchPath') && input.searchPath !== undefined) {
@@ -110,8 +111,13 @@ function buildGlobFilesQueryDraft(
 function validateFilesGlobPattern(query: string): void {
   const trimmed = query.trim();
   if (trimmed.length === 0) {
-    throw new Error('query must be a non-empty glob string when isRegexp is false.');
+    throw new Error("query must be a non-empty glob string when querySyntax is 'glob'.");
   }
+  ensureNoBarePipeAlternation(
+    trimmed,
+    "query does not support '|' alternation when querySyntax='glob'. "
+    + "Use '{A,B}' for glob alternatives, or set querySyntax='regex'.",
+  );
   try {
     compileFilesQueryGlobToRegexSource(trimmed);
   } catch (error) {

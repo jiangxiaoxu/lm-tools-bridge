@@ -2,6 +2,12 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { rgPath } from '@vscode/ripgrep';
+import {
+  ensureNoBarePipeAlternation,
+  parseOptionalIncludePattern,
+  parseQuerySyntax,
+  type FindTextQuerySyntax,
+} from './searchInput';
 
 type RipgrepMatch = {
   path: string;
@@ -26,7 +32,13 @@ export async function executeFindTextInFilesSearch(input: Record<string, unknown
   if (typeof queryValue !== 'string') {
     throw new Error('query must be a string');
   }
-  const isRegexp = input.isRegexp === true;
+  const querySyntax = parseQuerySyntax({
+    input,
+    toolName: 'lm_findTextInFiles',
+    allowed: ['literal', 'regex'],
+    defaultSyntax: 'literal',
+  });
+  const includePattern = parseOptionalIncludePattern(input);
   const caseSensitive = input.caseSensitive === true;
   const includeIgnoredFiles = input.includeIgnoredFiles === true;
   const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
@@ -39,7 +51,7 @@ export async function executeFindTextInFilesSearch(input: Record<string, unknown
   let capped = false;
   let remaining = maxResults ?? Number.POSITIVE_INFINITY;
 
-  const targets = resolveRipgrepTargets(input.includePattern);
+  const targets = resolveRipgrepTargets(includePattern);
   for (const target of targets) {
     if (remaining <= 0) {
       capped = true;
@@ -47,7 +59,7 @@ export async function executeFindTextInFilesSearch(input: Record<string, unknown
     }
     const result = await runRipgrepSearch(target, {
       query: queryValue,
-      isRegexp,
+      querySyntax,
       caseSensitive,
       includeIgnoredFiles,
       maxResults: maxResults !== undefined ? remaining : undefined,
@@ -80,6 +92,10 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
   if (typeof queryValue !== 'string') {
     throw new Error('query must be a string');
   }
+  ensureNoBarePipeAlternation(
+    queryValue.trim(),
+    "query does not support '|' alternation in glob mode. Use '{A,B}' for glob alternatives.",
+  );
   const includeIgnoredFiles = input.includeIgnoredFiles === true;
   const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
     ? input.maxResults
@@ -119,7 +135,7 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
 }
 
 function resolveRipgrepTargets(
-  includePattern: unknown,
+  includePattern: string | undefined,
 ): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
@@ -193,7 +209,7 @@ async function runRipgrepSearch(
   target: { folder: vscode.WorkspaceFolder; glob?: string },
   options: {
     query: string;
-    isRegexp: boolean;
+    querySyntax: FindTextQuerySyntax;
     caseSensitive: boolean;
     includeIgnoredFiles: boolean;
     maxResults?: number;
@@ -428,11 +444,11 @@ function parseRipgrepFilePath(line: string, folder: vscode.WorkspaceFolder): str
 
 function buildRipgrepArgs(
   target: { folder: vscode.WorkspaceFolder; glob?: string },
-  options: { query: string; isRegexp: boolean; caseSensitive: boolean; includeIgnoredFiles: boolean },
+  options: { query: string; querySyntax: FindTextQuerySyntax; caseSensitive: boolean; includeIgnoredFiles: boolean },
 ): string[] {
   const args: string[] = ['--json', '--with-filename', '--line-number', '--no-messages'];
 
-  if (!options.isRegexp) {
+  if (options.querySyntax === 'literal') {
     if (options.caseSensitive) {
       args.push('--case-sensitive');
     } else {

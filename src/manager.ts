@@ -13,6 +13,18 @@ import {
   isSupportedWindowsWorkspacePath,
   resolveComparablePath,
 } from './windowsWorkspacePath';
+import {
+  buildWorkspaceHandshakePayload,
+  formatWorkspaceHandshakeSummary,
+} from './managerHandshake';
+import type {
+  HandshakeDiscoveryIssue,
+  HandshakeDiscoveryPayload,
+  HandshakeDiscoveryResourceTemplate,
+  HandshakeDiscoveryTool,
+  HandshakeGuidance,
+  WorkspaceHandshakePayload,
+} from './managerHandshake';
 
 const PIPE_PREFIX = 'lm-tools-bridge-manager';
 
@@ -89,37 +101,6 @@ type JsonRpcLikeMessage = {
   result?: unknown;
   error?: unknown;
 };
-
-type DiscoveryIssueLevel = 'error' | 'warning';
-type DiscoveryIssueCategory = 'tools/list' | 'schema';
-
-interface HandshakeDiscoveryTool {
-  name: string;
-  description: string;
-  inputSchema?: Record<string, unknown>;
-}
-
-interface HandshakeDiscoveryResourceTemplate {
-  name: string;
-  uriTemplate: string;
-}
-
-interface HandshakeDiscoveryIssue {
-  level: DiscoveryIssueLevel;
-  category: DiscoveryIssueCategory;
-  code: string;
-  message: string;
-  toolName?: string;
-  details?: string;
-}
-
-interface HandshakeDiscoveryPayload {
-  callTool: HandshakeDiscoveryTool;
-  bridgedTools: HandshakeDiscoveryTool[];
-  resourceTemplates: HandshakeDiscoveryResourceTemplate[];
-  partial: boolean;
-  issues: HandshakeDiscoveryIssue[];
-}
 
 const TTL_MS = 2500;
 const PRUNE_INTERVAL_MS = 500;
@@ -261,10 +242,7 @@ function getInvalidWindowsCwdMessage(): string {
   );
 }
 
-function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): {
-  nextSteps: string[];
-  recoveryOnError: string;
-} {
+function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): HandshakeGuidance {
   const nextSteps = [
     `For each bridged tool, ${getSchemaReadHint()}`,
   ];
@@ -804,100 +782,6 @@ function respondJsonRpcError(
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify({ jsonrpc: '2.0', id: id ?? null, error: { code, message } }));
-}
-
-function formatWorkspaceHandshakeSummary(payload: unknown): string {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    return JSON.stringify(payload);
-  }
-  const record = payload as Record<string, unknown>;
-  const target = (record.target && typeof record.target === 'object' && !Array.isArray(record.target))
-    ? record.target as Record<string, unknown>
-    : undefined;
-  const discovery = (record.discovery && typeof record.discovery === 'object' && !Array.isArray(record.discovery))
-    ? record.discovery as Record<string, unknown>
-    : undefined;
-  const discoveryIssues = Array.isArray(discovery?.issues) ? discovery.issues : [];
-  const workspaceFolders = Array.isArray(target?.workspaceFolders) ? target.workspaceFolders : [];
-  const bridgedTools = Array.isArray(discovery?.bridgedTools) ? discovery.bridgedTools : [];
-  const guidance = (record.guidance && typeof record.guidance === 'object' && !Array.isArray(record.guidance))
-    ? record.guidance as Record<string, unknown>
-    : undefined;
-  const guidanceNextSteps = Array.isArray(guidance?.nextSteps)
-    ? guidance.nextSteps.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-    : [];
-  const guidanceRecovery = typeof guidance?.recoveryOnError === 'string'
-    ? guidance.recoveryOnError.trim()
-    : '';
-  const bridgedToolNames = bridgedTools
-    .map((tool) => {
-      if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
-        return '';
-      }
-      const name = (tool as { name?: unknown }).name;
-      return typeof name === 'string' ? name.trim() : '';
-    })
-    .filter((name) => name.length > 0);
-  const lines: string[] = [
-    'Workspace handshake summary',
-    `ok: ${record.ok === true ? 'true' : 'false'}`,
-    `cwd: ${typeof record.cwd === 'string' ? record.cwd : 'n/a'}`,
-    `target: ${String(target?.host ?? 'n/a')}:${String(target?.port ?? 'n/a')}`,
-    `workspaceFolders: ${workspaceFolders.length}`,
-    `online: ${record.online === true ? 'true' : record.online === false ? 'false' : 'n/a'}`,
-    `discovery.partial: ${discovery?.partial === true ? 'true' : 'false'}`,
-    `bridgedTools: ${bridgedTools.length}`,
-  ];
-  lines.push('tools:');
-  if (bridgedToolNames.length === 0) {
-    lines.push('  (none)');
-  } else {
-    for (const toolName of bridgedToolNames) {
-      lines.push(`  - ${toolName}`);
-    }
-  }
-  if (discoveryIssues.length === 0) {
-    lines.push('Issues: none');
-  } else {
-    lines.push('Issues:');
-    for (const issue of discoveryIssues) {
-      if (!issue || typeof issue !== 'object') {
-        continue;
-      }
-      const issueRecord = issue as {
-        level?: unknown;
-        category?: unknown;
-        code?: unknown;
-        message?: unknown;
-        toolName?: unknown;
-        details?: unknown;
-      };
-      const level = typeof issueRecord.level === 'string' ? issueRecord.level : 'unknown';
-      const category = typeof issueRecord.category === 'string' ? issueRecord.category : 'unknown';
-      const code = typeof issueRecord.code === 'string' ? issueRecord.code : 'UNKNOWN';
-      const message = typeof issueRecord.message === 'string' ? issueRecord.message : '';
-      const toolName = typeof issueRecord.toolName === 'string' ? issueRecord.toolName.trim() : '';
-      const details = typeof issueRecord.details === 'string' ? issueRecord.details.trim() : '';
-      const toolSuffix = toolName.length > 0 ? `[${toolName}]` : '';
-      lines.push(`- [${level}][${category}][${code}]${toolSuffix} ${message}`);
-      if (details.length > 0) {
-        lines.push(`  details: ${details}`);
-      }
-    }
-  }
-  lines.push('Guidance:');
-  if (guidanceNextSteps.length === 0) {
-    lines.push('  nextSteps: (none)');
-  } else {
-    lines.push('  nextSteps:');
-    for (const nextStep of guidanceNextSteps) {
-      lines.push(`  - ${nextStep}`);
-    }
-  }
-  if (guidanceRecovery.length > 0) {
-    lines.push(`  recoveryOnError: ${guidanceRecovery}`);
-  }
-  return lines.join('\n');
 }
 
 function respondToolCall(res: http.ServerResponse, id: unknown, payload: unknown, textOverride?: string): void {
@@ -1740,7 +1624,7 @@ async function buildStatusPayload(session: SessionState): Promise<{
 async function handleRequestWorkspace(
   session: SessionState,
   cwdValue: unknown,
-): Promise<{ payload?: Record<string, unknown>; error?: { code: number; message: string } }> {
+): Promise<{ payload?: WorkspaceHandshakePayload; error?: { code: number; message: string } }> {
   if (typeof cwdValue !== 'string' || cwdValue.trim().length === 0) {
     return { error: { code: -32602, message: getInvalidRequestWorkspaceParamsMessage() } };
   }
@@ -1808,8 +1692,7 @@ async function handleRequestWorkspace(
   const discovery = await buildHandshakeDiscovery(matchedTarget);
   const guidance = buildHandshakeGuidance(discovery);
   return {
-    payload: {
-      ok: true,
+    payload: buildWorkspaceHandshakePayload({
       mcpSessionId: session.sessionId,
       cwd: session.resolveCwd,
       target: {
@@ -1819,11 +1702,9 @@ async function handleRequestWorkspace(
         workspaceFolders: matchedTarget.workspaceFolders,
         workspaceFile: matchedTarget.workspaceFile ?? null,
       },
-      online: true,
-      health,
       discovery,
       guidance,
-    },
+    }),
   };
 }
 

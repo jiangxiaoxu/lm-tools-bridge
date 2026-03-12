@@ -28,6 +28,7 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 - Handshake and direct-call metadata are concise; fallback guidance is returned by tools via `guidance` payload fields and actionable error messages.
 - Manager JSON-RPC errors include actionable `Next step:` recovery hints in `error.message`.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` responses now include `guidance` with `nextSteps` and `recoveryOnError` to drive failure recovery in tool flows.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` responses omit redundant top-level `online` and `health`; use handshake success plus follow-up manager errors/status endpoints for liveness.
 
 ### Built-in Tool Summary
 
@@ -149,6 +150,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - 握手与 direct-call 元信息保持精简;fallback 指引主要通过工具返回的 `guidance` 字段和可执行错误信息提供.
 - Manager JSON-RPC 错误会在 `error.message` 中附带可执行的 `Next step:` 恢复提示.
 - 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回会包含 `guidance`(`nextSteps`,`recoveryOnError`),用于在工具失败流程中给出可执行恢复步骤.
+- 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回不会再附带冗余的顶层 `online` 和 `health`;存活性以握手成功、后续错误提示和状态端点为准.
 
 ### 内置工具摘要
 

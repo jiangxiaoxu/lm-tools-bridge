@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.117] - 2026-03-12
+
+### English
+
+#### Changed
+- Simplified `lmToolsBridge.requestWorkspaceMCPServer` success payload by removing redundant top-level `online` and `health` fields while keeping `target`, `discovery`, and `guidance` unchanged.
+- Removed the `online:` line from the handshake text summary to match the trimmed JSON payload.
+
+#### Tests
+- Added unit coverage for handshake payload shaping and summary rendering.
+
+### 中文
+
+#### 变更
+- 精简 `lmToolsBridge.requestWorkspaceMCPServer` 的成功返回,移除冗余的顶层 `online` 和 `health`,同时保持 `target`,`discovery`,`guidance` 结构不变.
+- 调整握手文本摘要,移除 `online:` 行,与精简后的 JSON 返回保持一致.
+
+#### 测试
+- 新增握手 payload 与摘要渲染的单元测试覆盖.
+
 ## [1.0.116] - 2026-03-09
 
 ### English
@@ -37,56 +57,6 @@ Maintenance rule:
 
 #### 测试
 - 为 glob/path fail-fast 校验和新的 `querySyntax` contract 增加了 unit 与 VS Code integration 覆盖。
-
-## [1.0.114] - 2026-03-09
-
-### English
-
-#### Changed
-- Switched the VS Code integration runner to launch the test host via a direct child process (`shell: false`, `windowsHide: true`) to avoid Windows shell/open-with popups during `npm run test:integration`.
-- Restored the default `npm run test:integration` entrypoint after validating that an explicit PowerShell wrapper is not required.
-
-#### Tests
-- Expanded qgrep integration coverage with regex file-search scenarios in the multi-root fixture and regex text-search scenarios in the brace-scoped multi-root fixture.
-- Refreshed the large anonymized brace-scope fixture with real-source-derived files to exercise brace-scoped glob and regex queries at higher volume.
-
-### 中文
-
-#### 变更
-- 将 VS Code integration runner 改为直接 child process 启动 test host (`shell: false`, `windowsHide: true`), 避免 `npm run test:integration` 期间触发 Windows shell/open-with 弹窗。
-- 在确认无需显式 PowerShell 包装后, 恢复默认的 `npm run test:integration` 入口。
-
-#### 测试
-- 为 multi-root fixture 补充 qgrep file search 的 regex 集成场景, 并为 brace-scoped multi-root fixture 补充 qgrep text search 的 regex 集成场景。
-- 用真实源码派生的大体量匿名 brace-scope fixture 丰富覆盖, 提高 brace-scoped glob 与 regex 查询的复杂度。
-
-## [1.0.113] - 2026-03-09
-
-### English
-
-#### Features
-- Added brace-scoped multi-workspace glob support for qgrep so `lm_qgrepSearchFiles.query` and `lm_qgrepSearchText.includePattern` now accept selectors like `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}`.
-- Kept single-workspace glob scoping and regex workspace scoping behavior unchanged while normalizing multi-workspace scope labels in qgrep file-search summaries.
-
-#### Tests
-- Added unit coverage for brace-scoped workspace selector parsing, including the contract pattern `{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}`.
-- Added an anonymized multi-root integration fixture and runner to verify brace-scoped qgrep file and text searches across selected workspaces only.
-
-#### Docs
-- Updated qgrep tool descriptions, README, and face-ai-report preload guidance to document brace-scoped multi-workspace glob examples with anonymized workspace names.
-
-### 中文
-
-#### Features
-- 为 qgrep 新增 brace 形式的 multi-workspace glob scope, 现在 `lm_qgrepSearchFiles.query` 和 `lm_qgrepSearchText.includePattern` 都支持 `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` 这类 selector.
-- 保持原有单 workspace glob scope 和 regex workspace scope 行为不变, 同时让 qgrep file search summary 中的多 workspace `scope` 以规范化形式输出.
-
-#### Tests
-- 新增 brace-scoped workspace selector 的单测覆盖, 包括 `{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}` 这个 contract pattern.
-- 新增脱敏的 multi-root 集成夹具与 runner, 验证 brace-scoped qgrep file search 和 text search 只会命中被选中的 workspace.
-
-#### Docs
-- 更新 qgrep tool description, README 和 face-ai-report 预载说明, 使用脱敏 workspace 名补充 brace-scoped multi-workspace glob 示例.
 
 ## [1.0.112] - 2026-03-08
 

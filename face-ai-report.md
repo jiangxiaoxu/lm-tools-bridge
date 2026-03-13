@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.114`.
+- Version baseline: `1.0.118`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -70,7 +70,7 @@
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
 - `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online` and `health`; liveness is implied by handshake success and later manager/offline errors.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps` and `guidance.recoveryOnError` so clients can follow recovery hints from tool return values instead of relying only on static descriptions.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps` only; recovery guidance for failures is delivered through actionable JSON-RPC `error.message` text and manager resource/help text instead of handshake success payload.
 - Manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.
 - Manager JSON-RPC error messages for stale session/workspace mismatch/offline-unreachable/direct-call input errors now include explicit `Next step:` guidance in `error.message` (no `error.data` change).
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths when structured payloads are returned; qgrep tools now return text-only absolute-path output.
@@ -98,7 +98,7 @@
 - [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => reconnect manager endpoint; Verify: `/mcp/health` ok and status bar `Running`.
 - [Unknown Mcp-Session-Id] Read: `src/manager.ts -> handleMcpHttpRequest`; Decide: stale non-handshake session => re-bind via handshake; Verify: rerun `lmToolsBridge.requestWorkspaceMCPServer` then same tool call succeeds.
 - [Actionable manager errors] Read: `src/manager.ts -> getWorkspaceNotMatchedMessage | getWorkspaceNotSetMessage | getUnknownSessionMessage | getManagerUnreachableMessage | getMcpOfflineMessage`; Decide: follow `error.message` `Next step:` guidance before shell fallback; Verify: stale-session/unmatched/offline/invalid-direct-call responses all include a concrete recovery step.
-- [Handshake guidance output] Read: `src/manager.ts -> buildHandshakeGuidance | handleRequestWorkspace` and `src/managerHandshake.ts -> formatWorkspaceHandshakeSummary`; Decide: consume `guidance.nextSteps` / `guidance.recoveryOnError` from handshake tool return before fallback; Verify: handshake summary text and structured payload both include guidance fields, while omitting top-level `online`/`health`.
+- [Handshake guidance output] Read: `src/manager.ts -> buildHandshakeGuidance | handleRequestWorkspace` and `src/managerHandshake.ts -> formatWorkspaceHandshakeSummary`; Decide: consume `guidance.nextSteps` from handshake tool return before fallback; use actionable JSON-RPC `error.message` text for recovery; Verify: handshake summary text and structured payload include `guidance.nextSteps` while omitting any recovery field, `online`, and `health`.
 - [Workspace handshake path rejected] Read: `src/manager.ts -> isSupportedWindowsWorkspacePath | stripWindowsNtNamespacePrefix | handleRequestWorkspace`; Decide: on Windows allow only normal absolute paths and `\\?\` + normal absolute paths; Verify: non-normal NT namespace formats fail with params error while normal and prefixed-normal forms bind the same workspace target.
 - [Tool not found or disabled] Read: `src/tooling.ts -> getEnabledExposedToolsSnapshot | invokeExposedTool`; Decide: exposure first, enabled second; Verify: target appears in effective set and call succeeds.
 - [Tool selection config mismatch] Read: `src/tooling.ts -> setExposedTools | setEnabledTools | pruneBuiltInDisabledFromDeltas | pruneEnabledDeltasByExposed`; Decide: required/built-in-disabled/exposed-first rules apply; Verify: deltas normalize and intended tool state persists.

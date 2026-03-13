@@ -6,6 +6,28 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.118] - 2026-03-13
+
+### English
+
+#### Changed
+- Removed `guidance.recoveryOnError` from successful `lmToolsBridge.requestWorkspaceMCPServer` responses so handshake success payloads keep only `guidance.nextSteps`.
+- Removed the legacy `recoveryOnError` field from handshake guidance types and summary rendering to match the live payload contract.
+- Refined manager rebind retry guidance text to say `call lmToolsBridge.requestWorkspaceMCPServer again for this workspace, then retry once.`
+
+#### Tests
+- Updated handshake unit coverage for the trimmed guidance payload and summary output.
+
+### 中文
+
+#### Changed
+- 从成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回中移除 `guidance.recoveryOnError`,使握手成功 payload 仅保留 `guidance.nextSteps`.
+- 从握手 guidance 类型和摘要渲染中移除遗留的 `recoveryOnError` 字段,保持与实际 payload 契约一致.
+- 将 manager 的 rebind 重试提示文案调整为 `call lmToolsBridge.requestWorkspaceMCPServer again for this workspace, then retry once.`
+
+#### Tests
+- 同步更新握手相关单测,覆盖精简后的 guidance payload 和摘要输出.
+
 ## [1.0.117] - 2026-03-12
 
 ### English

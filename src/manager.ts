@@ -157,7 +157,7 @@ function getSchemaReadHint(): string {
 }
 
 function getRebindRetryHint(): string {
-  return `call ${REQUEST_WORKSPACE_METHOD} with params.cwd, wait for ok=true, then retry once.`;
+  return `call ${REQUEST_WORKSPACE_METHOD} again for this workspace, then retry once.`;
 }
 
 function getWorkspaceNotMatchedMessage(): string {
@@ -251,7 +251,6 @@ function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): Handshake
   }
   return {
     nextSteps,
-    recoveryOnError: getRebindRetryHint(),
   };
 }
 

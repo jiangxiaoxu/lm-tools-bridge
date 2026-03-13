@@ -42,7 +42,6 @@ test('handshake payload omits redundant online and health fields', () => {
     },
     guidance: {
       nextSteps: ['read lm-tools://schema/{name} before the first tool call.'],
-      recoveryOnError: 'call handshake again and retry once.',
     },
   });
 
@@ -76,13 +75,12 @@ test('handshake summary keeps useful fields and omits online line', () => {
     },
     guidance: {
       nextSteps: ['read lm-tools://schema/{name} before the first tool call.'],
-      recoveryOnError: 'call handshake again and retry once.',
     },
   });
 
   assert.match(summary, /workspaceFolders: 1/u);
   assert.match(summary, /bridgedTools: 2/u);
   assert.match(summary, /Issues: none/u);
-  assert.match(summary, /recoveryOnError: call handshake again and retry once\./u);
+  assert.doesNotMatch(summary, /recoveryOnError:/u);
   assert.doesNotMatch(summary, /^online:/mu);
 });

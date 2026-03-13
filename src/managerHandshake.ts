@@ -31,7 +31,6 @@ export interface HandshakeDiscoveryPayload {
 
 export interface HandshakeGuidance {
   nextSteps: string[];
-  recoveryOnError: string;
 }
 
 export interface WorkspaceHandshakeTarget {
@@ -92,9 +91,6 @@ export function formatWorkspaceHandshakeSummary(payload: unknown): string {
   const guidanceNextSteps = Array.isArray(guidance?.nextSteps)
     ? guidance.nextSteps.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
     : [];
-  const guidanceRecovery = typeof guidance?.recoveryOnError === 'string'
-    ? guidance.recoveryOnError.trim()
-    : '';
   const bridgedToolNames = bridgedTools
     .map((tool) => {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
@@ -158,9 +154,6 @@ export function formatWorkspaceHandshakeSummary(payload: unknown): string {
     for (const nextStep of guidanceNextSteps) {
       lines.push(`  - ${nextStep}`);
     }
-  }
-  if (guidanceRecovery.length > 0) {
-    lines.push(`  recoveryOnError: ${guidanceRecovery}`);
   }
   return lines.join('\n');
 }

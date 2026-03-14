@@ -38,6 +38,17 @@ enabled = true
 
 The PowerShell wrapper is recommended because many MCP clients do not expand environment variables inside raw args.
 
+### Codex Skill
+For the best Codex app experience, use this extension together with the `vscode-tools` skill.
+
+In Codex app, install it with:
+
+```text
+$skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/master/skills/vscode-tools
+```
+
+Restart Codex to pick up the new skill.
+
 ### Basic Usage
 1. Start one stdio manager per client session.
 2. Call `lmToolsBridge.requestWorkspaceMCPServer`.
@@ -100,6 +111,17 @@ enabled = true
 ```
 
 推荐包一层 PowerShell,因为很多 MCP 客户端不会自动展开原始 `args` 里的环境变量.
+
+### Codex Skill
+为了获得更好的 Codex app 使用体验,建议把本扩展和 `vscode-tools` skill 配合使用.
+
+在 Codex app 中输入下面的命令进行安装:
+
+```text
+$skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/master/skills/vscode-tools
+```
+
+安装后请重启 Codex,以加载新的 skill.
 
 ### 基本使用
 1. 每个客户端会话启动一个 stdio manager.

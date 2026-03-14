@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.118",
+  "version": "1.0.119",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -72,13 +72,6 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Port for the MCP server."
-        },
-        "lmToolsBridge.manager.httpPort": {
-          "type": "number",
-          "default": 47100,
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "Port for the LM Tools Bridge manager HTTP MCP gateway."
         },
         "lmToolsBridge.useWorkspaceSettings": {
           "type": "boolean",
@@ -183,6 +176,7 @@
     "test": "npm run test:unit",
     "test:unit": "npm run compile && node --test out/__tests__/*.test.js",
     "test:integration": "npm run compile && node ./out/test/integration/index.js",
+    "test:manager-integration": "npm run compile && node --test out/test/manager-integration/*.test.js",
     "test:all": "npm run test:unit && npm run test:integration",
     "watch": "tsc -watch -p ./"
   },

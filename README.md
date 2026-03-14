@@ -5,30 +5,32 @@
 ## English
 
 ### Overview
-LM Tools Bridge is a VS Code extension that exposes LM tools through MCP HTTP.
-It uses a Manager endpoint as a stable entry, then routes to workspace MCP servers.
+LM Tools Bridge is a VS Code extension that exposes LM tools through MCP.
+Each workspace VS Code instance hosts a local MCP HTTP server, while external clients connect through a per-session stdio manager.
 
 ### Quick Start
 1. Start service in VS Code: `LM Tools Bridge: Start Server`.
-2. Connect your MCP client to Manager: `http://127.0.0.1:47100/mcp`.
+2. Launch one stdio MCP process per client session: `node <extension-dir>/out/stdioManager.js`.
 3. Call handshake tool `lmToolsBridge.requestWorkspaceMCPServer` with `{ "cwd": "<project path>" }` (Windows accepts only normal absolute paths and `\\?\` + normal absolute paths; prefix matching is case-insensitive).
-4. Call tools via `lmToolsBridge.callTool` or standard `tools/call`.
+4. After handshake, call bridged workspace tools from `tools/list`, or keep using `lmToolsBridge.callTool`.
 
 ### Endpoints
-- Manager MCP: `http://127.0.0.1:47100/mcp`
-- Manager status: `http://127.0.0.1:47100/mcp/status`
-- Manager log: `http://127.0.0.1:47100/mcp/log`
-- Workspace MCP (dynamic): `http://127.0.0.1:<runtime-port>/mcp`
+- Stdio manager entry: `node <extension-dir>/out/stdioManager.js`
+- Workspace MCP (internal, dynamic): `http://127.0.0.1:<runtime-port>/mcp`
+- Workspace health (internal): `http://127.0.0.1:<runtime-port>/mcp/health`
 
 ### Core Behavior
-- Always connect clients to Manager, not workspace runtime ports.
+- Always connect clients to the stdio manager, not workspace runtime ports.
 - Handshake is required before calling bridged workspace tools.
-- If `Mcp-Session-Id` is stale, run handshake again with current session header.
-- `roots/list` is manager-initiated when client declares `capabilities.roots`.
-- Handshake and direct-call metadata are concise; fallback guidance is returned by tools via `guidance` payload fields and actionable error messages.
+- Each client session should launch its own stdio manager process. Multiple managers can run concurrently and route independently.
+- On Windows, handshake can auto-start the matching VS Code workspace instance, wait until it registers and becomes healthy, then bind to it.
+- On Windows, launch-target resolution walks upward level by level; at each level it checks `.code-workspace`, then `.vscode`, then `.git`, and only moves to the parent when that level has none of them.
+- Auto-start happens only during handshake. If the bound workspace instance closes later, follow-up calls return offline/rebind errors and do not trigger restart.
+- Handshake and direct-call metadata stay concise; actionable recovery guidance is returned through `guidance` fields and manager error messages.
 - Manager JSON-RPC errors include actionable `Next step:` recovery hints in `error.message`.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` responses now include `guidance.nextSteps`; failure recovery guidance is delivered by actionable manager error messages and manager help resources.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` responses omit redundant top-level `online` and `health`; use handshake success plus follow-up manager errors/status endpoints for liveness.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` responses include `guidance`, `discovery`, and dynamic bridged tool metadata while omitting redundant top-level `online` and `health`.
+- After handshake, `tools/list` dynamically merges bridged workspace tools into the local stdio manager tool list.
+- No manager status/log web pages are provided.
 
 ### Built-in Tool Summary
 
@@ -95,7 +97,6 @@ It uses a Manager endpoint as a stable entry, then routes to workspace MCP serve
 ### Key Settings
 - `lmToolsBridge.server.autoStart`
 - `lmToolsBridge.server.port`
-- `lmToolsBridge.manager.httpPort`
 - `lmToolsBridge.useWorkspaceSettings`
 - `lmToolsBridge.tools.exposedDelta`
 - `lmToolsBridge.tools.unexposedDelta`
@@ -112,12 +113,14 @@ Open VS Code Output panel and select:
 - `lm-tools-bridge-qgrep`
 
 ### Troubleshooting
-- `workspace not set` or `Unknown Mcp-Session-Id`: rerun handshake.
-- `workspace not matched`: ensure `cwd` is inside target workspace (Windows `cwd` must be a normal absolute path or `\\?\` + normal absolute path; non-normal NT namespace forms are rejected).
+- `workspace not set`: rerun handshake.
+- `workspace not matched`: ensure `cwd` is inside the target workspace or points to the target `.code-workspace` file (Windows `cwd` must be a normal absolute path or `\\?\` + normal absolute path; non-normal NT namespace forms are rejected).
+- `Resolved workspace MCP server is offline`: the bound VS Code instance closed after handshake. Rerun handshake to rebind. Follow-up calls do not auto-restart it.
+- Handshake startup/wait timed out on Windows: ensure `code.cmd` or `code` is available on `PATH`, then retry handshake.
 - qgrep waits too long: check `lm_qgrepGetStatus`.
 - If qgrep still reports assertion failures after startup auto-repair, run `LM Tools Bridge: Qgrep Rebuild Indexes` and retry once.
 - `Tool not found or disabled`: ensure tool is both exposed and enabled.
-- For manager/session/direct-call errors, follow the `Next step:` hint in the returned `error.message` before using shell fallback.
+- For handshake/direct-call errors, follow the `Next step:` hint in the returned `error.message` before using shell fallback.
 
 ### Change History
 See `CHANGELOG.md`.
@@ -127,30 +130,32 @@ See `CHANGELOG.md`.
 ## 中文
 
 ### 概览
-LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
-它使用 Manager 作为稳定入口,再把请求路由到对应 workspace 的 MCP server.
+LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 暴露 LM tools.
+每个 workspace 的 VS Code 实例会托管本地 MCP HTTP server,外部客户端则通过每会话一个 stdio manager 接入.
 
 ### 快速开始
 1. 在 VS Code 里执行 `LM Tools Bridge: Start Server`.
-2. MCP 客户端连接 Manager: `http://127.0.0.1:47100/mcp`.
+2. 每个客户端会话拉起一个 stdio MCP 进程: `node <extension-dir>/out/stdioManager.js`.
 3. 先调用握手工具 `lmToolsBridge.requestWorkspaceMCPServer`,参数 `{ "cwd": "<project path>" }`(Windows 仅接受普通绝对路径和 `\\?\` + 普通绝对路径,前缀匹配不区分大小写).
-4. 然后通过 `lmToolsBridge.callTool` 或标准 `tools/call` 调用工具.
+4. 握手成功后,直接从 `tools/list` 调用桥接后的 workspace tools,或者继续使用 `lmToolsBridge.callTool`.
 
 ### 端点
-- Manager MCP: `http://127.0.0.1:47100/mcp`
-- Manager status: `http://127.0.0.1:47100/mcp/status`
-- Manager log: `http://127.0.0.1:47100/mcp/log`
-- Workspace MCP(动态端口): `http://127.0.0.1:<runtime-port>/mcp`
+- Stdio manager 入口: `node <extension-dir>/out/stdioManager.js`
+- Workspace MCP(内部动态端口): `http://127.0.0.1:<runtime-port>/mcp`
+- Workspace health(内部): `http://127.0.0.1:<runtime-port>/mcp/health`
 
 ### 核心行为
-- 客户端应始终连接 Manager,不要直连 workspace 动态端口.
+- 客户端应始终连接 stdio manager,不要直连 workspace 动态端口.
 - 调用 workspace 桥接工具前,必须先握手.
-- `Mcp-Session-Id` 过期时,使用当前 session 头重新握手.
-- 若客户端在 `initialize` 声明 `capabilities.roots`,manager 会主动发起 `roots/list`.
-- 握手与 direct-call 元信息保持精简;fallback 指引主要通过工具返回的 `guidance` 字段和可执行错误信息提供.
+- 每个客户端会话应各自拉起一个 stdio manager 进程,多个 manager 可以并发运行并独立路由.
+- 在 Windows 上,握手阶段会在需要时尝试自动拉起匹配的 VS Code workspace 实例,等待其注册并健康后再完成绑定.
+- 在 Windows 上,启动目标会按层级逐级向上解析; 每一层都会先查 `.code-workspace`,再查 `.vscode`,再查 `.git`,这一层都没有才继续查父目录.
+- 自动拉起只发生在握手阶段. 如果后续绑定的 workspace 实例关闭,后续调用会返回 offline/rebind 错误,不会自动重启.
+- 握手与 direct-call 元信息保持精简; 可执行恢复指引通过 `guidance` 字段和 manager 错误消息返回.
 - Manager JSON-RPC 错误会在 `error.message` 中附带可执行的 `Next step:` 恢复提示.
-- 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回会包含 `guidance.nextSteps`; 工具失败时的恢复步骤改由 manager 的可执行错误消息和帮助资源提供.
-- 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回不会再附带冗余的顶层 `online` 和 `health`;存活性以握手成功、后续错误提示和状态端点为准.
+- 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回会包含 `guidance`,`discovery` 以及桥接工具元信息,同时省略冗余的顶层 `online` 和 `health`.
+- 握手成功后,`tools/list` 会动态合并当前 workspace 的桥接工具.
+- 不再提供 manager status/log 网页端点.
 
 ### 内置工具摘要
 
@@ -217,7 +222,6 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 ### 关键设置
 - `lmToolsBridge.server.autoStart`
 - `lmToolsBridge.server.port`
-- `lmToolsBridge.manager.httpPort`
 - `lmToolsBridge.useWorkspaceSettings`
 - `lmToolsBridge.tools.exposedDelta`
 - `lmToolsBridge.tools.unexposedDelta`
@@ -234,12 +238,14 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP HTTP 暴露 LM tools.
 - `lm-tools-bridge-qgrep`
 
 ### 故障排查
-- `workspace not set` 或 `Unknown Mcp-Session-Id`: 重新握手.
-- `workspace not matched`: 检查 `cwd` 是否在目标 workspace 内(Windows `cwd` 仅支持普通绝对路径和 `\\?\` + 普通绝对路径,非普通 NT namespace 写法会被拒绝).
+- `workspace not set`: 重新握手.
+- `workspace not matched`: 检查 `cwd` 是否位于目标 workspace 内,或者是否直接指向目标 `.code-workspace` 文件(Windows `cwd` 仅支持普通绝对路径和 `\\?\` + 普通绝对路径,非普通 NT namespace 写法会被拒绝).
+- `Resolved workspace MCP server is offline`: 说明握手后的目标 VS Code 实例已经关闭. 重新握手即可重新绑定,后续调用不会自动重启它.
+- Windows 上握手启动/等待超时: 确认 `code.cmd` 或 `code` 已在 `PATH` 中,然后重新握手.
 - qgrep 等待过久: 先看 `lm_qgrepGetStatus`.
 - 如果启动自动修复后仍出现 qgrep 断言错误,执行 `LM Tools Bridge: Qgrep Rebuild Indexes` 后重试一次.
 - `Tool not found or disabled`: 确认工具同时处于 exposed 与 enabled.
-- 遇到 manager/session/direct-call 相关错误时,优先按返回 `error.message` 里的 `Next step:` 执行恢复,再考虑 shell fallback.
+- 遇到握手或 direct-call 相关错误时,优先按返回 `error.message` 里的 `Next step:` 执行恢复,再考虑 shell fallback.
 
 ### 变更历史
 参见 `CHANGELOG.md`.

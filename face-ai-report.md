@@ -1,9 +1,9 @@
 # AI Preload Contract: lm-tools-bridge
 
 ## Section A: Preload Contract
-- Project one-liner: expose VS Code LM tools as local MCP HTTP services with Manager-based workspace binding.
+- Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via a shared instance registry.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.118`.
+- Version baseline: `1.0.119`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -40,6 +40,7 @@
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
 - VS Code integration tests use `@vscode/test-electron`; `npm run test:integration` runs a smoke workspace against the repo root plus temp-copied multi-root fixtures, polls workspace-folder readiness to reduce startup flakiness, launches suites through `runTests`, sanitizes inherited `ELECTRON_RUN_AS_NODE` and `VSCODE_*` variables before each launch, and currently skips on non-Windows platforms.
+- A separate Windows-only `npm run test:manager-integration` suite launches `out/stdioManager.js` over stdio, injects a `code.cmd` wrapper ahead of `PATH`, lets handshake auto-start a real VS Code instance for a temp-copied workspace, and validates bridged qgrep calls end-to-end through MCP.
 - The main multi-root fixture models an anonymized Unreal-style `Source` tree (`GameRuntime`, `GameEditor`, `Shared/Tools`, `EngineRuntime`) with structured excerpt content derived from runtime/editor patterns; integration coverage includes scoped `WorkspaceName/<glob>` file searches, scoped `WorkspaceName/<regex>` file searches, deep `Private/**/*.cpp` matching, cross-workspace target aggregation in both glob and regex modes, no-result summaries, capped file-search summaries, and `absolutePath`/`workspacePath`/`workspaceFolder` consistency checks.
 - An additional anonymized brace-scope fixture (`WorkspaceA`, `WorkspaceB`) uses a large real-source-derived corpus under anonymized workspace names; it covers `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` file aggregation, brace-selector normalization, `lm_qgrepSearchText.includePattern` filtering, and regex text-search integration (smart-case and explicit case-sensitive) across the selected workspaces only.
 - The integration runner deletes temporary VS Code user-data, extensions, and copied fixture directories with retry-based cleanup to tolerate transient Windows file locks after the extension host exits.
@@ -55,7 +56,7 @@
 - qgrep initialized `workspace.cfg` files include an extension-managed Unreal include block for `*.ush`/`*.usf`/`*.ini` plus an extension-managed PowerShell include block for `*.ps1`, and an extension-managed `search.exclude` block (`true` entries only) with fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`; `.gitignore` is not synced.
 - Generated qgrep regexes (both `workspace.cfg` sync rules and runtime `includePattern` glob filters) are validated to avoid non-capturing groups (`(?:...)`) and other Perl-style `(?...)` constructs because qgrep rejects that syntax.
 - qgrep multi-root storage is per-workspace under `<workspace>/.vscode/qgrep`; `Qgrep Stop And Clear Indexes` removes that directory for all current workspaces and disables maintenance until re-init.
-- qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server/manager logs remain in `lm-tools-bridge`.
+- qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server runtime logs remain in `lm-tools-bridge`.
 - qgrep clear-cancel control flow logs (`... cancelled during clear`) are expected `info` entries and should not be treated as qgrep command failures.
 - `lm_qgrepSearchText.includePattern` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` and `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), and glob inputs are force-compiled into qgrep-compatible `fi` regex filters that run before qgrep output truncation; bare `|` alternation is rejected with guidance to use `{A,B}` or move alternation into `querySyntax='regex'`.
 - `lm_qgrepSearchText` uses `includePattern` for path/glob scope; legacy `searchPath` and `includeIgnoredFiles` inputs are ignored and do not affect query behavior.
@@ -68,38 +69,50 @@
 - qgrep tooltip reports binary readiness, aggregate file progress, and one per-workspace line in `A/B (percent)` format.
 - Aggregate qgrep `A/B`/remaining uses file-weighted sum across initialized workspaces only when all initialized workspaces have known totals; otherwise show unknown (`--/--`) with optional sampled percent.
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
+- Workspace instances publish shared registry heartbeats under `%LOCALAPPDATA%\\lm-tools-bridge\\instances` unless `LM_TOOLS_BRIDGE_INSTANCE_REGISTRY_DIR` overrides it.
 - `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online` and `health`; liveness is implied by handshake success and later manager/offline errors.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps` only; recovery guidance for failures is delivered through actionable JSON-RPC `error.message` text and manager resource/help text instead of handshake success payload.
-- Manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.
-- Manager JSON-RPC error messages for stale session/workspace mismatch/offline-unreachable/direct-call input errors now include explicit `Next step:` guidance in `error.message` (no `error.data` change).
+- `lmToolsBridge.requestWorkspaceMCPServer` first matches a live registry instance; if none matches on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
+- Handshake launch-target resolution order is: direct `.code-workspace` input first; otherwise walk upward level by level, checking `.code-workspace`, then `.vscode`, then `.git` at each level, and fall back to the current directory (or parent directory for file input) only when every level misses.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online` and `health`; liveness is implied by handshake success and later offline/rebind errors.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
+- The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
+- After handshake, `tools/list` dynamically merges bridged workspace tools into the stdio manager inventory and emits list-changed notifications when the binding changes.
+- If the bound workspace instance goes offline after handshake, the stdio manager clears the binding and returns offline/rebind errors; it does not auto-restart VS Code outside handshake.
+- Stdio manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.
+- Stdio manager JSON-RPC error messages for workspace mismatch/offline-unreachable/direct-call input errors include explicit `Next step:` guidance in `error.message` (no `error.data` change).
+- No manager status/log HTTP pages are part of the current runtime mainline.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths when structured payloads are returned; qgrep tools now return text-only absolute-path output.
 - `copilot_searchCodebase` placeholder output is treated as unavailable.
 
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
+- `src/stdioManager.ts -> handleRequestWorkspace | ensureTargetWithAutoStart | resolveLaunchTarget | buildHandshakeDiscovery | invokeBoundTool | createServer`
+- `src/instanceRegistry.ts -> InstanceRegistryPublisher | readRegisteredInstances | pickBestMatchingInstance | isCwdWithinWorkspaceFolders | isCwdMatchingWorkspaceFile`
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
 - `src/qgrepWorkspaceScope.ts -> tryResolveWorkspaceScopePattern`
 - `src/qgrepFilesQuery.ts -> buildFilesQueryDraft | ensureFilesLegacyParamsUnsupported`
 - `src/test/integration/index.ts -> main | createSmokeRun | createMultiRootRun | createMultiRootBraceRun | executeIntegrationRun`
+- `src/test/manager-integration/stdioManager.integration.test.ts -> createAutoStartWorkspace | createCodeWrapper | connectStdioManager`
 - `src/test/integration/extensionHost/*.ts -> smokeRunner | multiRootRunner | multiRootBraceRunner | testHarness`
-- `src/manager.ts -> handleMcpHttpRequest | dispatchRootsListRequest`
+- `src/test/integration/vscodeTestUtils.ts -> getVSCodeExecutablePath | runExtensionTests | buildCommonVsCodeLaunchArgs`
+- `src/managerHandshake.ts -> buildWorkspaceHandshakePayload | formatWorkspaceHandshakeSummary`
 - `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath | resolveComparablePath`
 
 ### Forbidden Assumptions
 - Do not assume handshake can be skipped before tool calls.
+- Do not assume `tools/list` stays fixed before and after handshake.
 - Do not assume User settings drive scope when `useWorkspaceSettings=true`.
 - Do not assume forwarded LM tools always include both text and structured channels.
-- Do not assume `/mcp/status` always returns JSON.
+- Do not assume post-handshake offline calls will auto-start VS Code again.
 
 ## Section B: Task Routing Cards
-- [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => reconnect manager endpoint; Verify: `/mcp/health` ok and status bar `Running`.
-- [Unknown Mcp-Session-Id] Read: `src/manager.ts -> handleMcpHttpRequest`; Decide: stale non-handshake session => re-bind via handshake; Verify: rerun `lmToolsBridge.requestWorkspaceMCPServer` then same tool call succeeds.
-- [Actionable manager errors] Read: `src/manager.ts -> getWorkspaceNotMatchedMessage | getWorkspaceNotSetMessage | getUnknownSessionMessage | getManagerUnreachableMessage | getMcpOfflineMessage`; Decide: follow `error.message` `Next step:` guidance before shell fallback; Verify: stale-session/unmatched/offline/invalid-direct-call responses all include a concrete recovery step.
-- [Handshake guidance output] Read: `src/manager.ts -> buildHandshakeGuidance | handleRequestWorkspace` and `src/managerHandshake.ts -> formatWorkspaceHandshakeSummary`; Decide: consume `guidance.nextSteps` from handshake tool return before fallback; use actionable JSON-RPC `error.message` text for recovery; Verify: handshake summary text and structured payload include `guidance.nextSteps` while omitting any recovery field, `online`, and `health`.
-- [Workspace handshake path rejected] Read: `src/manager.ts -> isSupportedWindowsWorkspacePath | stripWindowsNtNamespacePrefix | handleRequestWorkspace`; Decide: on Windows allow only normal absolute paths and `\\?\` + normal absolute paths; Verify: non-normal NT namespace formats fail with params error while normal and prefixed-normal forms bind the same workspace target.
+- [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => retry on the next local workspace HTTP port; Verify: `/mcp/health` ok, registry heartbeat exists, and status bar shows `Running`.
+- [Actionable stdio manager errors] Read: `src/stdioManager.ts -> getWorkspaceNotMatchedMessage | getWorkspaceNotSetMessage | getTargetUnreachableMessage | getMcpOfflineMessage`; Decide: follow `error.message` `Next step:` guidance before shell fallback; Verify: unmatched/offline/invalid-direct-call responses all include a concrete recovery step.
+- [Handshake guidance output] Read: `src/stdioManager.ts -> buildHandshakeGuidance | handleRequestWorkspace` and `src/managerHandshake.ts -> formatWorkspaceHandshakeSummary`; Decide: consume `guidance.nextSteps` from handshake tool return before fallback and use actionable JSON-RPC `error.message` text for recovery; Verify: handshake summary text and structured payload include `guidance.nextSteps` while omitting any recovery field plus top-level `online`/`health`.
+- [Workspace handshake path rejected] Read: `src/stdioManager.ts -> handleRequestWorkspace` and `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath`; Decide: on Windows allow only normal absolute paths and `\\?\` + normal absolute paths; Verify: non-normal NT namespace formats fail with params error while normal and prefixed-normal forms bind the same workspace target.
+- [Handshake auto-start or wrong launch target] Read: `src/stdioManager.ts -> resolveLaunchTarget | launchVsCode | waitForHealthyTarget | ensureTargetWithAutoStart`; Decide: confirm per-level marker priority `.code-workspace -> .vscode -> .git`, then continue upward only when the current level has none, and confirm `PATH` visibility for `code.cmd`/`code`; Verify: handshake either binds an existing instance or launches one and waits until registry + health succeed.
 - [Tool not found or disabled] Read: `src/tooling.ts -> getEnabledExposedToolsSnapshot | invokeExposedTool`; Decide: exposure first, enabled second; Verify: target appears in effective set and call succeeds.
 - [Tool selection config mismatch] Read: `src/tooling.ts -> setExposedTools | setEnabledTools | pruneBuiltInDisabledFromDeltas | pruneEnabledDeltasByExposed`; Decide: required/built-in-disabled/exposed-first rules apply; Verify: deltas normalize and intended tool state persists.
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
@@ -108,11 +121,12 @@
 - [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: text output reports `binary`, workspace counts, aggregate progress, and per-workspace lines.
 - [qgrep search scope rejected] Read: `src/qgrep.ts -> resolveIncludePattern | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported`; Decide: `lm_qgrepSearchText.includePattern` enforces existing path/glob rules, rejects bare `|` alternation, and ignores legacy `searchPath`/`includeIgnoredFiles`; `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp`; Verify: text outside/ambiguous includePattern or `|` alternation returns expected tool error, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
 - [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
-- [Roots sync not triggered] Read: `src/manager.ts -> dispatchRootsListRequest`; Decide: requires client roots capability + trigger events; Verify: logs contain `roots.list.request/result/error/skip/timeout`.
+- [Registry match missing or stale] Read: `src/instanceRegistry.ts -> readRegisteredInstances | pickBestMatchingInstance`; Decide: confirm TTL pruning and path-match precedence (workspace file exact > folder exact > nested folder); Verify: the expected workspace record is selected or pruned deterministically.
 
 ## Section C: Change Impact Map
 - Doc defaults: code changes -> `face-ai-report.md`; `README.md` only if user-facing; `CHANGELOG.md` on version bump.
 - Config scope -> `src/configuration.ts`, `src/extension.ts`.
+- Stdio manager packaging/filtering -> `scripts/bundle.mjs`, `.vscodeignore`.
 - Exposure/enable policy -> `src/tooling.ts`.
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
 - qgrep workspace-scope parsing -> `src/qgrepWorkspaceScope.ts`.
@@ -120,20 +134,21 @@
 - qgrep files query parsing/fail-fast validation -> `src/qgrepFilesQuery.ts`.
 - Shared search input parsing -> `src/searchInput.ts`.
 - qgrep output formatting/helpers -> `src/qgrepOutput.ts`, `src/tooling.ts`.
-- VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/fixtures/multi-root/*`, `src/test/fixtures/multi-root-brace/*`.
+- VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/manager-integration/*`, `src/test/fixtures/multi-root/*`, `src/test/fixtures/multi-root-brace/*`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
-- Handshake/session routing -> `src/manager.ts`.
+- Handshake/session routing -> `src/stdioManager.ts`, `src/instanceRegistry.ts`, `src/managerHandshake.ts`.
 - Diagnostics contract -> `src/tooling.ts`.
-- Server/qgrep status bar and tooltip behavior -> `src/extension.ts`.
+- Server/qgrep status bar behavior -> `src/extension.ts`.
 - Version bump only -> `CHANGELOG.md`.
 
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
-- Tests: run `npm run test:unit` for pure unit coverage, `npm run test:integration` for VS Code smoke + multi-root fixture coverage on Windows, and `npm run test:all` for the combined path.
-- Happy-path: verify one handshake + one tool call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
-- Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, and rejects non-normal NT namespace formats.
-- Failure-path: verify one expected failure (`Tool not found or disabled` or stale session).
-- Manager-errors: verify `Unknown Mcp-Session-Id`, `workspace not set/matched`, `Manager unreachable`, `Resolved MCP server is offline`, and direct-call invalid params all include actionable `Next step:` text.
+- Tests: run `npm run test:unit` for pure unit coverage, `npm run test:integration` for VS Code smoke + multi-root fixture coverage on Windows, `npm run test:manager-integration` for real stdio-manager auto-start coverage on Windows, and `npm run test:all` for the combined default path.
+- Happy-path: verify one handshake + one dynamic `tools/list` refresh + one bridged tool call + one `lmToolsBridge.callTool` call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
+- Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no live registry match exists.
+- Failure-path: verify one expected failure (`Tool not found or disabled` or post-handshake offline workspace).
+- Stdio-manager-errors: verify `workspace not set/matched`, `Workspace MCP server is unreachable`, `Resolved MCP server is offline`, and direct-call invalid params all include actionable `Next step:` text.
+- Concurrency: verify multiple stdio manager processes can bind the same workspace and different workspaces without leaking bound tool state across sessions.
 - qgrep-path: verify `Qgrep Init All Workspaces` => edit existing file (watch path) and create/delete file (auto `update` path) => `lm_qgrepSearchText` sees expected changes without manual rebuild.
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
 - qgrep-status-ui: verify server status and qgrep status render as separate status bar items, and qgrep tooltip shows per-workspace `A/B` lines.

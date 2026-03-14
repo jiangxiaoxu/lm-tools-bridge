@@ -6,27 +6,41 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
-## [1.0.118] - 2026-03-13
+## [1.0.119] - 2026-03-14
 
 ### English
 
 #### Changed
-- Removed `guidance.recoveryOnError` from successful `lmToolsBridge.requestWorkspaceMCPServer` responses so handshake success payloads keep only `guidance.nextSteps`.
-- Removed the legacy `recoveryOnError` field from handshake guidance types and summary rendering to match the live payload contract.
-- Refined manager rebind retry guidance text to say `call lmToolsBridge.requestWorkspaceMCPServer again for this workspace, then retry once.`
-
-#### Tests
-- Updated handshake unit coverage for the trimmed guidance payload and summary output.
+- Published a patch release for the stdio manager migration and Windows auto-start integration without additional behavior changes.
 
 ### 中文
 
 #### Changed
-- 从成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回中移除 `guidance.recoveryOnError`,使握手成功 payload 仅保留 `guidance.nextSteps`.
-- 从握手 guidance 类型和摘要渲染中移除遗留的 `recoveryOnError` 字段,保持与实际 payload 契约一致.
-- 将 manager 的 rebind 重试提示文案调整为 `call lmToolsBridge.requestWorkspaceMCPServer again for this workspace, then retry once.`
+- 发布一个 patch 版本,用于承载 stdio manager 迁移与 Windows 自动拉起集成,不引入额外行为变更。
 
-#### Tests
-- 同步更新握手相关单测,覆盖精简后的 guidance payload 和摘要输出.
+## [1.0.118] - 2026-03-14
+
+### English
+
+#### Added
+- Added a Windows-only `test:manager-integration` suite that launches `out/stdioManager.js` over stdio, auto-starts a real VS Code workspace instance during handshake, and verifies qgrep calls through the MCP bridge.
+
+#### Changed
+- Replaced the HTTP manager mainline with the stdio manager + shared instance registry flow for workspace binding and Windows handshake-time auto-start.
+- Restored downstream workspace MCP compatibility for `text/event-stream` responses inside the stdio manager request path.
+- Shared VS Code integration launch helpers between the existing extension-host suites and the new stdio manager integration suite.
+- Simplified successful handshake payloads by omitting redundant top-level `online` and `health` fields while keeping actionable guidance in the stdio manager flow.
+
+### 中文
+
+#### Added
+- 新增仅限 Windows 的 `test:manager-integration` 测试套件,通过 stdio 启动 `out/stdioManager.js`,在握手阶段自动拉起真实 VS Code workspace 实例,并通过 MCP bridge 验证 qgrep 调用。
+
+#### Changed
+- 用 stdio manager + 共享实例 registry 主流程替换了原来的 HTTP manager workspace 绑定路径,并支持 Windows 上仅在握手阶段自动拉起实例。
+- 在 stdio manager 的下游 workspace MCP 请求路径中补回了对 `text/event-stream` 响应的兼容。
+- 抽取并复用了 VS Code integration 启动 helper,供现有 extension-host 套件和新的 stdio manager 集成测试共用。
+- 精简成功握手返回,移除冗余的顶层 `online` 和 `health` 字段,同时保留 stdio manager 流程中的可执行 guidance。
 
 ## [1.0.117] - 2026-03-12
 

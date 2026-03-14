@@ -3,10 +3,10 @@
 .github/**
 **/node_modules/**
 src/**
-out/**
-!out/
+out/**/*.js
+out/**/*.map
 !out/extension.js
-!out/manager.js
+!out/stdioManager.js
 !bin/**
 **/*.ts
 **/*.d.ts

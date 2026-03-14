@@ -19,11 +19,16 @@ await build({
     ...shared,
     entryPoints: {
         extension: path.join(rootDir, 'src', 'extension.ts'),
-        manager: path.join(rootDir, 'src', 'manager.ts'),
+        stdioManager: path.join(rootDir, 'src', 'stdioManager.ts'),
     },
     outdir: outDir,
     tsconfig: path.join(rootDir, 'tsconfig.json'),
 });
+
+await Promise.all([
+    fs.promises.unlink(path.join(outDir, 'manager.js')).catch(() => undefined),
+    fs.promises.unlink(path.join(outDir, 'manager.js.map')).catch(() => undefined),
+]);
 
 const ripgrepBinDir = path.join(rootDir, 'node_modules', '@vscode', 'ripgrep', 'bin');
 const targetBinDir = path.join(rootDir, 'bin');

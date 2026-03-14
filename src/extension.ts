@@ -1,22 +1,8 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
-import * as path from 'node:path';
-import * as fs from 'node:fs';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import {
-  ensureManagerRunning,
-  initManagerClient,
-  getManagerTooltipStatus,
-  type ManagerTooltipInstanceInfo,
-  type ManagerRestartUiEvent,
-  type ManagerTooltipStatus,
-  requestManagerPortAllocation,
-  restartManagerFromMenu,
-  startManagerHeartbeat,
-  stopManagerHeartbeat,
-} from './managerClient';
 import {
   clearUseWorkspaceSettingsFromUserSettings,
   CONFIG_SECTION,
@@ -51,6 +37,9 @@ import {
   setQgrepLogger,
   type QgrepStatusSummary,
 } from './qgrep';
+import {
+  InstanceRegistryPublisher,
+} from './instanceRegistry';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const TOOLS_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-tools';
@@ -75,13 +64,6 @@ const LEGACY_ENABLED_TOOLS_KEY = 'tools.enabled';
 const LEGACY_BLACKLIST_KEY = 'tools.blacklist';
 const LEGACY_BLACKLIST_PATTERNS_KEY = 'tools.blacklistPatterns';
 const WORKSPACE_ONLY_SETTING_REMOVED_MESSAGE = 'lmToolsBridge.useWorkspaceSettings is workspace-only and has been removed from User settings.';
-const MANAGER_TOOLTIP_MAX_LINES = 9;
-const MANAGER_TOOLTIP_MAX_CHARS = 420;
-const MANAGER_TOOLTIP_OTHER_INSTANCE_LIMIT = 2;
-const MANAGER_TOOLTIP_SESSION_ID_PREFIX_LENGTH = 8;
-const MANAGER_TOOLTIP_WORKSPACE_MAX_LENGTH = 48;
-const MANAGER_RESTART_SUCCESS_SETTLE_MS = 1000;
-const MANAGER_RESTART_FAILED_SETTLE_MS = 8000;
 const QGREP_STATUS_REFRESH_DEBOUNCE_MS = 120;
 
 interface ServerConfig {
@@ -104,23 +86,7 @@ interface ServerStatusInfo {
   ownerWorkspacePath?: string;
   host?: string;
   port?: number;
-  managerTooltipModel?: ManagerTooltipModel;
   qgrepStatus?: QgrepStatusSummary;
-}
-
-type ManagerOwnership = 'current' | 'other' | 'unknown';
-interface ManagerTooltipModel {
-  managerStatus: ManagerTooltipStatus;
-  ownership: ManagerOwnership;
-  ownershipReason?: string;
-  currentSessionId?: string;
-  currentInstance?: ManagerTooltipInstanceInfo;
-  otherInstances: ManagerTooltipInstanceInfo[];
-}
-
-interface ManagerTooltipLine {
-  text: string;
-  priority: number;
 }
 
 interface QgrepAggregateProgress {
@@ -145,8 +111,7 @@ let lastOwnerWorkspacePath: string | undefined;
 let lastStatusLogMessage: string | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let enforcingWorkspaceOnlySetting = false;
-let managerRestartUiState: ManagerRestartUiEvent | undefined;
-let managerRestartSettleTimer: NodeJS.Timeout | undefined;
+let instanceRegistryPublisher: InstanceRegistryPublisher | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -170,15 +135,20 @@ export function activate(context: vscode.ExtensionContext): void {
   void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
   void normalizeToolSelectionState();
-  initManagerClient({
-    getExtensionContext: () => extensionContext,
-    getServerState: () => (serverState ? { host: serverState.host, port: serverState.port } : undefined),
-    getConfigValue,
-    isValidPort,
-    logStatusInfo,
-    logStatusWarn,
-    logStatusError,
-    onManagerRestartUiEvent: handleManagerRestartUiEvent,
+  instanceRegistryPublisher = new InstanceRegistryPublisher({
+    sessionId: vscode.env.sessionId || `lm-tools-bridge-${process.pid}`,
+    getAdvertisement: () => {
+      if (!serverState) {
+        return undefined;
+      }
+      return {
+        pid: process.pid,
+        workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+        workspaceFile: vscode.workspace.workspaceFile?.fsPath,
+        host: serverState.host,
+        port: serverState.port,
+      };
+    },
   });
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
   qgrepStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -289,9 +259,7 @@ export function deactivate(): void {
     qgrepStatusRefreshTimer = undefined;
   }
   setQgrepStatusChangeHandler(undefined);
-  clearManagerRestartSettleTimer();
-  managerRestartUiState = undefined;
-  void stopManagerHeartbeat();
+  void instanceRegistryPublisher?.stop();
   if (serverState) {
     try {
       serverState.server.close();
@@ -411,7 +379,6 @@ async function startMcpServer(
   const ownerWorkspacePath = getOwnerWorkspacePath();
   const preferredPort = config.port;
   let nextPort = preferredPort;
-  let managerAvailable = await ensureManagerRunning();
   let lastError: NodeJS.ErrnoException | undefined;
   let lastTriedPort = preferredPort;
 
@@ -419,18 +386,7 @@ async function startMcpServer(
     if (nextPort > PORT_MAX_VALUE) {
       break;
     }
-    let portToTry = nextPort;
-    if (managerAvailable) {
-      const managerPort = await requestManagerPortAllocation(
-        preferredPort,
-        attempt === 0 ? undefined : nextPort,
-      );
-      if (managerPort !== undefined) {
-        portToTry = managerPort;
-      } else {
-        managerAvailable = false;
-      }
-    }
+    const portToTry = nextPort;
     lastTriedPort = portToTry;
 
     const server = http.createServer((req, res) => {
@@ -459,7 +415,7 @@ async function startMcpServer(
       }
       logStatusInfo(`MCP server listening at http://${host}:${portToTry}/mcp`);
       updateStatusBar({ state: 'running', ownerWorkspacePath, host, port: portToTry });
-      await startManagerHeartbeat();
+      await instanceRegistryPublisher?.start();
       return true;
     }
 
@@ -509,7 +465,7 @@ async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
       resolve();
     });
   });
-  await stopManagerHeartbeat();
+  await instanceRegistryPublisher?.stop();
   await refreshStatusBar();
 }
 
@@ -736,242 +692,6 @@ function getWorkspaceTooltipLines(ownerWorkspacePath: string | undefined): strin
   ];
 }
 
-function shortSessionId(sessionId: string | undefined): string {
-  if (!sessionId) {
-    return 'n/a';
-  }
-  return sessionId.slice(0, MANAGER_TOOLTIP_SESSION_ID_PREFIX_LENGTH);
-}
-
-function trimMiddle(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  if (maxLength <= 3) {
-    return value.slice(0, maxLength);
-  }
-  const headLength = Math.ceil((maxLength - 3) / 2);
-  const tailLength = Math.floor((maxLength - 3) / 2);
-  return `${value.slice(0, headLength)}...${value.slice(value.length - tailLength)}`;
-}
-
-function getInstancePrimaryWorkspace(instance: ManagerTooltipInstanceInfo): string {
-  const sources = instance.workspaceFolders.length > 0
-    ? instance.workspaceFolders
-    : (instance.workspaceFile ? [instance.workspaceFile] : []);
-  if (sources.length === 0) {
-    return 'n/a';
-  }
-  const primary = sources[0];
-  const baseName = path.basename(primary);
-  const label = (baseName && baseName.trim().length > 0) ? baseName : primary;
-  const trimmed = trimMiddle(label, MANAGER_TOOLTIP_WORKSPACE_MAX_LENGTH);
-  if (sources.length > 1) {
-    return `${trimmed} (+${sources.length - 1})`;
-  }
-  return trimmed;
-}
-
-function clearManagerRestartSettleTimer(): void {
-  if (!managerRestartSettleTimer) {
-    return;
-  }
-  clearTimeout(managerRestartSettleTimer);
-  managerRestartSettleTimer = undefined;
-}
-
-function handleManagerRestartUiEvent(event: ManagerRestartUiEvent): void {
-  clearManagerRestartSettleTimer();
-  managerRestartUiState = event;
-  if (event.phase === 'success' || event.phase === 'failed') {
-    const settleMs = event.phase === 'success'
-      ? MANAGER_RESTART_SUCCESS_SETTLE_MS
-      : MANAGER_RESTART_FAILED_SETTLE_MS;
-    managerRestartSettleTimer = setTimeout(() => {
-      managerRestartUiState = undefined;
-      managerRestartSettleTimer = undefined;
-      void refreshStatusBar();
-    }, settleMs);
-  }
-  void refreshStatusBar();
-}
-
-function deriveOwnership(status: ManagerTooltipStatus): ManagerTooltipModel {
-  const currentSessionId = vscode.env.sessionId;
-  const currentInstance = currentSessionId
-    ? status.instances.find((instance) => instance.sessionId === currentSessionId)
-    : undefined;
-  const otherInstances = status.instances.filter((instance) => instance.sessionId !== currentSessionId);
-  if (!status.online) {
-    return {
-      managerStatus: status,
-      ownership: 'unknown',
-      ownershipReason: status.reason ?? 'manager offline',
-      currentSessionId,
-      currentInstance,
-      otherInstances,
-    };
-  }
-  if (currentSessionId && currentInstance) {
-    return {
-      managerStatus: status,
-      ownership: 'current',
-      currentSessionId,
-      currentInstance,
-      otherInstances,
-    };
-  }
-  if (!currentSessionId) {
-    return {
-      managerStatus: status,
-      ownership: 'unknown',
-      ownershipReason: 'session unavailable',
-      currentSessionId,
-      currentInstance,
-      otherInstances: status.instances,
-    };
-  }
-  if (status.instances.length > 0) {
-    return {
-      managerStatus: status,
-      ownership: 'other',
-      currentSessionId,
-      currentInstance,
-      otherInstances: status.instances,
-    };
-  }
-  return {
-    managerStatus: status,
-    ownership: 'unknown',
-    ownershipReason: 'no instances',
-    currentSessionId,
-    currentInstance,
-    otherInstances,
-  };
-}
-
-function fitManagerTooltipLines(lines: ManagerTooltipLine[]): string[] {
-  const sorted = [...lines].sort((left, right) => left.priority - right.priority);
-  const selected: string[] = [];
-  let usedChars = 0;
-  for (const line of sorted) {
-    if (selected.length >= MANAGER_TOOLTIP_MAX_LINES) {
-      break;
-    }
-    const nextChars = usedChars + (selected.length > 0 ? 1 : 0) + line.text.length;
-    if (nextChars > MANAGER_TOOLTIP_MAX_CHARS) {
-      break;
-    }
-    selected.push(line.text);
-    usedChars = nextChars;
-  }
-  const hiddenCount = sorted.length - selected.length;
-  if (hiddenCount <= 0) {
-    return selected;
-  }
-  const tail = `... +${hiddenCount} more`;
-  if (selected.length < MANAGER_TOOLTIP_MAX_LINES) {
-    const nextChars = usedChars + (selected.length > 0 ? 1 : 0) + tail.length;
-    if (nextChars <= MANAGER_TOOLTIP_MAX_CHARS) {
-      selected.push(tail);
-      return selected;
-    }
-  }
-  if (selected.length === 0) {
-    return [trimMiddle(tail, MANAGER_TOOLTIP_MAX_CHARS)];
-  }
-  while (selected.length > 0) {
-    const currentChars = selected.join('\n').length;
-    if (currentChars + 1 + tail.length <= MANAGER_TOOLTIP_MAX_CHARS) {
-      selected[selected.length - 1] = tail;
-      return selected;
-    }
-    selected.pop();
-  }
-  return [tail];
-}
-
-function formatManagerTooltipLines(model: ManagerTooltipModel | undefined): string[] {
-  if (!model) {
-    return [];
-  }
-  const lines: ManagerTooltipLine[] = [];
-  const managerReason = model.managerStatus.reason ? trimMiddle(model.managerStatus.reason, 90) : undefined;
-  if (model.managerStatus.online) {
-    lines.push({
-      text: managerReason ? `Manager: online(${managerReason})` : 'Manager: online',
-      priority: 1,
-    });
-  } else {
-    lines.push({
-      text: managerReason ? `Manager: offline(${managerReason})` : 'Manager: offline',
-      priority: 1,
-    });
-  }
-  if (model.ownership === 'unknown' && model.ownershipReason) {
-    lines.push({
-      text: `Ownership: unknown(${model.ownershipReason})`,
-      priority: 2,
-    });
-  } else {
-    lines.push({
-      text: `Ownership: ${model.ownership}`,
-      priority: 2,
-    });
-  }
-  if (model.currentInstance) {
-    lines.push({
-      text: `Current: pid=${model.currentInstance.pid} sid=${shortSessionId(model.currentInstance.sessionId)} host=${model.currentInstance.host}:${model.currentInstance.port}`,
-      priority: 3,
-    });
-    lines.push({
-      text: `Workspace: ${getInstancePrimaryWorkspace(model.currentInstance)}`,
-      priority: 4,
-    });
-  } else if (model.currentSessionId) {
-    lines.push({
-      text: `Current: sid=${shortSessionId(model.currentSessionId)} not registered`,
-      priority: 3,
-    });
-  }
-  if (model.otherInstances.length > 0) {
-    lines.push({
-      text: `Other instances: ${model.otherInstances.length}`,
-      priority: 5,
-    });
-    const shownCount = Math.min(model.otherInstances.length, MANAGER_TOOLTIP_OTHER_INSTANCE_LIMIT);
-    for (let i = 0; i < shownCount; i += 1) {
-      const instance = model.otherInstances[i];
-      lines.push({
-        text: `- pid=${instance.pid} sid=${shortSessionId(instance.sessionId)} ws=${getInstancePrimaryWorkspace(instance)}`,
-        priority: 6 + i,
-      });
-    }
-    if (model.otherInstances.length > shownCount) {
-      lines.push({
-        text: `... +${model.otherInstances.length - shownCount} more`,
-        priority: 8,
-      });
-    }
-  }
-  return fitManagerTooltipLines(lines);
-}
-
-async function fetchManagerTooltipModel(): Promise<ManagerTooltipModel> {
-  let managerStatus: ManagerTooltipStatus;
-  try {
-    managerStatus = await getManagerTooltipStatus();
-  } catch {
-    managerStatus = {
-      online: false,
-      source: 'unavailable',
-      reason: 'status query failed',
-      instances: [],
-    };
-  }
-  return deriveOwnership(managerStatus);
-}
-
 function getRequestUrl(req: http.IncomingMessage): URL | undefined {
   const host = req.headers.host ?? 'localhost';
   const urlValue = req.url ?? '/';
@@ -1007,7 +727,6 @@ function resourceJson(uri: string, payload: unknown) {
 
 
 async function getServerStatus(): Promise<ServerStatusInfo> {
-  const managerTooltipModel = await fetchManagerTooltipModel();
   const qgrepStatus = getQgrepStatusSummary();
   if (serverState) {
     return {
@@ -1015,11 +734,10 @@ async function getServerStatus(): Promise<ServerStatusInfo> {
       ownerWorkspacePath: serverState.ownerWorkspacePath,
       host: serverState.host,
       port: serverState.port,
-      managerTooltipModel,
       qgrepStatus,
     };
   }
-  return { state: 'off', managerTooltipModel, qgrepStatus };
+  return { state: 'off', qgrepStatus };
 }
 
 function updateStatusBar(info: ServerStatusInfo): void {
@@ -1033,7 +751,6 @@ function updateStatusBar(info: ServerStatusInfo): void {
   const port = info.port ?? config.port;
   const ownerWorkspacePath = normalizeWorkspacePath(info.ownerWorkspacePath);
   const workspaceLines = getWorkspaceTooltipLines(info.ownerWorkspacePath);
-  const managerLines = formatManagerTooltipLines(info.managerTooltipModel);
   const stateLabel = info.state;
   let summary = `State: ${stateLabel} (${host}:${port})`;
   if (info.state !== 'off') {
@@ -1050,42 +767,7 @@ function updateStatusBar(info: ServerStatusInfo): void {
   if (workspaceLines.length > 0) {
     tooltipDetails.push(...workspaceLines);
   }
-  if (managerLines.length > 0) {
-    if (tooltipDetails.length > 0) {
-      tooltipDetails.push('');
-    }
-    tooltipDetails.push(...managerLines);
-  }
   const tooltipDetailText = tooltipDetails.length > 0 ? `\n${tooltipDetails.join('\n')}` : '';
-  const restartUiState = managerRestartUiState;
-  if (restartUiState) {
-    const sourceLine = `Restart source: ${restartUiState.source}`;
-    const reasonLine = restartUiState.reason ? `Restart reason: ${restartUiState.reason}` : undefined;
-    const messageLine = restartUiState.message
-      ? `Restart details: ${trimMiddle(restartUiState.message, 120)}`
-      : undefined;
-    const restartLines = [sourceLine, reasonLine, messageLine].filter((line): line is string => Boolean(line));
-    const restartTooltip = restartLines.length > 0 ? `\n${restartLines.join('\n')}` : '';
-    if (restartUiState.phase === 'running') {
-      statusBarItem.text = '$(sync~spin) LM Tools Bridge: Restarting Manager';
-      statusBarItem.tooltip = `Manager restart in progress.${restartTooltip}${tooltipDetailText}`;
-      statusBarItem.color = undefined;
-      statusBarItem.show();
-      return;
-    }
-    if (restartUiState.phase === 'success') {
-      statusBarItem.text = '$(check) LM Tools Bridge: Restart Succeeded';
-      statusBarItem.tooltip = `Manager restart completed.${restartTooltip}${tooltipDetailText}`;
-      statusBarItem.color = undefined;
-      statusBarItem.show();
-      return;
-    }
-    statusBarItem.text = '$(error) LM Tools Bridge: Restart Failed';
-    statusBarItem.tooltip = `Manager restart failed.${restartTooltip}${tooltipDetailText}`;
-    statusBarItem.color = undefined;
-    statusBarItem.show();
-    return;
-  }
   if (info.state === 'running') {
     statusBarItem.text = '$(play-circle) LM Tools Bridge: Running';
     statusBarItem.tooltip = `LM Tools Bridge server is running (${host}:${port})${tooltipDetailText}`;
@@ -1267,7 +949,6 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
     | 'configureEnabled'
     | 'dump'
     | 'help'
-    | 'restartManager'
     | 'openSettings'
     | 'openExtensionPage'
     | 'qgrepInitAll'
@@ -1309,11 +990,6 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
       label: '$(list-unordered) Dump Enabled Tools',
       description: 'Show enabled tool descriptions in Output',
       action: 'dump',
-    },
-    {
-      label: '$(sync) Restart Manager',
-      description: 'Restart the manager process',
-      action: 'restartManager',
     },
     { label: 'Qgrep', kind: vscode.QuickPickItemKind.Separator },
     ...qgrepItems,
@@ -1361,17 +1037,6 @@ async function showStatusMenu(channel: vscode.OutputChannel): Promise<void> {
 
   if (selection.action === 'help') {
     await openHelpDoc();
-    return;
-  }
-
-  if (selection.action === 'restartManager') {
-    const result = await restartManagerFromMenu();
-    if (result.ok) {
-      logStatusInfo('restart-manager result=success reason=none');
-    } else {
-      const reason = result.reason ?? 'unknown';
-      logStatusError(`restart-manager result=failed reason=${reason}`);
-    }
     return;
   }
 

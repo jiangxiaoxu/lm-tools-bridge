@@ -1,7 +1,13 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
-import { downloadAndUnzipVSCode, runTests } from '@vscode/test-electron';
+import {
+  copyDirectory,
+  createIsolatedVsCodeDirs,
+  getVSCodeExecutablePath,
+  makeTempDir,
+  removeDirectoryWithRetries,
+  runExtensionTests,
+} from './vscodeTestUtils';
 
 interface IntegrationRun {
   name: string;
@@ -9,8 +15,6 @@ interface IntegrationRun {
   extensionTestsPath: string;
   cleanup: () => Promise<void>;
 }
-
-let vscodeExecutablePathPromise: Promise<string> | undefined;
 
 async function main(): Promise<void> {
   if (process.platform !== 'win32') {
@@ -37,73 +41,26 @@ async function main(): Promise<void> {
 }
 
 async function executeIntegrationRun(repoRoot: string, run: IntegrationRun): Promise<void> {
-  const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-user-'));
-  const extensionsDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-ext-'));
+  const isolatedDirs = await createIsolatedVsCodeDirs('lm-tools-bridge');
   try {
     console.log(`Running VS Code integration suite: ${run.name}`);
     const vscodeExecutablePath = await getVSCodeExecutablePath();
-    await withSanitizedVsCodeLaunchEnv(async () => runTests({
+    await runExtensionTests({
       vscodeExecutablePath,
       extensionDevelopmentPath: repoRoot,
       extensionTestsPath: run.extensionTestsPath,
-      launchArgs: buildIntegrationLaunchArgs(run, userDataDir, extensionsDir),
-    }));
+      workspacePath: run.workspacePath,
+      isolatedDirs,
+    });
     console.log(`Completed VS Code integration suite: ${run.name}`);
   } finally {
-    await removeDirectoryWithRetries(userDataDir);
-    await removeDirectoryWithRetries(extensionsDir);
-  }
-}
-
-async function getVSCodeExecutablePath(): Promise<string> {
-  vscodeExecutablePathPromise ??= downloadAndUnzipVSCode();
-  return await vscodeExecutablePathPromise;
-}
-
-function buildIntegrationLaunchArgs(
-  run: IntegrationRun,
-  userDataDir: string,
-  extensionsDir: string,
-): string[] {
-  return [
-    run.workspacePath,
-    '--disable-workspace-trust',
-    '--skip-welcome',
-    '--skip-release-notes',
-    '--user-data-dir',
-    userDataDir,
-    '--extensions-dir',
-    extensionsDir,
-    '--no-sandbox',
-    '--disable-gpu-sandbox',
-    '--disable-updates',
-  ];
-}
-
-async function withSanitizedVsCodeLaunchEnv<T>(operation: () => Promise<T>): Promise<T> {
-  const savedEntries = new Map<string, string | undefined>();
-  const inheritedNames = Object.keys(process.env).filter((name) => name === 'ELECTRON_RUN_AS_NODE' || name.startsWith('VSCODE_'));
-  for (const name of inheritedNames) {
-    savedEntries.set(name, process.env[name]);
-    delete process.env[name];
-  }
-
-  try {
-    return await operation();
-  } finally {
-    for (const name of inheritedNames) {
-      const savedValue = savedEntries.get(name);
-      if (savedValue === undefined) {
-        delete process.env[name];
-        continue;
-      }
-      process.env[name] = savedValue;
-    }
+    await removeDirectoryWithRetries(isolatedDirs.userDataDir);
+    await removeDirectoryWithRetries(isolatedDirs.extensionsDir);
   }
 }
 
 async function createSmokeRun(repoRoot: string): Promise<IntegrationRun> {
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-smoke-'));
+  const tempDir = await makeTempDir('lm-tools-bridge-smoke-');
   const workspacePath = path.join(tempDir, 'smoke.code-workspace');
   const workspacePayload = {
     folders: [
@@ -130,7 +87,7 @@ async function createSmokeRun(repoRoot: string): Promise<IntegrationRun> {
 
 async function createMultiRootRun(repoRoot: string): Promise<IntegrationRun> {
   const sourceDir = path.join(repoRoot, 'src/test/fixtures/multi-root');
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-multi-root-'));
+  const tempDir = await makeTempDir('lm-tools-bridge-multi-root-');
   await copyDirectory(sourceDir, tempDir);
   return {
     name: 'multi-root',
@@ -144,7 +101,7 @@ async function createMultiRootRun(repoRoot: string): Promise<IntegrationRun> {
 
 async function createMultiRootBraceRun(repoRoot: string): Promise<IntegrationRun> {
   const sourceDir = path.join(repoRoot, 'src/test/fixtures/multi-root-brace');
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lm-tools-bridge-multi-root-brace-'));
+  const tempDir = await makeTempDir('lm-tools-bridge-multi-root-brace-');
   await copyDirectory(sourceDir, tempDir);
   return {
     name: 'multi-root-brace',
@@ -156,28 +113,6 @@ async function createMultiRootBraceRun(repoRoot: string): Promise<IntegrationRun
   };
 }
 
-async function removeDirectoryWithRetries(targetPath: string): Promise<void> {
-  await fs.promises.rm(targetPath, {
-    recursive: true,
-    force: true,
-    maxRetries: 10,
-    retryDelay: 200,
-  });
-}
-
-async function copyDirectory(sourceDir: string, targetDir: string): Promise<void> {
-  await fs.promises.mkdir(targetDir, { recursive: true });
-  const entries = await fs.promises.readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirectory(sourcePath, targetPath);
-      continue;
-    }
-    await fs.promises.copyFile(sourcePath, targetPath);
-  }
-}
 
 void main().catch((error) => {
   const message = error instanceof Error ? error.stack ?? error.message : String(error);

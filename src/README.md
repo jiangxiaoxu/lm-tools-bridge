@@ -4,6 +4,7 @@ This folder is organized by responsibility to keep the extension entrypoint smal
 
 - extension.ts: VS Code activation, commands, status bar, HTTP server routing, and MCP resource wiring.
 - configuration.ts: Configuration access helpers and workspace/global resolution.
+- legacyManagerCleanup.ts: Best-effort cleanup of deprecated `%LOCALAPPDATA%\lm-tools-bridge\instances` artifacts from the old manager path.
 - stdioManager.ts: Stdio MCP bootstrap that performs handshake, optional VS Code auto-start, and workspace tool proxying.
 - stdioManagerSync.ts: Bundled stdio manager publication into `%LOCALAPPDATA%\lm-tools-bridge` for external MCP clients.
 - workspaceDiscovery.ts: Shared workspace identity, named pipe discovery, and launch-lock coordination used by workspace instances and the stdio manager.

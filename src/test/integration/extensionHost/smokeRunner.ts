@@ -1,8 +1,14 @@
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import * as vscode from 'vscode';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  requestWorkspaceDiscovery,
+  resolveWorkspaceDiscoveryTargetFromWindow,
+} from '../../../workspaceDiscovery';
 import {
   activateExtension,
   assertCommandRegistered,
@@ -16,6 +22,26 @@ const REQUIRED_COMMANDS = [
   'lm-tools-bridge.qgrepRebuildIndexes',
   'lm-tools-bridge.qgrepStopAndClearIndexes',
 ] as const;
+const AUTO_START_WAIT_TIMEOUT_MS = 10_000;
+const AUTO_START_POLL_INTERVAL_MS = 100;
+
+async function requestJson(url: string): Promise<{ statusCode: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      response.on('end', () => {
+        resolve({
+          statusCode: response.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString('utf8'),
+        });
+      });
+    });
+    request.once('error', reject);
+  });
+}
 
 export async function run(): Promise<void> {
   await runIntegrationTests('smoke', [
@@ -38,6 +64,35 @@ export async function run(): Promise<void> {
         const commands = await vscode.commands.getCommands(true);
         for (const commandId of REQUIRED_COMMANDS) {
           assertCommandRegistered(commands, commandId);
+        }
+      },
+    },
+    {
+      name: 'starts the workspace MCP server automatically on activation',
+      run: async () => {
+        await activateExtension();
+        const target = resolveWorkspaceDiscoveryTargetFromWindow(
+          (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+          vscode.workspace.workspaceFile?.fsPath,
+        );
+        if (!target || 'code' in target) {
+          throw new Error('Expected a supported workspace discovery target for the smoke workspace.');
+        }
+        const deadline = Date.now() + AUTO_START_WAIT_TIMEOUT_MS;
+        let advertisement: Awaited<ReturnType<typeof requestWorkspaceDiscovery>> | undefined;
+        while (Date.now() <= deadline) {
+          advertisement = await requestWorkspaceDiscovery(target, 'smoke-auto-start-check');
+          if (advertisement) {
+            break;
+          }
+          await delay(AUTO_START_POLL_INTERVAL_MS);
+        }
+        if (!advertisement) {
+          throw new Error('Expected workspace discovery advertisement after activation.');
+        }
+        const response = await requestJson(`http://${advertisement.host}:${String(advertisement.port)}/mcp/health`);
+        if (response.statusCode !== 200) {
+          throw new Error(`Expected /mcp/health to return 200, got ${String(response.statusCode)}.\nBody:\n${response.body}`);
         }
       },
     },

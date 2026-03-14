@@ -6,6 +6,32 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.123] - 2026-03-14
+
+### English
+
+#### Added
+- Added a Windows startup-time Node.js runtime check so the extension warns when external `node` is unavailable on `PATH` before the synced stdio manager is needed.
+
+#### Changed
+- Added `Install with winget` and `Download Node.js` recovery actions to the startup warning, and kept failure handling self-contained so activation does not leak async errors.
+- Changed the workspace MCP server to always auto-start on extension activation, removing the public `server.autoStart` toggle and manual start/stop server commands.
+
+#### Tests
+- Added unit coverage for the startup dependency prompt and kept the verification path on injected doubles so automated tests do not launch real installers or browsers.
+
+### 中文
+
+#### 新增
+- 在 Windows 上新增启动期 Node.js 运行时检查,当系统 `PATH` 上缺少外部 `node` 时,会在同步 stdio manager 真正使用前先给出提示。
+
+#### 变更
+- 启动提示新增 `Install with winget` 与 `Download Node.js` 恢复入口,并将相关失败处理收敛为自包含日志路径,避免扩展激活泄漏异步错误。
+- workspace MCP server 改为扩展激活后总是自动启动,并移除了公开的 `server.autoStart` 开关以及手动 start/stop server 命令。
+
+#### 测试
+- 为启动期依赖提示新增单元测试覆盖,并统一使用注入 double 验证分支,确保自动化测试不会真实拉起安装器或浏览器。
+
 ## [1.0.122] - 2026-03-14
 
 ### English

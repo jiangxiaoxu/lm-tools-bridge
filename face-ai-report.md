@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.122`.
+- Version baseline: `1.0.123`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -71,7 +71,14 @@
 - Aggregate qgrep `A/B`/remaining uses file-weighted sum across initialized workspaces only when all initialized workspaces have known totals; otherwise show unknown (`--/--`) with optional sampled percent.
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
 - Workspace instances publish deterministic discovery pipes derived from normalized `folder|...` or `workspace-file|...` identities; the stdio manager probes exact upward candidate pipes instead of reading a file registry.
+- Legacy HTTP manager / status-page / file-registry implementation has been removed from the repo; only stdio manager + named-pipe discovery remains in the supported runtime path.
+- On extension activation, the local MCP HTTP server now always auto-starts; `lmToolsBridge.server.autoStart` and manual start/stop server commands are no longer part of the public surface.
 - On Windows, extension activation auto-syncs the bundled stdio manager to `%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js` with a sidecar `%LOCALAPPDATA%\\lm-tools-bridge\\metadata.json`; sync compares the actual source/target manager file hashes to decide whether to recopy, repairs metadata when hashes already match, and skips entirely if the source file is not a bundled runtime artifact.
+- On Windows, extension activation also best-effort removes the deprecated `%LOCALAPPDATA%\\lm-tools-bridge\\instances` directory; cleanup failures are logged and do not block activation.
+- On Windows, extension activation also checks whether external `node` is available on `PATH`; when missing, it shows one non-blocking warning per extension-host lifetime with `Install with winget`, `Download Node.js`, and `Dismiss`.
+- The Node.js install shortcut launches an external PowerShell window that runs `winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements`; if `winget` is unavailable, only the download link path is offered.
+- Node.js dependency prompt failures are self-contained: warning UI, browser launch, and follow-up error-message failures are logged and swallowed so activation does not leak unhandled async errors.
+- Node.js dependency coverage is unit-only: tests inject `probeCommand`, `launchDetachedCommand`, `showWarningMessage`, `showErrorMessage`, and `openExternal` so automated runs never spawn the real installer or browser.
 - `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
 - `lmToolsBridge.requestWorkspaceMCPServer` first probes live named-pipe discovery targets derived from the resolved `cwd`; if no healthy target answers on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
 - Stdio manager handshake auto-start uses default waits of `30s` total (`LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS`) and `15s` per discovery wait window (`LM_TOOLS_BRIDGE_DISCOVERY_WAIT_TIMEOUT_MS`) unless overridden by environment variables.
@@ -91,6 +98,8 @@
 
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
+- `src/legacyManagerCleanup.ts -> cleanupLegacyManagerInstancesDir | resolveLegacyManagerInstancesDir`
+- `src/runtimeDependencyCheck.ts -> ensureNodeRuntimeAvailableOnStartup | probeCommandAvailability | buildWingetInstallLaunchSpec`
 - `src/stdioManager.ts -> handleRequestWorkspace | ensureTargetWithAutoStart | resolveDiscoveryTargets | resolveLaunchTarget | buildHandshakeDiscovery | invokeBoundTool | createServer`
 - `src/stdioManagerSync.ts -> syncBundledStdioManager | resolveStdioManagerSyncPaths`
 - `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | createWorkspaceDiscoveryTarget | requestWorkspaceDiscovery | tryAcquireLaunchLock | WorkspaceDiscoveryPublisher`
@@ -114,7 +123,7 @@
 - Do not assume post-handshake offline calls will auto-start VS Code again.
 
 ## Section B: Task Routing Cards
-- [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => retry on the next local workspace HTTP port; Verify: `/mcp/health` ok, discovery pipe is published for supported workspaces, and status bar shows `Running`.
+- [Server unavailable/port conflict] Read: `src/extension.ts -> activate | reconcileServerState | startMcpServer`; Decide: activation should always attempt server start, and `Port In Use` retries on the next local workspace HTTP port; Verify: `/mcp/health` ok, discovery pipe is published for supported workspaces, and status bar shows `Running`.
 - [Actionable stdio manager errors] Read: `src/stdioManager.ts -> getWorkspaceNotMatchedMessage | getWorkspaceNotSetMessage | getTargetUnreachableMessage | getMcpOfflineMessage`; Decide: follow `error.message` `Next step:` guidance before shell fallback; Verify: unmatched/offline/invalid-direct-call responses all include a concrete recovery step.
 - [Handshake guidance output] Read: `src/stdioManager.ts -> buildHandshakeGuidance | handleRequestWorkspace` and `src/managerHandshake.ts -> formatWorkspaceHandshakeSummary`; Decide: consume `guidance.nextSteps` from handshake tool return before fallback and use actionable JSON-RPC `error.message` text for recovery; Verify: handshake summary text and structured payload include `guidance.nextSteps` while omitting any recovery field plus top-level `online`/`health`.
 - [Workspace handshake path rejected] Read: `src/stdioManager.ts -> handleRequestWorkspace` and `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath`; Decide: on Windows allow only normal absolute paths and `\\?\` + normal absolute paths; Verify: non-normal NT namespace formats fail with params error while normal and prefixed-normal forms bind the same workspace target.
@@ -134,6 +143,8 @@
 - Config scope -> `src/configuration.ts`, `src/extension.ts`.
 - Stdio manager packaging/filtering -> `scripts/bundle.mjs`, `.vscodeignore`.
 - Stdio manager stable publication -> `src/stdioManagerSync.ts`, `src/extension.ts`, `scripts/bundle.mjs`.
+- Legacy manager cleanup -> `src/legacyManagerCleanup.ts`, `src/extension.ts`.
+- Startup dependency prompting -> `src/runtimeDependencyCheck.ts`, `src/extension.ts`, `src/__tests__/runtimeDependencyCheck.test.ts`.
 - Exposure/enable policy -> `src/tooling.ts`.
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
 - qgrep workspace-scope parsing -> `src/qgrepWorkspaceScope.ts`.
@@ -151,7 +162,9 @@
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
 - Tests: run `npm run test:unit` for pure unit coverage, `npm run test:integration` for VS Code smoke + multi-root fixture coverage on Windows, `npm run test:manager-integration` for real stdio-manager auto-start coverage on Windows, and `npm run test:all` for the combined default path.
-- Stable manager publication: verify activation writes `%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js` plus `metadata.json`, and the synced manager responds to MCP `initialize` + `tools/list`.
+- Startup dependency check: verify unit tests cover the missing-`node`, missing-`winget`, warning-once, installer-launch-failure, and browser-open-failure paths through injected doubles so automated tests never launch the real installer.
+- Stable manager publication: verify activation writes `%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js` plus `metadata.json`, the synced manager responds to MCP `initialize` + `tools/list`, and workspace discovery advertises a live auto-started MCP server after activation.
+- Legacy cleanup: verify activation removes `%LOCALAPPDATA%\\lm-tools-bridge\\instances` when present, and logs without failing activation when cleanup cannot complete.
 - Happy-path: verify one handshake + one dynamic `tools/list` refresh + one bridged tool call + one `lmToolsBridge.callTool` call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
 - Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no healthy discovery pipe answers.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or post-handshake offline workspace).

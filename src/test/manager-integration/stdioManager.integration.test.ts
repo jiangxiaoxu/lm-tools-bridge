@@ -96,7 +96,6 @@ async function writeAutoStartWorkspaceFile(workspaceFile: string): Promise<void>
     settings?: Record<string, unknown>;
   };
   const settings = parsed.settings ?? {};
-  settings['lmToolsBridge.server.autoStart'] = true;
   settings['lmToolsBridge.debug'] = 'off';
   parsed.settings = settings;
   await fs.promises.writeFile(workspaceFile, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');

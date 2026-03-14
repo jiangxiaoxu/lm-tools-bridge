@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.122",
+  "version": "1.0.123",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -21,14 +21,6 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "lm-tools-bridge.start",
-        "title": "LM Tools Bridge: Start Server"
-      },
-      {
-        "command": "lm-tools-bridge.stop",
-        "title": "LM Tools Bridge: Stop Server"
-      },
       {
         "command": "lm-tools-bridge.configureExposure",
         "title": "LM Tools Bridge: Configure Exposure Tools"
@@ -61,11 +53,6 @@
     "configuration": {
       "title": "LM Tools Bridge",
       "properties": {
-        "lmToolsBridge.server.autoStart": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically start the MCP server on startup."
-        },
         "lmToolsBridge.server.port": {
           "type": "number",
           "default": 48123,

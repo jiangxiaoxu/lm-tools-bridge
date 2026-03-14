@@ -13,6 +13,7 @@ interface IntegrationRun {
   name: string;
   workspacePath: string;
   extensionTestsPath: string;
+  extensionTestsEnv?: Record<string, string>;
   cleanup: () => Promise<void>;
 }
 
@@ -55,6 +56,7 @@ async function executeIntegrationRun(repoRoot: string, run: IntegrationRun): Pro
       extensionTestsEnv: {
         LOCALAPPDATA: localAppDataDir,
         LM_TOOLS_BRIDGE_TEST_NODE_PATH: process.execPath,
+        ...run.extensionTestsEnv,
       },
     });
     console.log(`Completed VS Code integration suite: ${run.name}`);
@@ -76,7 +78,6 @@ async function createSmokeRun(repoRoot: string): Promise<IntegrationRun> {
       },
     ],
     settings: {
-      'lmToolsBridge.server.autoStart': false,
       'lmToolsBridge.debug': 'off',
     },
   };

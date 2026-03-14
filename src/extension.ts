@@ -42,13 +42,13 @@ import {
   resolveWorkspaceDiscoveryTargetFromWindow,
   WorkspaceDiscoveryPublisher,
 } from './workspaceDiscovery';
+import { cleanupLegacyManagerInstancesDir } from './legacyManagerCleanup';
+import { ensureNodeRuntimeAvailableOnStartup } from './runtimeDependencyCheck';
 import { syncBundledStdioManager } from './stdioManagerSync';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const TOOLS_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-tools';
 const QGREP_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-qgrep';
-const START_COMMAND_ID = 'lm-tools-bridge.start';
-const STOP_COMMAND_ID = 'lm-tools-bridge.stop';
 const CONFIGURE_EXPOSURE_COMMAND_ID = 'lm-tools-bridge.configureExposure';
 const CONFIGURE_ENABLED_COMMAND_ID = 'lm-tools-bridge.configureEnabled';
 const STATUS_MENU_COMMAND_ID = 'lm-tools-bridge.statusMenu';
@@ -70,7 +70,6 @@ const WORKSPACE_ONLY_SETTING_REMOVED_MESSAGE = 'lmToolsBridge.useWorkspaceSettin
 const QGREP_STATUS_REFRESH_DEBOUNCE_MS = 120;
 
 interface ServerConfig {
-  autoStart: boolean;
   host: string;
   port: number;
 }
@@ -143,6 +142,31 @@ export function activate(context: vscode.ExtensionContext): void {
       warn: logWarn,
     },
   });
+  void cleanupLegacyManagerInstancesDir({
+    env: process.env,
+    logger: {
+      info: logStatusInfo,
+      warn: logWarn,
+    },
+  });
+  void ensureNodeRuntimeAvailableOnStartup({
+    env: process.env,
+    platform: process.platform,
+    showWarningMessage: async (message, actions) => {
+      return await vscode.window.showWarningMessage(message, ...actions);
+    },
+    showErrorMessage: async (message) => {
+      await vscode.window.showErrorMessage(message);
+    },
+    openExternal: async (url) => {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    },
+    logger: {
+      info: logStatusInfo,
+      warn: logWarn,
+      error: logStatusError,
+    },
+  });
   void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
   void normalizeToolSelectionState();
@@ -179,12 +203,6 @@ export function activate(context: vscode.ExtensionContext): void {
     setQgrepStatusChangeHandler(undefined);
   });
   helpUrl = resolveHelpUrl(context);
-  const startCommand = vscode.commands.registerCommand(START_COMMAND_ID, () => {
-    void startMcpServer(outputChannel);
-  });
-  const stopCommand = vscode.commands.registerCommand(STOP_COMMAND_ID, () => {
-    void stopMcpServer(outputChannel);
-  });
   const configureExposureCommand = vscode.commands.registerCommand(CONFIGURE_EXPOSURE_COMMAND_ID, () => {
     void configureExposureTools();
   });
@@ -238,8 +256,6 @@ export function activate(context: vscode.ExtensionContext): void {
     qgrepOutputChannel,
     statusBarItem,
     qgrepStatusBarItem,
-    startCommand,
-    stopCommand,
     configureExposureCommand,
     configureEnabledCommand,
     helpCommand,
@@ -254,11 +270,8 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => { void stopMcpServer(outputChannel); } },
   );
 
-  const config = getServerConfig();
   void (async () => {
-    if (config.autoStart) {
-      await startMcpServer(outputChannel);
-    }
+    await startMcpServer(outputChannel);
     await refreshStatusBar();
     if (!statusRefreshTimer) {
       statusRefreshTimer = setInterval(() => {
@@ -298,7 +311,6 @@ export function deactivate(): void {
 
 function getServerConfig(): ServerConfig {
   return {
-    autoStart: getConfigValue<boolean>('server.autoStart', true),
     host: DEFAULT_HOST,
     port: getConfigValue<number>('server.port', DEFAULT_PORT),
   };
@@ -365,12 +377,6 @@ async function enforceWorkspaceOnlyUseWorkspaceSettings(): Promise<void> {
 
 async function reconcileServerState(channel: vscode.OutputChannel): Promise<void> {
   const config = getServerConfig();
-  if (!config.autoStart) {
-    await stopMcpServer(channel);
-    await refreshStatusBar();
-    return;
-  }
-
   if (!serverState) {
     await startMcpServer(channel);
     await refreshStatusBar();

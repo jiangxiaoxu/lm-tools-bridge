@@ -37,11 +37,6 @@ if (shouldBuildTarget('stdioManager')) {
     });
 }
 
-await Promise.all([
-    fs.promises.unlink(path.join(outDir, 'manager.js')).catch(() => undefined),
-    fs.promises.unlink(path.join(outDir, 'manager.js.map')).catch(() => undefined),
-]);
-
 const ripgrepBinDir = path.join(rootDir, 'node_modules', '@vscode', 'ripgrep', 'bin');
 const targetBinDir = path.join(rootDir, 'bin');
 try {

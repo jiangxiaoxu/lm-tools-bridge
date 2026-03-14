@@ -1,6 +1,10 @@
 export interface HandshakeDiscoveryTool {
   name: string;
   description: string;
+}
+
+// Keep callTool separate so bridgedTools can stay summary-only in handshake payloads.
+export interface HandshakeDiscoveryCallTool extends HandshakeDiscoveryTool {
   inputSchema?: Record<string, unknown>;
 }
 
@@ -22,7 +26,7 @@ export interface HandshakeDiscoveryIssue {
 }
 
 export interface HandshakeDiscoveryPayload {
-  callTool: HandshakeDiscoveryTool;
+  callTool: HandshakeDiscoveryCallTool;
   bridgedTools: HandshakeDiscoveryTool[];
   resourceTemplates: HandshakeDiscoveryResourceTemplate[];
   partial: boolean;

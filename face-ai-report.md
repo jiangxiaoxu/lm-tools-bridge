@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.123`.
+- Version baseline: `1.0.124`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -87,6 +87,7 @@
 - Unsaved untitled multi-root workspaces are not published for manager discovery; users must save them as a real `.code-workspace` file first.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online` and `health`; liveness is implied by handshake success and later offline/rebind errors.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is summary-only (`name`/`description`); tool schemas are read through `lm-tools://schema/{name}` or `lm-tools://tool/{name}` resources when needed.
 - The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
 - After handshake, `tools/list` dynamically merges bridged workspace tools into the stdio manager inventory and emits list-changed notifications when the binding changes.
 - If the bound workspace instance goes offline after handshake, the stdio manager clears the binding and returns offline/rebind errors; it does not auto-restart VS Code outside handshake.

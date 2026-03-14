@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.124] - 2026-03-14
+
+### English
+
+#### Changed
+- Trimmed `lmToolsBridge.requestWorkspaceMCPServer.discovery.bridgedTools` to summary fields only, so handshake payloads no longer include each bridged tool's `inputSchema`.
+- Changed the stdio manager to resolve bridged tool schemas on demand through `lm-tools://schema/{name}` or `lm-tools://tool/{name}` resources instead of fan-out schema reads during handshake.
+
+#### Tests
+- Updated handshake and stdio manager unit coverage to assert summary-only `bridgedTools` discovery while preserving schema resource reads after handshake.
+
+### 中文
+
+#### Changed
+- 精简 `lmToolsBridge.requestWorkspaceMCPServer.discovery.bridgedTools`, 握手返回现在只保留工具摘要字段, 不再携带每个 bridged tool 的 `inputSchema`.
+- 调整 stdio manager 的 schema 获取方式, 改为通过 `lm-tools://schema/{name}` 或 `lm-tools://tool/{name}` 按需读取, 不再在握手阶段对所有工具做 fan-out schema 读取.
+
+#### Tests
+- 更新握手和 stdio manager 单元测试, 验证 `bridgedTools` discovery 为摘要模式, 同时保留握手后的 schema 资源读取能力.
+
 ## [1.0.123] - 2026-03-14
 
 ### English

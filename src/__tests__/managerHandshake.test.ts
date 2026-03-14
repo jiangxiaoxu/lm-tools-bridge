@@ -53,6 +53,10 @@ test('handshake payload omits redundant online and health fields', () => {
     'G:/Project/shared',
   ]);
   assert.equal(payload.discovery.resourceTemplates.length, 1);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(payload.discovery.bridgedTools[0] ?? {}, 'inputSchema'),
+    false,
+  );
 });
 
 test('handshake summary keeps useful fields and omits online line', () => {

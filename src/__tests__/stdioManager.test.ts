@@ -266,9 +266,21 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
       cwd: nestedPath,
     },
   });
-  const handshakePayload = handshake.structuredContent as { ok?: boolean; target?: { port?: number } } | undefined;
+  const handshakePayload = handshake.structuredContent as {
+    ok?: boolean;
+    target?: { port?: number };
+    discovery?: {
+      bridgedTools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>;
+    };
+  } | undefined;
   assert.equal(handshakePayload?.ok, true);
   assert.equal(handshakePayload?.target?.port, workspace.port);
+  assert.deepEqual(handshakePayload?.discovery?.bridgedTools, [
+    {
+      name: ECHO_TOOL_NAME,
+      description: 'Echo back the provided value.',
+    },
+  ]);
 
   const afterTools = await manager.client.listTools();
   assert.deepEqual(getToolNames(afterTools), [ECHO_TOOL_NAME, DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD]);

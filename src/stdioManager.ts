@@ -19,6 +19,7 @@ import {
   formatWorkspaceHandshakeSummary,
 } from './managerHandshake';
 import type {
+  HandshakeDiscoveryCallTool,
   HandshakeDiscoveryIssue,
   HandshakeDiscoveryPayload,
   HandshakeDiscoveryResourceTemplate,
@@ -375,78 +376,27 @@ function getRemoteResultObject(data: unknown): {
   return { result: record.result as Record<string, unknown> };
 }
 
-function buildSimpleInputHint(inputSchema: unknown): string | undefined {
-  if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
-    return undefined;
-  }
-  const record = inputSchema as Record<string, unknown>;
-  const properties = record.properties;
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
-    return undefined;
-  }
-  const propertyEntries = Object.entries(properties)
-    .filter(([name]) => name.trim().length > 0);
-  if (propertyEntries.length === 0) {
-    return undefined;
-  }
-  const required = new Set(
-    Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-      : [],
-  );
-  const parts = propertyEntries.map(([name, schema]) => {
-    const optionalMarker = required.has(name) ? '' : '?';
-    const typeLabel = getInputSchemaTypeLabel(schema);
-    return `${name}${optionalMarker}: ${typeLabel}`;
-  });
-  return `Input: { ${parts.join(', ')} }.`;
-}
-
-function getInputSchemaTypeLabel(schema: unknown): string {
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    return 'unknown';
-  }
-  const record = schema as Record<string, unknown>;
-  const type = record.type;
-  if (typeof type === 'string' && type.trim().length > 0) {
-    return type;
-  }
-  if (Array.isArray(type)) {
-    const labels = type
-      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
-    if (labels.length > 0) {
-      return labels.join('|');
-    }
-  }
-  if (Array.isArray(record.enum) && record.enum.length > 0) {
-    return 'enum';
-  }
-  if (record.properties && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
-    return 'object';
-  }
-  if (record.items !== undefined) {
-    return 'array';
-  }
-  return 'unknown';
-}
-
-function withSimpleInputHint(descriptionValue: unknown, inputSchema: unknown): string {
-  const description = typeof descriptionValue === 'string' ? descriptionValue.trim() : '';
-  if (description.includes('Input: {')) {
-    return description;
-  }
-  const inputHint = buildSimpleInputHint(inputSchema);
-  if (!inputHint) {
-    return description;
-  }
-  if (!description) {
-    return inputHint;
-  }
-  const needsPeriod = description.endsWith('.') ? '' : '.';
-  return `${description}${needsPeriod} ${inputHint}`;
+function normalizeHandshakeToolDescription(descriptionValue: unknown): string {
+  return typeof descriptionValue === 'string' ? descriptionValue.trim() : '';
 }
 
 function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryTool | undefined {
+  if (!entry || typeof entry !== 'object') {
+    return undefined;
+  }
+  const record = entry as { name?: unknown; description?: unknown };
+  const name = typeof record.name === 'string' ? record.name.trim() : '';
+  if (!name) {
+    return undefined;
+  }
+  return {
+    name,
+    description: normalizeHandshakeToolDescription(record.description),
+  };
+}
+
+// Handshake discovery only advertises bridged tool summaries. Clients must read schema resources on demand.
+function toHandshakeDiscoveryCallTool(entry: unknown): HandshakeDiscoveryCallTool | undefined {
   if (!entry || typeof entry !== 'object') {
     return undefined;
   }
@@ -455,10 +405,9 @@ function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryTool | unde
   if (!name) {
     return undefined;
   }
-  const description = withSimpleInputHint(record.description, record.inputSchema);
-  const normalized: HandshakeDiscoveryTool = {
+  const normalized: HandshakeDiscoveryCallTool = {
     name,
-    description,
+    description: normalizeHandshakeToolDescription(record.description),
   };
   if (record.inputSchema && typeof record.inputSchema === 'object' && !Array.isArray(record.inputSchema)) {
     normalized.inputSchema = record.inputSchema as Record<string, unknown>;
@@ -574,6 +523,57 @@ function buildToolInfoPayload(tool: WorkspaceToolDefinition): Record<string, unk
     toolUri: `lm-tools://tool/${tool.name}`,
     schemaUri: `lm-tools://schema/${tool.name}`,
   };
+}
+
+async function readToolSchemaFromResource(
+  target: ManagerMatch,
+  toolName: string,
+): Promise<Record<string, unknown> | undefined> {
+  const response = await requestTargetJson(target, {
+    jsonrpc: '2.0',
+    id: `mgr-schema-${toolName}-${Date.now()}`,
+    method: 'resources/read',
+    params: {
+      uri: `lm-tools://schema/${toolName}`,
+    },
+  });
+  if (!response.ok) {
+    return undefined;
+  }
+  const parsed = getRemoteResultObject(response.data);
+  if (parsed.errorMessage) {
+    return undefined;
+  }
+  const contents = Array.isArray(parsed.result?.contents) ? parsed.result.contents : undefined;
+  if (!contents || contents.length === 0) {
+    return undefined;
+  }
+  const first = contents[0];
+  if (!first || typeof first !== 'object') {
+    return undefined;
+  }
+  const text = (first as { text?: unknown }).text;
+  if (typeof text !== 'string') {
+    return undefined;
+  }
+  try {
+    const payload = JSON.parse(text) as { inputSchema?: unknown };
+    if (!payload.inputSchema || typeof payload.inputSchema !== 'object' || Array.isArray(payload.inputSchema)) {
+      return undefined;
+    }
+    return payload.inputSchema as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveToolInputSchema(tool: WorkspaceToolDefinition): Promise<Record<string, unknown> | null> {
+  const isBoundTool = session.boundTools.some((entry) => entry.name === tool.name);
+  if (!isBoundTool || !session.currentTarget) {
+    return tool.inputSchema ?? null;
+  }
+  // Avoid schema fan-out during handshake and fetch the latest schema only when a resource is actually read.
+  return await readToolSchemaFromResource(session.currentTarget, tool.name) ?? tool.inputSchema ?? null;
 }
 
 function resourceJson(uri: string, payload: unknown, mimeType = 'application/json') {
@@ -916,118 +916,6 @@ async function ensureTargetWithAutoStart(cwd: string): Promise<{
   };
 }
 
-async function readToolSchemaFromResource(
-  target: ManagerMatch,
-  toolName: string,
-): Promise<{ inputSchema?: Record<string, unknown>; issue?: HandshakeDiscoveryIssue }> {
-  const response = await requestTargetJson(target, {
-    jsonrpc: '2.0',
-    id: `mgr-schema-${toolName}-${Date.now()}`,
-    method: 'resources/read',
-    params: {
-      uri: `lm-tools://schema/${toolName}`,
-    },
-  });
-  if (!response.ok) {
-    return {
-      issue: {
-        level: 'warning',
-        category: 'schema',
-        code: 'SCHEMA_READ_REQUEST_FAILED',
-        toolName,
-        message: 'Failed to fetch schema resource for tool.',
-      },
-    };
-  }
-  const parsed = getRemoteResultObject(response.data);
-  if (parsed.errorMessage) {
-    return {
-      issue: {
-        level: 'warning',
-        category: 'schema',
-        code: 'SCHEMA_READ_RPC_ERROR',
-        toolName,
-        message: 'Workspace MCP server returned an error while reading schema resource.',
-        details: parsed.errorMessage,
-      },
-    };
-  }
-  const contents = Array.isArray(parsed.result?.contents) ? parsed.result.contents : undefined;
-  if (!contents || contents.length === 0) {
-    return {
-      issue: {
-        level: 'warning',
-        category: 'schema',
-        code: 'SCHEMA_CONTENT_MISSING',
-        toolName,
-        message: 'Schema resource did not include readable contents.',
-      },
-    };
-  }
-  const first = contents[0];
-  if (!first || typeof first !== 'object') {
-    return {
-      issue: {
-        level: 'warning',
-        category: 'schema',
-        code: 'SCHEMA_CONTENT_INVALID',
-        toolName,
-        message: 'Schema resource content format is invalid.',
-      },
-    };
-  }
-  const text = (first as { text?: unknown }).text;
-  if (typeof text !== 'string') {
-    return {
-      issue: {
-        level: 'warning',
-        category: 'schema',
-        code: 'SCHEMA_TEXT_MISSING',
-        toolName,
-        message: 'Schema resource text payload is missing.',
-      },
-    };
-  }
-  try {
-    const payload = JSON.parse(text) as { inputSchema?: unknown };
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      return {
-        issue: {
-          level: 'warning',
-          category: 'schema',
-          code: 'SCHEMA_JSON_INVALID',
-          toolName,
-          message: 'Schema resource JSON payload is invalid.',
-        },
-      };
-    }
-    if (!payload.inputSchema || typeof payload.inputSchema !== 'object' || Array.isArray(payload.inputSchema)) {
-      return {
-        issue: {
-          level: 'warning',
-          category: 'schema',
-          code: 'SCHEMA_INPUT_MISSING',
-          toolName,
-          message: 'Schema resource does not define a valid inputSchema object.',
-        },
-      };
-    }
-    return {
-      inputSchema: payload.inputSchema as Record<string, unknown>,
-    };
-  } catch {
-    return {
-      issue: {
-        level: 'warning',
-        category: 'schema',
-        code: 'SCHEMA_JSON_PARSE_FAILED',
-        toolName,
-        message: 'Failed to parse schema resource JSON.',
-      },
-    };
-  }
-}
-
 async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
   tools: WorkspaceToolDefinition[];
   issues: HandshakeDiscoveryIssue[];
@@ -1071,7 +959,7 @@ async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
     return name !== REQUEST_WORKSPACE_METHOD && name !== DIRECT_TOOL_CALL_NAME;
   });
 
-  const tools = await Promise.all(filtered.map(async (entry) => {
+  const tools = filtered.map((entry) => {
     if (!entry || typeof entry !== 'object') {
       return undefined;
     }
@@ -1080,16 +968,11 @@ async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
     if (!name) {
       return undefined;
     }
-    const schemaResult = await readToolSchemaFromResource(target, name);
-    if (schemaResult.issue) {
-      issues.push(schemaResult.issue);
-    }
     return {
       ...record,
-      ...(schemaResult.inputSchema ? { inputSchema: schemaResult.inputSchema } : {}),
       name,
     } satisfies WorkspaceToolDefinition;
-  }));
+  });
 
   return {
     tools: tools
@@ -1104,7 +987,7 @@ async function buildHandshakeDiscovery(
   target: ManagerMatch,
   startupAttempted: boolean,
 ): Promise<{ discovery: HandshakeDiscoveryPayload; tools: WorkspaceToolDefinition[] }> {
-  const callTool = toHandshakeDiscoveryTool(getDirectToolCallDefinition()) ?? {
+  const callTool = toHandshakeDiscoveryCallTool(getDirectToolCallDefinition()) ?? {
     name: DIRECT_TOOL_CALL_NAME,
     description: getDirectToolCallDescription(),
     inputSchema: getDirectToolCallDefinition().inputSchema,
@@ -1396,7 +1279,10 @@ function createServer(): Server {
       if (!tool) {
         throw new McpError(ErrorCode.InvalidParams, `Tool not found or unavailable: ${toolName}`);
       }
-      return resourceJson(uri, buildToolInfoPayload(tool));
+      return resourceJson(uri, {
+        ...buildToolInfoPayload(tool),
+        inputSchema: await resolveToolInputSchema(tool),
+      });
     }
     const schemaName = getToolNameFromUri(uri, 'lm-tools://schema/');
     if (schemaName) {
@@ -1406,7 +1292,7 @@ function createServer(): Server {
       }
       return resourceJson(uri, {
         name: tool.name,
-        inputSchema: tool.inputSchema ?? null,
+        inputSchema: await resolveToolInputSchema(tool),
       });
     }
     throw new McpError(ErrorCode.InvalidParams, `Unknown resource URI: ${uri}`);

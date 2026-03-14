@@ -46,7 +46,11 @@ jobs:
       - name: Package VSIX
         run: |
           mkdir -p dist
-          npx -y @vscode/vsce package --target win32-x64 --out "./dist/lm-tools-bridge-${{ steps.meta.outputs.version }}-win32-x64.vsix"
+          PACKAGE_ARGS=()
+          if [ "${GITHUB_REF_NAME}" = "pre-release" ]; then
+            PACKAGE_ARGS+=(--pre-release)
+          fi
+          npx -y @vscode/vsce package "${PACKAGE_ARGS[@]}" --target win32-x64 --out "./dist/lm-tools-bridge-${{ steps.meta.outputs.version }}-win32-x64.vsix"
 
       - name: Publish to VS Code Marketplace (pre-release)
         if: ${{ github.ref_name == 'pre-release' }}

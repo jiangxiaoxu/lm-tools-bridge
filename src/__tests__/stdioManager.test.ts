@@ -7,8 +7,9 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
-  InstanceRegistryPublisher,
-} from '../instanceRegistry';
+  resolveWorkspaceDiscoveryTargetFromWindow,
+  WorkspaceDiscoveryPublisher,
+} from '../workspaceDiscovery';
 
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
@@ -23,6 +24,15 @@ const TOOL_INPUT_SCHEMA = {
 
 async function makeTempDir(prefix: string): Promise<string> {
   return fs.promises.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+function createPipeEnv(prefixSeed: string): Record<string, string> {
+  const seed = `${prefixSeed}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    .replace(/[^a-z0-9._-]/giu, '_');
+  return {
+    LM_TOOLS_BRIDGE_DISCOVERY_PIPE_PREFIX: `lm-tools-bridge-test.discovery.${seed}.`,
+    LM_TOOLS_BRIDGE_LAUNCH_LOCK_PIPE_PREFIX: `lm-tools-bridge-test.lock.${seed}.`,
+  };
 }
 
 async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
@@ -53,10 +63,17 @@ function respondJson(res: http.ServerResponse, payload: unknown): void {
 }
 
 async function startFakeWorkspaceServer(args: {
-  registryDir: string;
+  pipeEnv: Record<string, string>;
   workspaceFolders: string[];
   workspaceFile?: string;
 }) {
+  const target = resolveWorkspaceDiscoveryTargetFromWindow(
+    args.workspaceFolders,
+    args.workspaceFile,
+    { env: args.pipeEnv },
+  );
+  assert.ok(target && !('code' in target), 'Expected a supported discovery target.');
+
   const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/mcp/health') {
       respondJson(res, { ok: true });
@@ -145,13 +162,10 @@ async function startFakeWorkspaceServer(args: {
   const address = server.address();
   assert(address && typeof address === 'object');
 
-  const publisher = new InstanceRegistryPublisher({
-    sessionId: `workspace-session-${process.pid}-${address.port}`,
-    directory: args.registryDir,
+  const publisher = new WorkspaceDiscoveryPublisher({
+    serverSessionId: `workspace-session-${process.pid}-${address.port}`,
     getAdvertisement: () => ({
-      pid: process.pid,
-      workspaceFolders: args.workspaceFolders,
-      workspaceFile: args.workspaceFile,
+      target,
       host: '127.0.0.1',
       port: address.port,
     }),
@@ -170,14 +184,13 @@ async function startFakeWorkspaceServer(args: {
   };
 }
 
-async function connectStdioManager(registryDir: string, extraEnv?: Record<string, string>) {
+async function connectStdioManager(extraEnv?: Record<string, string>) {
   const stderrChunks: string[] = [];
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(process.cwd(), 'out', 'stdioManager.js')],
     env: {
       ...process.env,
-      LM_TOOLS_BRIDGE_INSTANCE_REGISTRY_DIR: registryDir,
       ...extraEnv,
     } as Record<string, string>,
     stderr: 'pipe',
@@ -226,21 +239,22 @@ async function waitForFile(filePath: string, timeoutMs = 15000): Promise<void> {
 }
 
 test('stdio manager handshakes to a running workspace and proxies workspace tools', async (t) => {
-  const registryDir = await makeTempDir('lm-tools-bridge-stdio-');
-  const workspaceRoot = path.join(registryDir, 'workspace');
+  const pipeEnv = createPipeEnv('running');
+  const rootDir = await makeTempDir('lm-tools-bridge-stdio-');
+  const workspaceRoot = path.join(rootDir, 'workspace');
   const nestedPath = path.join(workspaceRoot, 'Source', 'Feature');
   await fs.promises.mkdir(nestedPath, { recursive: true });
 
   const workspace = await startFakeWorkspaceServer({
-    registryDir,
+    pipeEnv,
     workspaceFolders: [workspaceRoot],
   });
-  const manager = await connectStdioManager(registryDir);
+  const manager = await connectStdioManager(pipeEnv);
 
   t.after(async () => {
     await manager.close();
     await workspace.stop();
-    await fs.promises.rm(registryDir, { recursive: true, force: true });
+    await fs.promises.rm(rootDir, { recursive: true, force: true });
   });
 
   const beforeTools = await manager.client.listTools();
@@ -285,19 +299,20 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
 });
 
 test('stdio manager clears bound tools when the workspace server goes offline', async (t) => {
-  const registryDir = await makeTempDir('lm-tools-bridge-stdio-');
-  const workspaceRoot = path.join(registryDir, 'workspace');
+  const pipeEnv = createPipeEnv('offline');
+  const rootDir = await makeTempDir('lm-tools-bridge-stdio-');
+  const workspaceRoot = path.join(rootDir, 'workspace');
   await fs.promises.mkdir(workspaceRoot, { recursive: true });
 
   const workspace = await startFakeWorkspaceServer({
-    registryDir,
+    pipeEnv,
     workspaceFolders: [workspaceRoot],
   });
-  const manager = await connectStdioManager(registryDir);
+  const manager = await connectStdioManager(pipeEnv);
 
   t.after(async () => {
     await manager.close();
-    await fs.promises.rm(registryDir, { recursive: true, force: true });
+    await fs.promises.rm(rootDir, { recursive: true, force: true });
   });
 
   await manager.client.callTool({
@@ -325,15 +340,14 @@ test('stdio manager clears bound tools when the workspace server goes offline', 
 test('stdio manager auto-starts VS Code via PATH during handshake on Windows', {
   skip: process.platform !== 'win32' ? 'Windows-only auto-start test.' : false,
 }, async (t) => {
+  const pipeEnv = createPipeEnv('autostart');
   const rootDir = await makeTempDir('lm-tools-bridge-autostart-');
-  const registryDir = path.join(rootDir, 'registry');
   const toolDir = path.join(rootDir, 'tools');
   const parentWorkspaceFile = path.join(rootDir, 'root.code-workspace');
   const workspaceRoot = path.join(rootDir, 'workspace-root');
   const nestedPath = path.join(workspaceRoot, 'Source', 'Nested');
   const openPathFile = path.join(rootDir, 'open-path.txt');
   const pidFile = path.join(rootDir, 'fake-vscode.pid');
-  await fs.promises.mkdir(registryDir, { recursive: true });
   await fs.promises.mkdir(toolDir, { recursive: true });
   await fs.promises.mkdir(path.join(workspaceRoot, '.vscode'), { recursive: true });
   await fs.promises.mkdir(nestedPath, { recursive: true });
@@ -344,12 +358,16 @@ test('stdio manager auto-starts VS Code via PATH during handshake on Windows', {
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { InstanceRegistryPublisher } = require(${JSON.stringify(path.join(process.cwd(), 'out', 'instanceRegistry.js'))});
+const { resolveWorkspaceDiscoveryTargetFromWindow, WorkspaceDiscoveryPublisher } = require(${JSON.stringify(path.join(process.cwd(), 'out', 'workspaceDiscovery.js'))});
 const toolName = ${JSON.stringify(ECHO_TOOL_NAME)};
 const toolInputSchema = ${JSON.stringify(TOOL_INPUT_SCHEMA)};
 const openPath = process.argv[process.argv.length - 1];
 const workspaceRoot = openPath.toLowerCase().endsWith('.code-workspace') ? path.dirname(openPath) : openPath;
 const workspaceFile = openPath.toLowerCase().endsWith('.code-workspace') ? openPath : undefined;
+const pipeEnv = {
+  LM_TOOLS_BRIDGE_DISCOVERY_PIPE_PREFIX: process.env.LM_TOOLS_BRIDGE_DISCOVERY_PIPE_PREFIX,
+  LM_TOOLS_BRIDGE_LAUNCH_LOCK_PIPE_PREFIX: process.env.LM_TOOLS_BRIDGE_LAUNCH_LOCK_PIPE_PREFIX,
+};
 fs.writeFileSync(process.env.LM_TOOLS_BRIDGE_TEST_OPEN_PATH_FILE, openPath, 'utf8');
 let publisher;
 const server = http.createServer(async (req, res) => {
@@ -430,13 +448,11 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(0, '127.0.0.1', async () => {
   const address = server.address();
-  publisher = new InstanceRegistryPublisher({
-    sessionId: 'launched-session-' + process.pid,
-    directory: process.env.LM_TOOLS_BRIDGE_INSTANCE_REGISTRY_DIR,
+  const target = resolveWorkspaceDiscoveryTargetFromWindow([workspaceRoot], workspaceFile, { env: pipeEnv });
+  publisher = new WorkspaceDiscoveryPublisher({
+    serverSessionId: 'launched-session-' + process.pid,
     getAdvertisement: () => ({
-      pid: process.pid,
-      workspaceFolders: [workspaceRoot],
-      workspaceFile,
+      target,
       host: '127.0.0.1',
       port: address.port,
     }),
@@ -460,7 +476,8 @@ process.on('SIGINT', () => { void shutdown(); });
   const codeCmdText = `@echo off\r\n"${process.execPath}" "${launcherPath}" %*\r\n`;
   await fs.promises.writeFile(codeCmdPath, codeCmdText, 'utf8');
 
-  const manager = await connectStdioManager(registryDir, {
+  const manager = await connectStdioManager({
+    ...pipeEnv,
     PATH: `${toolDir};${process.env.PATH ?? ''}`,
     LM_TOOLS_BRIDGE_TEST_OPEN_PATH_FILE: openPathFile,
     LM_TOOLS_BRIDGE_TEST_PID_FILE: pidFile,

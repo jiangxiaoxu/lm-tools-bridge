@@ -57,6 +57,15 @@ function normalizeWindowsComparablePath(pathValue: string): string {
   return normalizePath(path.resolve(pathValue)).toLowerCase();
 }
 
+function createPipeEnv(prefixSeed: string): Record<string, string> {
+  const seed = `${prefixSeed}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    .replace(/[^a-z0-9._-]/giu, '_');
+  return {
+    LM_TOOLS_BRIDGE_DISCOVERY_PIPE_PREFIX: `lm-tools-bridge-test.discovery.${seed}.`,
+    LM_TOOLS_BRIDGE_LAUNCH_LOCK_PIPE_PREFIX: `lm-tools-bridge-test.lock.${seed}.`,
+  };
+}
+
 function getToolNames(result: Awaited<ReturnType<Client['listTools']>>): string[] {
   return result.tools.map((tool) => tool.name).sort((left, right) => left.localeCompare(right));
 }
@@ -160,14 +169,13 @@ async function createCodeWrapper(args: {
   };
 }
 
-async function connectStdioManager(registryDir: string, extraEnv: Record<string, string>): Promise<ManagerConnection> {
+async function connectStdioManager(extraEnv: Record<string, string>): Promise<ManagerConnection> {
   const stderrChunks: string[] = [];
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(process.cwd(), 'out', 'stdioManager.js')],
     env: {
       ...process.env,
-      LM_TOOLS_BRIDGE_INSTANCE_REGISTRY_DIR: registryDir,
       ...extraEnv,
     } as Record<string, string>,
     stderr: 'pipe',
@@ -283,7 +291,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
   timeout: 300_000,
 }, async () => {
   const repoRoot = path.resolve(__dirname, '../../..');
-  const registryDir = await makeTempDir('lm-tools-bridge-registry-it-');
+  const pipeEnv = createPipeEnv('manager-it');
   const workspace = await createAutoStartWorkspace(repoRoot);
   const isolatedDirs = await createIsolatedVsCodeDirs('lm-tools-bridge-real');
   const vscodeExecutablePath = await getVSCodeExecutablePath();
@@ -301,7 +309,8 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
   let launchedPid: number | undefined;
 
   try {
-    manager = await connectStdioManager(registryDir, {
+    manager = await connectStdioManager({
+      ...pipeEnv,
       PATH: `${wrapper.wrapperDir};${process.env.PATH ?? ''}`,
       LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS: String(HANDSHAKE_TIMEOUT_MS),
     });
@@ -410,7 +419,6 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     await removeDirectoryWithRetries(wrapper.wrapperDir);
     await removeDirectoryWithRetries(isolatedDirs.userDataDir);
     await removeDirectoryWithRetries(isolatedDirs.extensionsDir);
-    await removeDirectoryWithRetries(registryDir);
     await removeDirectoryWithRetries(workspace.rootDir);
   }
 });

@@ -23,9 +23,11 @@ Each workspace VS Code instance hosts a local MCP HTTP server, while external cl
 - Always connect clients to the stdio manager, not workspace runtime ports.
 - Handshake is required before calling bridged workspace tools.
 - Each client session should launch its own stdio manager process. Multiple managers can run concurrently and route independently.
+- On Windows, workspace discovery uses deterministic local named pipes; the manager probes exact upward target candidates instead of reading a file registry.
 - On Windows, handshake can auto-start the matching VS Code workspace instance, wait until it registers and becomes healthy, then bind to it.
 - On Windows, launch-target resolution walks upward level by level; at each level it checks `.code-workspace`, then `.vscode`, then `.git`, and only moves to the parent when that level has none of them.
 - Auto-start happens only during handshake. If the bound workspace instance closes later, follow-up calls return offline/rebind errors and do not trigger restart.
+- Unsaved untitled multi-root workspaces are not discoverable; save them as a real `.code-workspace` file first.
 - Handshake and direct-call metadata stay concise; actionable recovery guidance is returned through `guidance` fields and manager error messages.
 - Manager JSON-RPC errors include actionable `Next step:` recovery hints in `error.message`.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` responses include `guidance`, `discovery`, and dynamic bridged tool metadata while omitting redundant top-level `online` and `health`.
@@ -149,9 +151,11 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 暴露 LM tools.
 - 客户端应始终连接 stdio manager,不要直连 workspace 动态端口.
 - 调用 workspace 桥接工具前,必须先握手.
 - 每个客户端会话应各自拉起一个 stdio manager 进程,多个 manager 可以并发运行并独立路由.
+- 在 Windows 上,workspace 发现改为走确定性的本地 named pipe; manager 会按 `cwd` 向上尝试精确目标候选,不再读取文件 registry.
 - 在 Windows 上,握手阶段会在需要时尝试自动拉起匹配的 VS Code workspace 实例,等待其注册并健康后再完成绑定.
 - 在 Windows 上,启动目标会按层级逐级向上解析; 每一层都会先查 `.code-workspace`,再查 `.vscode`,再查 `.git`,这一层都没有才继续查父目录.
 - 自动拉起只发生在握手阶段. 如果后续绑定的 workspace 实例关闭,后续调用会返回 offline/rebind 错误,不会自动重启.
+- 未保存的 untitled multi-root workspace 不可被发现; 需要先保存为真实 `.code-workspace` 文件.
 - 握手与 direct-call 元信息保持精简; 可执行恢复指引通过 `guidance` 字段和 manager 错误消息返回.
 - Manager JSON-RPC 错误会在 `error.message` 中附带可执行的 `Next step:` 恢复提示.
 - 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回会包含 `guidance`,`discovery` 以及桥接工具元信息,同时省略冗余的顶层 `online` 和 `health`.
@@ -243,6 +247,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 暴露 LM tools.
 - `workspace not set`: 重新握手.
 - `workspace not matched`: 检查 `cwd` 是否位于目标 workspace 内,或者是否直接指向目标 `.code-workspace` 文件(Windows `cwd` 仅支持普通绝对路径和 `\\?\` + 普通绝对路径,非普通 NT namespace 写法会被拒绝).
 - `Resolved workspace MCP server is offline`: 说明握手后的目标 VS Code 实例已经关闭. 重新握手即可重新绑定,后续调用不会自动重启它.
+- `Untitled multi-root workspace is not supported`: 当前窗口是未保存的多根 workspace. 先执行 `Save Workspace As...` 保存成 `.code-workspace`,然后重新握手.
 - Windows 上握手启动/等待超时: 确认 `code.cmd` 或 `code` 已在 `PATH` 中,然后重新握手.
 - qgrep 等待过久: 先看 `lm_qgrepGetStatus`.
 - 如果启动自动修复后仍出现 qgrep 断言错误,执行 `LM Tools Bridge: Qgrep Rebuild Indexes` 后重试一次.

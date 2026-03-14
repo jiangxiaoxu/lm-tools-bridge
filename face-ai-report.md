@@ -1,9 +1,9 @@
 # AI Preload Contract: lm-tools-bridge
 
 ## Section A: Preload Contract
-- Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via a shared instance registry.
+- Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.120`.
+- Version baseline: `1.0.121`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -70,10 +70,13 @@
 - qgrep tooltip reports binary readiness, aggregate file progress, and one per-workspace line in `A/B (percent)` format.
 - Aggregate qgrep `A/B`/remaining uses file-weighted sum across initialized workspaces only when all initialized workspaces have known totals; otherwise show unknown (`--/--`) with optional sampled percent.
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
-- Workspace instances publish shared registry heartbeats under `%LOCALAPPDATA%\\lm-tools-bridge\\instances` unless `LM_TOOLS_BRIDGE_INSTANCE_REGISTRY_DIR` overrides it.
+- Workspace instances publish deterministic discovery pipes derived from normalized `folder|...` or `workspace-file|...` identities; the stdio manager probes exact upward candidate pipes instead of reading a file registry.
 - `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
-- `lmToolsBridge.requestWorkspaceMCPServer` first matches a live registry instance; if none matches on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
+- `lmToolsBridge.requestWorkspaceMCPServer` first probes live named-pipe discovery targets derived from the resolved `cwd`; if no healthy target answers on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
+- Stdio manager handshake auto-start uses default waits of `30s` total (`LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS`) and `15s` per discovery wait window (`LM_TOOLS_BRIDGE_DISCOVERY_WAIT_TIMEOUT_MS`) unless overridden by environment variables.
 - Handshake launch-target resolution order is: direct `.code-workspace` input first; otherwise walk upward level by level, checking `.code-workspace`, then `.vscode`, then `.git` at each level, and fall back to the current directory (or parent directory for file input) only when every level misses.
+- Discovery candidate order is upward and exact, with `.code-workspace` candidates checked before folder candidates at the same level; no global `\\.\pipe\` enumeration is used in the mainline.
+- Unsaved untitled multi-root workspaces are not published for manager discovery; users must save them as a real `.code-workspace` file first.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online` and `health`; liveness is implied by handshake success and later offline/rebind errors.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
 - The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
@@ -87,8 +90,8 @@
 
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
-- `src/stdioManager.ts -> handleRequestWorkspace | ensureTargetWithAutoStart | resolveLaunchTarget | buildHandshakeDiscovery | invokeBoundTool | createServer`
-- `src/instanceRegistry.ts -> InstanceRegistryPublisher | readRegisteredInstances | pickBestMatchingInstance | isCwdWithinWorkspaceFolders | isCwdMatchingWorkspaceFile`
+- `src/stdioManager.ts -> handleRequestWorkspace | ensureTargetWithAutoStart | resolveDiscoveryTargets | resolveLaunchTarget | buildHandshakeDiscovery | invokeBoundTool | createServer`
+- `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | createWorkspaceDiscoveryTarget | requestWorkspaceDiscovery | tryAcquireLaunchLock | WorkspaceDiscoveryPublisher`
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
@@ -109,11 +112,11 @@
 - Do not assume post-handshake offline calls will auto-start VS Code again.
 
 ## Section B: Task Routing Cards
-- [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => retry on the next local workspace HTTP port; Verify: `/mcp/health` ok, registry heartbeat exists, and status bar shows `Running`.
+- [Server unavailable/port conflict] Read: `src/extension.ts -> startMcpServer`; Decide: `Off` => start, `Port In Use` => retry on the next local workspace HTTP port; Verify: `/mcp/health` ok, discovery pipe is published for supported workspaces, and status bar shows `Running`.
 - [Actionable stdio manager errors] Read: `src/stdioManager.ts -> getWorkspaceNotMatchedMessage | getWorkspaceNotSetMessage | getTargetUnreachableMessage | getMcpOfflineMessage`; Decide: follow `error.message` `Next step:` guidance before shell fallback; Verify: unmatched/offline/invalid-direct-call responses all include a concrete recovery step.
 - [Handshake guidance output] Read: `src/stdioManager.ts -> buildHandshakeGuidance | handleRequestWorkspace` and `src/managerHandshake.ts -> formatWorkspaceHandshakeSummary`; Decide: consume `guidance.nextSteps` from handshake tool return before fallback and use actionable JSON-RPC `error.message` text for recovery; Verify: handshake summary text and structured payload include `guidance.nextSteps` while omitting any recovery field plus top-level `online`/`health`.
 - [Workspace handshake path rejected] Read: `src/stdioManager.ts -> handleRequestWorkspace` and `src/windowsWorkspacePath.ts -> isSupportedWindowsWorkspacePath`; Decide: on Windows allow only normal absolute paths and `\\?\` + normal absolute paths; Verify: non-normal NT namespace formats fail with params error while normal and prefixed-normal forms bind the same workspace target.
-- [Handshake auto-start or wrong launch target] Read: `src/stdioManager.ts -> resolveLaunchTarget | launchVsCode | waitForHealthyTarget | ensureTargetWithAutoStart`; Decide: confirm per-level marker priority `.code-workspace -> .vscode -> .git`, then continue upward only when the current level has none, and confirm `PATH` visibility for `code.cmd`/`code`; Verify: handshake either binds an existing instance or launches one and waits until registry + health succeed.
+- [Handshake auto-start or wrong launch target] Read: `src/stdioManager.ts -> resolveDiscoveryTargets | resolveLaunchTarget | launchVsCode | waitForHealthyTarget | ensureTargetWithAutoStart`; Decide: confirm per-level marker priority `.code-workspace -> .vscode -> .git`, then continue upward only when the current level has none, and confirm `PATH` visibility for `code.cmd`/`code`; Verify: handshake either binds an existing instance or launches one and waits until exact discovery pipe + health succeed.
 - [Tool not found or disabled] Read: `src/tooling.ts -> getEnabledExposedToolsSnapshot | invokeExposedTool`; Decide: exposure first, enabled second; Verify: target appears in effective set and call succeeds.
 - [Tool selection config mismatch] Read: `src/tooling.ts -> setExposedTools | setEnabledTools | pruneBuiltInDisabledFromDeltas | pruneEnabledDeltasByExposed`; Decide: required/built-in-disabled/exposed-first rules apply; Verify: deltas normalize and intended tool state persists.
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
@@ -122,7 +125,7 @@
 - [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: text output reports `binary`, workspace counts, aggregate progress, and per-workspace lines.
 - [qgrep search scope rejected] Read: `src/qgrep.ts -> resolveIncludePattern | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported`; Decide: `lm_qgrepSearchText.includePattern` enforces existing path/glob rules, rejects bare `|` alternation, and ignores legacy `searchPath`/`includeIgnoredFiles`; `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp`; Verify: text outside/ambiguous includePattern or `|` alternation returns expected tool error, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
 - [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
-- [Registry match missing or stale] Read: `src/instanceRegistry.ts -> readRegisteredInstances | pickBestMatchingInstance`; Decide: confirm TTL pruning and path-match precedence (workspace file exact > folder exact > nested folder); Verify: the expected workspace record is selected or pruned deterministically.
+- [Discovery pipe missing or untitled multi-root] Read: `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | WorkspaceDiscoveryPublisher` and `src/stdioManager.ts -> resolveDiscoveryTargets`; Decide: for supported targets confirm exact upward candidate order and pipe prefix alignment, and for unsaved multi-root require `Save Workspace As...`; Verify: supported targets publish/connect deterministically and untitled multi-root windows stay undiscoverable with a clear message.
 
 ## Section C: Change Impact Map
 - Doc defaults: code changes -> `face-ai-report.md`; `README.md` only if user-facing; `CHANGELOG.md` on version bump.
@@ -137,7 +140,7 @@
 - qgrep output formatting/helpers -> `src/qgrepOutput.ts`, `src/tooling.ts`.
 - VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/manager-integration/*`, `src/test/fixtures/multi-root/*`, `src/test/fixtures/multi-root-brace/*`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
-- Handshake/session routing -> `src/stdioManager.ts`, `src/instanceRegistry.ts`, `src/managerHandshake.ts`.
+- Handshake/session routing -> `src/stdioManager.ts`, `src/workspaceDiscovery.ts`, `src/managerHandshake.ts`.
 - Diagnostics contract -> `src/tooling.ts`.
 - Server/qgrep status bar behavior -> `src/extension.ts`.
 - Version bump only -> `CHANGELOG.md`.
@@ -146,7 +149,7 @@
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
 - Tests: run `npm run test:unit` for pure unit coverage, `npm run test:integration` for VS Code smoke + multi-root fixture coverage on Windows, `npm run test:manager-integration` for real stdio-manager auto-start coverage on Windows, and `npm run test:all` for the combined default path.
 - Happy-path: verify one handshake + one dynamic `tools/list` refresh + one bridged tool call + one `lmToolsBridge.callTool` call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
-- Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no live registry match exists.
+- Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no healthy discovery pipe answers.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or post-handshake offline workspace).
 - Stdio-manager-errors: verify `workspace not set/matched`, `Workspace MCP server is unreachable`, `Resolved MCP server is offline`, and direct-call invalid params all include actionable `Next step:` text.
 - Concurrency: verify multiple stdio manager processes can bind the same workspace and different workspaces without leaking bound tool state across sessions.

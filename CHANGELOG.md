@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.121] - 2026-03-14
+
+### English
+
+#### Changed
+- Replaced the stdio manager workspace-instance registry with deterministic Windows named-pipe discovery, keeping folder and `.code-workspace` identities separate and removing the old file-backed heartbeat path.
+- Kept stdio manager handshake auto-start scoped to handshake only while preserving multi-manager workspace routing and post-handshake offline behavior.
+
+#### Tests
+- Added discovery and stdio-manager coverage for named-pipe ownership, launch-lock behavior, handshake routing, and Windows real-VS-Code manager integration over MCP stdio.
+
+### 中文
+
+#### Changed
+- 将 stdio manager 的 workspace 实例发现从文件 registry 切换为确定性的 Windows named pipe discovery,并保持 folder 与 `.code-workspace` 身份严格区分,移除了旧的文件心跳路径.
+- 保持 stdio manager 的握手自启动行为只发生在 handshake 阶段,同时保留多 manager 路由到同一或不同 workspace 的能力,以及握手后实例离线时不自动重启的行为.
+
+#### Tests
+- 新增 named pipe owner/launch lock、stdio manager 握手路由,以及基于 MCP stdio 的 Windows 真实 VS Code manager integration 覆盖.
+
 ## [1.0.120] - 2026-03-14
 
 ### English

@@ -27,14 +27,14 @@ import type {
   WorkspaceHandshakePayload,
 } from './managerHandshake';
 import {
-  getInstanceRegistryDir,
-  getInstanceRegistryTtlMs,
+  createWorkspaceDiscoveryTarget,
   isCwdMatchingWorkspaceFile,
   isCwdWithinWorkspaceFolders,
-  pickBestMatchingInstance,
-  readRegisteredInstances,
-  type RegisteredInstance,
-} from './instanceRegistry';
+  requestWorkspaceDiscovery,
+  tryAcquireLaunchLock,
+  type WorkspaceDiscoveryAdvertisement,
+  type WorkspaceDiscoveryTarget,
+} from './workspaceDiscovery';
 import {
   isSupportedWindowsWorkspacePath,
   resolveComparablePath,
@@ -66,12 +66,6 @@ interface SessionState {
   discovery?: HandshakeDiscoveryPayload;
 }
 
-interface LaunchTarget {
-  openPath: string;
-  kind: 'workspace-file' | 'folder';
-  lockKey: string;
-}
-
 const HEALTH_PATH = '/mcp/health';
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
@@ -83,9 +77,8 @@ const TOOL_SCHEMA_URI_TEMPLATE = 'lm-tools://schema/{name}';
 const HEALTH_TIMEOUT_MS = 1200;
 const INSTANCE_POLL_INTERVAL_MS = 500;
 const DISCOVERY_POLL_INTERVAL_MS = 500;
-const HANDSHAKE_WAIT_TIMEOUT_MS = getPositiveIntFromEnv('LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS', 90000);
+const HANDSHAKE_WAIT_TIMEOUT_MS = getPositiveIntFromEnv('LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS', 30000);
 const DISCOVERY_WAIT_TIMEOUT_MS = getPositiveIntFromEnv('LM_TOOLS_BRIDGE_DISCOVERY_WAIT_TIMEOUT_MS', 15000);
-const LAUNCH_LOCK_STALE_MS = getPositiveIntFromEnv('LM_TOOLS_BRIDGE_LAUNCH_LOCK_STALE_MS', 120000);
 
 const session: SessionState = {
   sessionId: crypto.randomUUID(),
@@ -224,13 +217,13 @@ function toOfflineDurationSec(startedAt?: number): number | null {
   return Math.floor((Date.now() - startedAt) / 1000);
 }
 
-function toManagerMatch(instance: RegisteredInstance): ManagerMatch {
+function toManagerMatch(advertisement: WorkspaceDiscoveryAdvertisement): ManagerMatch {
   return {
-    sessionId: instance.sessionId,
-    host: instance.host,
-    port: instance.port,
-    workspaceFolders: instance.workspaceFolders,
-    workspaceFile: instance.workspaceFile ?? null,
+    sessionId: advertisement.serverSessionId,
+    host: advertisement.host,
+    port: advertisement.port,
+    workspaceFolders: advertisement.workspaceFolders,
+    workspaceFile: advertisement.workspaceFile ?? null,
   };
 }
 
@@ -679,57 +672,19 @@ async function clearBindingIfNeeded(server: Server): Promise<void> {
   await server.sendResourceListChanged();
 }
 
-async function resolveHealthyTarget(cwd: string): Promise<ManagerMatch | undefined> {
-  const instances = await readRegisteredInstances({
-    directory: getInstanceRegistryDir(),
-    ttlMs: getInstanceRegistryTtlMs(),
-    pruneStale: true,
-  });
-  const matched = pickBestMatchingInstance(cwd, instances);
-  if (!matched) {
-    return undefined;
-  }
-  const target = toManagerMatch(matched);
-  const health = await checkTargetHealth(target);
-  return isHealthOk(health) ? target : undefined;
-}
-
-async function tryAcquireLaunchLock(lockPath: string): Promise<(() => Promise<void>) | undefined> {
-  await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
-  try {
-    const handle = await fs.promises.open(lockPath, 'wx');
-    await handle.writeFile(JSON.stringify({ pid: process.pid, timestamp: Date.now() }));
-    await handle.close();
-    return async () => {
-      try {
-        await fs.promises.unlink(lockPath);
-      } catch {
-        // Ignore cleanup failures.
-      }
-    };
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code !== 'EEXIST') {
-      throw error;
+async function resolveHealthyTarget(targets: readonly WorkspaceDiscoveryTarget[]): Promise<ManagerMatch | undefined> {
+  for (const target of targets) {
+    const discovered = await requestWorkspaceDiscovery(target, session.sessionId);
+    if (!discovered) {
+      continue;
     }
-    try {
-      const stats = await fs.promises.stat(lockPath);
-      if (Date.now() - stats.mtimeMs > LAUNCH_LOCK_STALE_MS) {
-        await fs.promises.unlink(lockPath).catch(() => undefined);
-      }
-    } catch {
-      // Ignore lock read failures.
+    const matched = toManagerMatch(discovered);
+    const health = await checkTargetHealth(matched);
+    if (isHealthOk(health)) {
+      return matched;
     }
-    return undefined;
   }
-}
-
-function getLaunchLockPath(lockKey: string): string {
-  return path.join(
-    getInstanceRegistryDir(),
-    'locks',
-    `${crypto.createHash('sha1').update(lockKey).digest('hex')}.lock`,
-  );
+  return undefined;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -778,14 +733,51 @@ async function findSingleWorkspaceFile(directory: string): Promise<string | unde
   return workspaceFiles[0];
 }
 
-async function resolveLaunchTarget(cwd: string): Promise<LaunchTarget> {
+async function resolveDiscoveryTargets(cwd: string): Promise<WorkspaceDiscoveryTarget[]> {
   const comparable = resolveComparablePath(cwd);
   if (await pathIsFile(comparable) && comparable.toLowerCase().endsWith('.code-workspace')) {
-    return {
-      openPath: comparable,
-      kind: 'workspace-file',
-      lockKey: comparable.toLowerCase(),
-    };
+    return [createWorkspaceDiscoveryTarget('workspace-file', comparable)];
+  }
+
+  const baseDirectory = await pathIsFile(comparable)
+    ? path.dirname(comparable)
+    : comparable;
+  if (!(await pathExists(baseDirectory))) {
+    throw new Error(`Cannot auto-start VS Code because path does not exist: ${baseDirectory}`);
+  }
+
+  const targets: WorkspaceDiscoveryTarget[] = [];
+  const seen = new Set<string>();
+  let current = baseDirectory;
+
+  while (true) {
+    const workspaceFile = await findSingleWorkspaceFile(current);
+    if (workspaceFile) {
+      const workspaceTarget = createWorkspaceDiscoveryTarget('workspace-file', workspaceFile);
+      if (!seen.has(workspaceTarget.canonicalIdentity)) {
+        seen.add(workspaceTarget.canonicalIdentity);
+        targets.push(workspaceTarget);
+      }
+    }
+    const folderTarget = createWorkspaceDiscoveryTarget('folder', current);
+    if (!seen.has(folderTarget.canonicalIdentity)) {
+      seen.add(folderTarget.canonicalIdentity);
+      targets.push(folderTarget);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  return targets;
+}
+
+async function resolveLaunchTarget(cwd: string): Promise<WorkspaceDiscoveryTarget> {
+  const comparable = resolveComparablePath(cwd);
+  if (await pathIsFile(comparable) && comparable.toLowerCase().endsWith('.code-workspace')) {
+    return createWorkspaceDiscoveryTarget('workspace-file', comparable);
   }
 
   const baseDirectory = await pathIsFile(comparable)
@@ -800,25 +792,13 @@ async function resolveLaunchTarget(cwd: string): Promise<LaunchTarget> {
   while (true) {
     const workspaceFile = await findSingleWorkspaceFile(current);
     if (workspaceFile) {
-      return {
-        openPath: workspaceFile,
-        kind: 'workspace-file',
-        lockKey: workspaceFile.toLowerCase(),
-      };
+      return createWorkspaceDiscoveryTarget('workspace-file', workspaceFile);
     }
     if (await pathIsDirectory(path.join(current, '.vscode'))) {
-      return {
-        openPath: current,
-        kind: 'folder',
-        lockKey: current.toLowerCase(),
-      };
+      return createWorkspaceDiscoveryTarget('folder', current);
     }
     if (await pathExists(path.join(current, '.git'))) {
-      return {
-        openPath: current,
-        kind: 'folder',
-        lockKey: current.toLowerCase(),
-      };
+      return createWorkspaceDiscoveryTarget('folder', current);
     }
     const parent = path.dirname(current);
     if (parent === current) {
@@ -827,11 +807,7 @@ async function resolveLaunchTarget(cwd: string): Promise<LaunchTarget> {
     current = parent;
   }
 
-  return {
-    openPath: baseDirectory,
-    kind: 'folder',
-    lockKey: baseDirectory.toLowerCase(),
-  };
+  return createWorkspaceDiscoveryTarget('folder', baseDirectory);
 }
 
 async function spawnDetached(command: string, args: string[], useShell: boolean): Promise<void> {
@@ -850,7 +826,7 @@ async function spawnDetached(command: string, args: string[], useShell: boolean)
   });
 }
 
-async function launchVsCode(target: LaunchTarget): Promise<void> {
+async function launchVsCode(target: WorkspaceDiscoveryTarget): Promise<void> {
   if (process.platform !== 'win32') {
     throw new Error('VS Code auto-start is currently supported only on Windows.');
   }
@@ -869,11 +845,14 @@ async function launchVsCode(target: LaunchTarget): Promise<void> {
   }
 }
 
-async function waitForHealthyTarget(cwd: string, deadlineMs: number): Promise<ManagerMatch | undefined> {
+async function waitForHealthyTarget(
+  targets: readonly WorkspaceDiscoveryTarget[],
+  deadlineMs: number,
+): Promise<ManagerMatch | undefined> {
   while (Date.now() < deadlineMs) {
-    const target = await resolveHealthyTarget(cwd);
-    if (target) {
-      return target;
+    const matched = await resolveHealthyTarget(targets);
+    if (matched) {
+      return matched;
     }
     const remaining = deadlineMs - Date.now();
     if (remaining <= 0) {
@@ -888,7 +867,9 @@ async function ensureTargetWithAutoStart(cwd: string): Promise<{
   target: ManagerMatch | undefined;
   startupAttempted: boolean;
 }> {
-  const existing = await resolveHealthyTarget(cwd);
+  const discoveryTargets = await resolveDiscoveryTargets(cwd);
+  const launchTarget = await resolveLaunchTarget(cwd);
+  const existing = await resolveHealthyTarget(discoveryTargets);
   if (existing) {
     return {
       target: existing,
@@ -896,15 +877,13 @@ async function ensureTargetWithAutoStart(cwd: string): Promise<{
     };
   }
 
-  const launchTarget = await resolveLaunchTarget(cwd);
   const deadlineMs = Date.now() + HANDSHAKE_WAIT_TIMEOUT_MS;
-  const lockPath = getLaunchLockPath(launchTarget.lockKey);
 
   while (Date.now() < deadlineMs) {
-    const release = await tryAcquireLaunchLock(lockPath);
+    const release = await tryAcquireLaunchLock(launchTarget);
     if (release) {
       try {
-        const matchedBeforeLaunch = await resolveHealthyTarget(cwd);
+        const matchedBeforeLaunch = await resolveHealthyTarget(discoveryTargets);
         if (matchedBeforeLaunch) {
           return {
             target: matchedBeforeLaunch,
@@ -913,7 +892,7 @@ async function ensureTargetWithAutoStart(cwd: string): Promise<{
         }
         await launchVsCode(launchTarget);
         return {
-          target: await waitForHealthyTarget(cwd, deadlineMs),
+          target: await waitForHealthyTarget(discoveryTargets, deadlineMs),
           startupAttempted: true,
         };
       } finally {
@@ -921,7 +900,7 @@ async function ensureTargetWithAutoStart(cwd: string): Promise<{
       }
     }
 
-    const matched = await resolveHealthyTarget(cwd);
+    const matched = await resolveHealthyTarget(discoveryTargets);
     if (matched) {
       return {
         target: matched,

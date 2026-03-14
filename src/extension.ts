@@ -38,8 +38,9 @@ import {
   type QgrepStatusSummary,
 } from './qgrep';
 import {
-  InstanceRegistryPublisher,
-} from './instanceRegistry';
+  resolveWorkspaceDiscoveryTargetFromWindow,
+  WorkspaceDiscoveryPublisher,
+} from './workspaceDiscovery';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const TOOLS_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-tools';
@@ -111,7 +112,7 @@ let lastOwnerWorkspacePath: string | undefined;
 let lastStatusLogMessage: string | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let enforcingWorkspaceOnlySetting = false;
-let instanceRegistryPublisher: InstanceRegistryPublisher | undefined;
+let workspaceDiscoveryPublisher: WorkspaceDiscoveryPublisher | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -135,19 +136,28 @@ export function activate(context: vscode.ExtensionContext): void {
   void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
   void normalizeToolSelectionState();
-  instanceRegistryPublisher = new InstanceRegistryPublisher({
-    sessionId: vscode.env.sessionId || `lm-tools-bridge-${process.pid}`,
+  workspaceDiscoveryPublisher = new WorkspaceDiscoveryPublisher({
+    serverSessionId: vscode.env.sessionId || `lm-tools-bridge-${process.pid}`,
     getAdvertisement: () => {
       if (!serverState) {
         return undefined;
       }
+      const target = resolveWorkspaceDiscoveryTargetFromWindow(
+        vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+        vscode.workspace.workspaceFile?.fsPath,
+      );
+      if (!target || 'code' in target) {
+        return target;
+      }
       return {
-        pid: process.pid,
-        workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
-        workspaceFile: vscode.workspace.workspaceFile?.fsPath,
+        target,
         host: serverState.host,
         port: serverState.port,
       };
+    },
+    logger: {
+      warn: logWarn,
+      error: logStatusError,
     },
   });
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
@@ -208,6 +218,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (serverState) {
       serverState.ownerWorkspacePath = getOwnerWorkspacePath();
     }
+    void workspaceDiscoveryPublisher?.refresh();
     void refreshStatusBar();
   });
 
@@ -259,7 +270,7 @@ export function deactivate(): void {
     qgrepStatusRefreshTimer = undefined;
   }
   setQgrepStatusChangeHandler(undefined);
-  void instanceRegistryPublisher?.stop();
+  void workspaceDiscoveryPublisher?.stop();
   if (serverState) {
     try {
       serverState.server.close();
@@ -415,7 +426,7 @@ async function startMcpServer(
       }
       logStatusInfo(`MCP server listening at http://${host}:${portToTry}/mcp`);
       updateStatusBar({ state: 'running', ownerWorkspacePath, host, port: portToTry });
-      await instanceRegistryPublisher?.start();
+      await workspaceDiscoveryPublisher?.start();
       return true;
     }
 
@@ -465,7 +476,7 @@ async function stopMcpServer(channel: vscode.OutputChannel): Promise<void> {
       resolve();
     });
   });
-  await instanceRegistryPublisher?.stop();
+  await workspaceDiscoveryPublisher?.stop();
   await refreshStatusBar();
 }
 

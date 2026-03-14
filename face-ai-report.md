@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via a shared instance registry.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.119`.
+- Version baseline: `1.0.120`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -47,6 +47,7 @@
 - qgrep auto-maintenance still depends on initialized workspaces (`<workspace>/.vscode/qgrep/workspace.cfg`), but `lm_qgrepSearchText`/`lm_qgrepSearchFiles` now auto-initialize all current workspaces on demand before searching.
 - On extension startup, already-initialized qgrep workspaces auto-queue one background refresh that syncs extension-managed `workspace.cfg` blocks before running `qgrep update` for current-session progress/file totals.
 - Startup refresh now includes one-shot auto-repair for corruption-like qgrep assertion failures: when update errors contain `Assertion failed` plus `filter.cpp`/`entries.entries`, the extension auto-attempts one per-workspace rebuild in the same startup session.
+- qgrep managed config sync now also rewrites the `path <workspace-root>` line in `workspace.cfg`, so moved/renamed workspaces do not keep watching or updating an old root directory.
 - `lm_qgrepSearchText`/`lm_qgrepSearchFiles` block tool completion until qgrep indexing is ready across current workspaces (including in-progress auto `qgrep update`) or timeout (150s).
 - qgrep index operations (`init`/`update`/`build`) are serialized per workspace to avoid overlapping runs under parallel tool calls and auto-update activity.
 - `Qgrep Rebuild Indexes` runs against all current workspaces; uninitialized workspaces are auto-initialized before rebuild.

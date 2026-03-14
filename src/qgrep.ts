@@ -16,6 +16,7 @@ import {
   type FilesQueryDraft,
   type QgrepFilesQuerySemantics,
 } from './qgrepFilesQuery';
+import { upsertWorkspaceConfigPathLine } from './qgrepConfig';
 import {
   parseOptionalIncludePattern,
   parseQuerySyntax,
@@ -2071,8 +2072,12 @@ class QgrepService implements vscode.Disposable {
     }
 
     const normalizedInput = normalizeLineEndings(rawConfigText);
-    const shaderIncludeUpsertResult = upsertManagedConfigBlock(
+    const normalizedWithCurrentWorkspacePath = upsertWorkspaceConfigPathLine(
       normalizedInput,
+      state.folder.uri.fsPath,
+    );
+    const shaderIncludeUpsertResult = upsertManagedConfigBlock(
+      normalizedWithCurrentWorkspacePath,
       shaderIncludeBuildResult.blockTextNormalized,
       QGREP_MANAGED_SHADER_INCLUDE_BLOCK_BEGIN,
       QGREP_MANAGED_SHADER_INCLUDE_BLOCK_END,

@@ -71,6 +71,7 @@ Each workspace VS Code instance hosts a local MCP HTTP server, while external cl
 - qgrep files output has a single `====` header separator, followed by one absolute path per line.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` auto-init all current workspaces and wait until ready (timeout `150s`).
 - Startup refresh for already initialized workspaces now syncs extension-managed `workspace.cfg` blocks before `qgrep update`.
+- Startup refresh also rewrites the `path <workspace-root>` line in `workspace.cfg`, so moved workspaces do not keep watching or updating an old directory.
 - During startup refresh, if qgrep reports a corruption-like assertion signature (`Assertion failed` with `filter.cpp`/`entries.entries`), the extension auto-runs one rebuild attempt per workspace for this startup session.
 - Managed blocks in `workspace.cfg` sync on init/rebuild/startup refresh/search.exclude changes:
   - Unreal include block: `*.ush`, `*.usf`, `*.ini`
@@ -196,6 +197,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 暴露 LM tools.
 - qgrep files 输出仅在头部使用一个 `====`,后续每行一个绝对路径.
 - `lm_qgrepSearchText` 和 `lm_qgrepSearchFiles` 会按需自动初始化当前全部 workspace,并等待到就绪(超时 `150s`).
 - 对已初始化 workspace,扩展启动后的后台刷新会先同步插件受管 `workspace.cfg` 区块,再执行 `qgrep update`.
+- 启动后台刷新也会改写 `workspace.cfg` 中的 `path <workspace-root>` 首行,避免 workspace 搬迁后仍继续监听或更新旧目录.
 - 启动刷新阶段若 qgrep 返回坏索引特征断言(`Assertion failed` 且包含 `filter.cpp`/`entries.entries`),插件会在本次启动周期内对该 workspace 自动尝试一次重建.
 - `workspace.cfg` 受管区块会在 init/rebuild/启动刷新/search.exclude 变更时同步:
   - Unreal include: `*.ush`,`*.usf`,`*.ini`

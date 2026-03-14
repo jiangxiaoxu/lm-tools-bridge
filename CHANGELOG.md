@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.120] - 2026-03-14
+
+### English
+
+#### Fixed
+- Fixed qgrep startup refresh so `workspace.cfg` also rewrites its `path <workspace-root>` line, preventing moved workspaces from watching or updating an old directory.
+
+#### Tests
+- Added unit coverage for stale qgrep workspace root path replacement and duplicate path-line cleanup.
+
+### 中文
+
+#### Fixed
+- 修复 qgrep 启动刷新,现在会同时改写 `workspace.cfg` 中的 `path <workspace-root>` 首行,避免 workspace 搬迁后仍监听或更新旧目录.
+
+#### Tests
+- 新增单测,覆盖 qgrep 旧 workspace 根路径替换以及重复 path 行清理.
+
 ## [1.0.119] - 2026-03-14
 
 ### English

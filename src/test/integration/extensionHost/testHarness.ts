@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as vscode from 'vscode';
 
@@ -53,4 +54,17 @@ export async function waitForWorkspaceFolderNames(expectedNames: readonly string
     await delay(DEFAULT_POLL_INTERVAL_MS);
   }
   assert.deepEqual(actualNames, [...expectedNames]);
+}
+
+export async function waitForFileExists(filePath: string): Promise<void> {
+  const deadline = Date.now() + DEFAULT_WAIT_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    try {
+      await fs.promises.access(filePath);
+      return;
+    } catch {
+      await delay(DEFAULT_POLL_INTERVAL_MS);
+    }
+  }
+  assert.fail(`Expected file to exist: ${filePath}`);
 }

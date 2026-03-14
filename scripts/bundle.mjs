@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(rootDir, 'out');
+const requestedTargets = new Set(process.argv.slice(2));
 
 const shared = {
     bundle: true,
@@ -15,15 +16,26 @@ const shared = {
     external: ['vscode'],
 };
 
-await build({
-    ...shared,
-    entryPoints: {
-        extension: path.join(rootDir, 'src', 'extension.ts'),
-        stdioManager: path.join(rootDir, 'src', 'stdioManager.ts'),
-    },
-    outdir: outDir,
-    tsconfig: path.join(rootDir, 'tsconfig.json'),
-});
+if (shouldBuildTarget('extension')) {
+    await build({
+        ...shared,
+        entryPoints: [path.join(rootDir, 'src', 'extension.ts')],
+        outfile: path.join(outDir, 'extension.js'),
+        tsconfig: path.join(rootDir, 'tsconfig.json'),
+    });
+}
+
+if (shouldBuildTarget('stdioManager')) {
+    await build({
+        ...shared,
+        banner: {
+            js: '/* lm-tools-bridge bundled stdioManager */',
+        },
+        entryPoints: [path.join(rootDir, 'src', 'stdioManager.ts')],
+        outfile: path.join(outDir, 'stdioManager.js'),
+        tsconfig: path.join(rootDir, 'tsconfig.json'),
+    });
+}
 
 await Promise.all([
     fs.promises.unlink(path.join(outDir, 'manager.js')).catch(() => undefined),
@@ -45,4 +57,8 @@ try {
     }));
 } catch (error) {
     console.warn('Failed to copy ripgrep binaries:', error);
+}
+
+function shouldBuildTarget(name) {
+    return requestedTargets.size === 0 || requestedTargets.has(name);
 }

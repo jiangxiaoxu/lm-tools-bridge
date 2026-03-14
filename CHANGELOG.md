@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.122] - 2026-03-14
+
+### English
+
+#### Changed
+- Added activation-time publication of the bundled stdio manager into `%LOCALAPPDATA%\lm-tools-bridge`, making a stable runnable `stdioManager.js` available for external MCP clients.
+- Changed stdio manager publication overwrite decisions to compare the actual source and target file hashes, while keeping `metadata.json` for version and sync diagnostics only.
+
+#### Tests
+- Added unit and smoke/integration coverage for `%LOCALAPPDATA%` publication, runnable synced manager validation, metadata repair, and direct file-hash sync decisions.
+
+### 中文
+
+#### Changed
+- 新增扩展激活时自动把 bundled stdio manager 发布到 `%LOCALAPPDATA%\lm-tools-bridge`,为外部 MCP 客户端提供稳定可运行的 `stdioManager.js`.
+- stdio manager 发布时的覆盖判定改为直接比较源/目标文件 hash,`metadata.json` 仅保留版本与同步诊断信息.
+
+#### Tests
+- 新增 `%LOCALAPPDATA%` 发布、同步后 manager 可运行性、metadata 修复以及基于实际文件 hash 判定同步的单测与集成覆盖.
+
 ## [1.0.121] - 2026-03-14
 
 ### English

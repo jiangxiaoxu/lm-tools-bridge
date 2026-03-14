@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.121",
+  "version": "1.0.122",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -172,7 +172,8 @@
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run bundle",
     "bundle": "node ./scripts/bundle.mjs",
-    "compile": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\" && tsc -p ./",
+    "bundle:stdio-manager": "node ./scripts/bundle.mjs stdioManager",
+    "compile": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\" && tsc -p ./ && npm run bundle:stdio-manager",
     "test": "npm run test:unit",
     "test:unit": "npm run compile && node --test out/__tests__/*.test.js",
     "test:integration": "npm run compile && node ./out/test/integration/index.js",

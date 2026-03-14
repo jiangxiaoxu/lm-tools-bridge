@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.121`.
+- Version baseline: `1.0.122`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -71,6 +71,7 @@
 - Aggregate qgrep `A/B`/remaining uses file-weighted sum across initialized workspaces only when all initialized workspaces have known totals; otherwise show unknown (`--/--`) with optional sampled percent.
 - `resolveInputFilePath` accepts absolute, `WorkspaceName/...`, and workspace-root relative paths; paths must exist, and multi-root relative inputs must resolve uniquely.
 - Workspace instances publish deterministic discovery pipes derived from normalized `folder|...` or `workspace-file|...` identities; the stdio manager probes exact upward candidate pipes instead of reading a file registry.
+- On Windows, extension activation auto-syncs the bundled stdio manager to `%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js` with a sidecar `%LOCALAPPDATA%\\lm-tools-bridge\\metadata.json`; sync compares the actual source/target manager file hashes to decide whether to recopy, repairs metadata when hashes already match, and skips entirely if the source file is not a bundled runtime artifact.
 - `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
 - `lmToolsBridge.requestWorkspaceMCPServer` first probes live named-pipe discovery targets derived from the resolved `cwd`; if no healthy target answers on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
 - Stdio manager handshake auto-start uses default waits of `30s` total (`LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS`) and `15s` per discovery wait window (`LM_TOOLS_BRIDGE_DISCOVERY_WAIT_TIMEOUT_MS`) unless overridden by environment variables.
@@ -91,6 +92,7 @@
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
 - `src/stdioManager.ts -> handleRequestWorkspace | ensureTargetWithAutoStart | resolveDiscoveryTargets | resolveLaunchTarget | buildHandshakeDiscovery | invokeBoundTool | createServer`
+- `src/stdioManagerSync.ts -> syncBundledStdioManager | resolveStdioManagerSyncPaths`
 - `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | createWorkspaceDiscoveryTarget | requestWorkspaceDiscovery | tryAcquireLaunchLock | WorkspaceDiscoveryPublisher`
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
@@ -131,6 +133,7 @@
 - Doc defaults: code changes -> `face-ai-report.md`; `README.md` only if user-facing; `CHANGELOG.md` on version bump.
 - Config scope -> `src/configuration.ts`, `src/extension.ts`.
 - Stdio manager packaging/filtering -> `scripts/bundle.mjs`, `.vscodeignore`.
+- Stdio manager stable publication -> `src/stdioManagerSync.ts`, `src/extension.ts`, `scripts/bundle.mjs`.
 - Exposure/enable policy -> `src/tooling.ts`.
 - qgrep tool schema/default exposure -> `src/tooling.ts`.
 - qgrep workspace-scope parsing -> `src/qgrepWorkspaceScope.ts`.
@@ -148,6 +151,7 @@
 ## Section D: Verification Checklist
 - Package: run `npx @vscode/vsce package --out lm-tools-bridge-latest.vsix` (overwrites the previous VSIX only on success).
 - Tests: run `npm run test:unit` for pure unit coverage, `npm run test:integration` for VS Code smoke + multi-root fixture coverage on Windows, `npm run test:manager-integration` for real stdio-manager auto-start coverage on Windows, and `npm run test:all` for the combined default path.
+- Stable manager publication: verify activation writes `%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js` plus `metadata.json`, and the synced manager responds to MCP `initialize` + `tools/list`.
 - Happy-path: verify one handshake + one dynamic `tools/list` refresh + one bridged tool call + one `lmToolsBridge.callTool` call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
 - Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no healthy discovery pipe answers.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or post-handshake offline workspace).

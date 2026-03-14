@@ -42,6 +42,7 @@ async function main(): Promise<void> {
 
 async function executeIntegrationRun(repoRoot: string, run: IntegrationRun): Promise<void> {
   const isolatedDirs = await createIsolatedVsCodeDirs('lm-tools-bridge');
+  const localAppDataDir = await makeTempDir('lm-tools-bridge-localappdata-');
   try {
     console.log(`Running VS Code integration suite: ${run.name}`);
     const vscodeExecutablePath = await getVSCodeExecutablePath();
@@ -51,11 +52,16 @@ async function executeIntegrationRun(repoRoot: string, run: IntegrationRun): Pro
       extensionTestsPath: run.extensionTestsPath,
       workspacePath: run.workspacePath,
       isolatedDirs,
+      extensionTestsEnv: {
+        LOCALAPPDATA: localAppDataDir,
+        LM_TOOLS_BRIDGE_TEST_NODE_PATH: process.execPath,
+      },
     });
     console.log(`Completed VS Code integration suite: ${run.name}`);
   } finally {
     await removeDirectoryWithRetries(isolatedDirs.userDataDir);
     await removeDirectoryWithRetries(isolatedDirs.extensionsDir);
+    await removeDirectoryWithRetries(localAppDataDir);
   }
 }
 

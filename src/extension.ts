@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
+import * as path from 'node:path';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
@@ -41,6 +42,7 @@ import {
   resolveWorkspaceDiscoveryTargetFromWindow,
   WorkspaceDiscoveryPublisher,
 } from './workspaceDiscovery';
+import { syncBundledStdioManager } from './stdioManagerSync';
 
 const OUTPUT_CHANNEL_NAME = 'lm-tools-bridge';
 const TOOLS_OUTPUT_CHANNEL_NAME = 'lm-tools-bridge-tools';
@@ -132,6 +134,14 @@ export function activate(context: vscode.ExtensionContext): void {
     info: logQgrepInfo,
     warn: logQgrepWarn,
     error: logQgrepError,
+  });
+  void syncBundledStdioManager({
+    bundledManagerPath: context.asAbsolutePath(path.join('out', 'stdioManager.js')),
+    extensionVersion: getExtensionVersion(context),
+    logger: {
+      info: logStatusInfo,
+      warn: logWarn,
+    },
   });
   void enforceWorkspaceOnlyUseWorkspaceSettings();
   void cleanupLegacyToolSelectionSettings();
@@ -258,6 +268,11 @@ export function activate(context: vscode.ExtensionContext): void {
   })();
   logStatusInfo('Extension activated.');
   void vscode.commands.executeCommand('setContext', 'lmToolsBridge.statusBar', true);
+}
+
+function getExtensionVersion(context: vscode.ExtensionContext): string {
+  const value = context.extension.packageJSON?.version;
+  return typeof value === 'string' && value.trim().length > 0 ? value : 'unknown';
 }
 
 export function deactivate(): void {

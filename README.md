@@ -10,12 +10,13 @@ Each workspace VS Code instance hosts a local MCP HTTP server, while external cl
 
 ### Quick Start
 1. Start service in VS Code: `LM Tools Bridge: Start Server`.
-2. Launch one stdio MCP process per client session: `node <extension-dir>/out/stdioManager.js`.
-3. Call handshake tool `lmToolsBridge.requestWorkspaceMCPServer` with `{ "cwd": "<project path>" }` (Windows accepts only normal absolute paths and `\\?\` + normal absolute paths; prefix matching is case-insensitive).
-4. After handshake, call bridged workspace tools from `tools/list`, or keep using `lmToolsBridge.callTool`.
+2. Open the extension once so it syncs the bundled stdio manager to `%LOCALAPPDATA%\lm-tools-bridge\stdioManager.js`.
+3. Launch one stdio MCP process per client session from the stable synced path.
+4. Call handshake tool `lmToolsBridge.requestWorkspaceMCPServer` with `{ "cwd": "<project path>" }` (Windows accepts only normal absolute paths and `\\?\` + normal absolute paths; prefix matching is case-insensitive).
+5. After handshake, call bridged workspace tools from `tools/list`, or keep using `lmToolsBridge.callTool`.
 
 ### Endpoints
-- Stdio manager entry: `node <extension-dir>/out/stdioManager.js`
+- Stdio manager entry (stable synced path): `node %LOCALAPPDATA%\lm-tools-bridge\stdioManager.js`
 - Workspace MCP (internal, dynamic): `http://127.0.0.1:<runtime-port>/mcp`
 - Workspace health (internal): `http://127.0.0.1:<runtime-port>/mcp/health`
 
@@ -33,6 +34,21 @@ Each workspace VS Code instance hosts a local MCP HTTP server, while external cl
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` responses include `guidance`, `discovery`, and dynamic bridged tool metadata while omitting redundant top-level `online` and `health`.
 - After handshake, `tools/list` dynamically merges bridged workspace tools into the local stdio manager tool list.
 - No manager status/log web pages are provided.
+- On Windows, activation auto-syncs the bundled stdio manager to `%LOCALAPPDATA%\lm-tools-bridge\stdioManager.js` together with `%LOCALAPPDATA%\lm-tools-bridge\metadata.json`; overwrite decisions are based on direct source/target manager file hash comparison, while metadata keeps version/sync details.
+
+### Codex MCP Config
+Use PowerShell so `$env:LOCALAPPDATA` expands even when the MCP client does not expand environment variables inside raw args.
+
+```toml
+[mcp_servers.lm_tools_bridge]
+command = "powershell.exe"
+args = [
+  '-NoProfile',
+  '-Command',
+  'node "$env:LOCALAPPDATA\\lm-tools-bridge\\stdioManager.js"'
+]
+enabled = true
+```
 
 ### Built-in Tool Summary
 
@@ -138,12 +154,13 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 暴露 LM tools.
 
 ### 快速开始
 1. 在 VS Code 里执行 `LM Tools Bridge: Start Server`.
-2. 每个客户端会话拉起一个 stdio MCP 进程: `node <extension-dir>/out/stdioManager.js`.
-3. 先调用握手工具 `lmToolsBridge.requestWorkspaceMCPServer`,参数 `{ "cwd": "<project path>" }`(Windows 仅接受普通绝对路径和 `\\?\` + 普通绝对路径,前缀匹配不区分大小写).
-4. 握手成功后,直接从 `tools/list` 调用桥接后的 workspace tools,或者继续使用 `lmToolsBridge.callTool`.
+2. 先打开一次扩展,让它把 bundled stdio manager 同步到 `%LOCALAPPDATA%\lm-tools-bridge\stdioManager.js`.
+3. 每个客户端会话从这个稳定路径拉起一个 stdio MCP 进程.
+4. 先调用握手工具 `lmToolsBridge.requestWorkspaceMCPServer`,参数 `{ "cwd": "<project path>" }`(Windows 仅接受普通绝对路径和 `\\?\` + 普通绝对路径,前缀匹配不区分大小写).
+5. 握手成功后,直接从 `tools/list` 调用桥接后的 workspace tools,或者继续使用 `lmToolsBridge.callTool`.
 
 ### 端点
-- Stdio manager 入口: `node <extension-dir>/out/stdioManager.js`
+- Stdio manager 入口(稳定同步路径): `node %LOCALAPPDATA%\lm-tools-bridge\stdioManager.js`
 - Workspace MCP(内部动态端口): `http://127.0.0.1:<runtime-port>/mcp`
 - Workspace health(内部): `http://127.0.0.1:<runtime-port>/mcp/health`
 
@@ -161,6 +178,21 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 暴露 LM tools.
 - 成功的 `lmToolsBridge.requestWorkspaceMCPServer` 返回会包含 `guidance`,`discovery` 以及桥接工具元信息,同时省略冗余的顶层 `online` 和 `health`.
 - 握手成功后,`tools/list` 会动态合并当前 workspace 的桥接工具.
 - 不再提供 manager status/log 网页端点.
+- 在 Windows 上,扩展激活时会自动把 bundled stdio manager 同步到 `%LOCALAPPDATA%\lm-tools-bridge\stdioManager.js`,并同时写入 `%LOCALAPPDATA%\lm-tools-bridge\metadata.json`; 是否覆盖由源/目标 manager 文件 hash 直接比较决定,metadata 仅保留版本和同步信息.
+
+### Codex MCP 配置
+建议通过 PowerShell 启动,让 `$env:LOCALAPPDATA` 由 PowerShell 自己展开,不要依赖 MCP 客户端对原始 `args` 做环境变量展开.
+
+```toml
+[mcp_servers.lm_tools_bridge]
+command = "powershell.exe"
+args = [
+  '-NoProfile',
+  '-Command',
+  'node "$env:LOCALAPPDATA\\lm-tools-bridge\\stdioManager.js"'
+]
+enabled = true
+```
 
 ### 内置工具摘要
 

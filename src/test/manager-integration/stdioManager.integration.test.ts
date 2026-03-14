@@ -294,6 +294,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
   const pipeEnv = createPipeEnv('manager-it');
   const workspace = await createAutoStartWorkspace(repoRoot);
   const isolatedDirs = await createIsolatedVsCodeDirs('lm-tools-bridge-real');
+  const localAppDataDir = await makeTempDir('lm-tools-bridge-real-localappdata-');
   const vscodeExecutablePath = await getVSCodeExecutablePath();
   const wrapper = await createCodeWrapper({
     vscodeExecutablePath,
@@ -312,6 +313,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     manager = await connectStdioManager({
       ...pipeEnv,
       PATH: `${wrapper.wrapperDir};${process.env.PATH ?? ''}`,
+      LOCALAPPDATA: localAppDataDir,
       LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS: String(HANDSHAKE_TIMEOUT_MS),
     });
 
@@ -419,6 +421,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     await removeDirectoryWithRetries(wrapper.wrapperDir);
     await removeDirectoryWithRetries(isolatedDirs.userDataDir);
     await removeDirectoryWithRetries(isolatedDirs.extensionsDir);
+    await removeDirectoryWithRetries(localAppDataDir);
     await removeDirectoryWithRetries(workspace.rootDir);
   }
 });

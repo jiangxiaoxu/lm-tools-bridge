@@ -16,6 +16,7 @@ export interface ExtensionTestRunOptions {
   extensionTestsPath: string;
   workspacePath: string;
   isolatedDirs: IsolatedVsCodeDirs;
+  extensionTestsEnv?: Record<string, string>;
 }
 
 export async function getVSCodeExecutablePath(): Promise<string> {
@@ -54,6 +55,7 @@ export async function runExtensionTests(options: ExtensionTestRunOptions): Promi
     vscodeExecutablePath: options.vscodeExecutablePath,
     extensionDevelopmentPath: options.extensionDevelopmentPath,
     extensionTestsPath: options.extensionTestsPath,
+    extensionTestsEnv: options.extensionTestsEnv,
     launchArgs: [
       options.workspacePath,
       ...buildCommonVsCodeLaunchArgs(options.isolatedDirs),

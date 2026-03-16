@@ -1,7 +1,11 @@
 export interface ResolvedWorkspaceScopePattern {
-  workspaceNames: string[];
+  targets: ResolvedWorkspaceScopeTarget[];
+  scopeLabel: string | null;
+}
+
+export interface ResolvedWorkspaceScopeTarget {
+  workspaceName: string;
   pattern: string;
-  scopeLabel: string;
 }
 
 export function tryResolveWorkspaceScopePattern(
@@ -35,13 +39,23 @@ function tryResolveSingleWorkspaceScopePattern(
     ? inputPath.slice(separatorIndex + 1).replace(/^[\\/]+/u, '')
     : '';
   return {
-    workspaceNames: [workspaceName],
-    pattern: remainder.length > 0 ? remainder : '**/*',
+    targets: [{
+      workspaceName,
+      pattern: remainder.length > 0 ? remainder : '**/*',
+    }],
     scopeLabel: workspaceName,
   };
 }
 
 function tryResolveBraceWorkspaceScopePattern(
+  inputPath: string,
+  workspaceNames: readonly string[],
+): ResolvedWorkspaceScopePattern | undefined {
+  return tryResolveBraceWorkspaceSelectorPattern(inputPath, workspaceNames)
+    ?? tryResolveBraceWorkspaceAlternationPattern(inputPath, workspaceNames);
+}
+
+function tryResolveBraceWorkspaceSelectorPattern(
   inputPath: string,
   workspaceNames: readonly string[],
 ): ResolvedWorkspaceScopePattern | undefined {
@@ -89,10 +103,171 @@ function tryResolveBraceWorkspaceScopePattern(
     ? inputPath.slice(closingBraceIndex + 1).replace(/^[\\/]+/u, '')
     : '';
   return {
-    workspaceNames: resolvedWorkspaceNames,
-    pattern: remainder.length > 0 ? remainder : '**/*',
+    targets: resolvedWorkspaceNames.map((workspaceName) => ({
+      workspaceName,
+      pattern: remainder.length > 0 ? remainder : '**/*',
+    })),
     scopeLabel: `{${resolvedWorkspaceNames.join(',')}}`,
   };
+}
+
+function tryResolveBraceWorkspaceAlternationPattern(
+  inputPath: string,
+  workspaceNames: readonly string[],
+): ResolvedWorkspaceScopePattern | undefined {
+  const branches = tryParseTopLevelBraceAlternationBranches(inputPath);
+  if (!branches || branches.length < 2) {
+    return undefined;
+  }
+
+  const resolvedBranches = branches.map((branch) => ({
+    branch,
+    resolved: tryResolveSingleWorkspaceScopePattern(branch, workspaceNames),
+  }));
+  const hasScopedBranch = resolvedBranches.some((entry) => entry.resolved?.targets.length === 1);
+  if (!hasScopedBranch) {
+    return undefined;
+  }
+
+  const targetPatternsByWorkspaceKey = new Map<string, { workspaceName: string; patterns: string[]; seen: Set<string> }>();
+  const orderedWorkspaceNames: string[] = [];
+  let hasUnscopedBranch = false;
+
+  for (const entry of resolvedBranches) {
+    const resolvedBranch = entry.resolved;
+    if (resolvedBranch && resolvedBranch.targets.length === 1) {
+      const [{ workspaceName, pattern }] = resolvedBranch.targets;
+      appendWorkspacePattern(
+        targetPatternsByWorkspaceKey,
+        orderedWorkspaceNames,
+        workspaceName,
+        pattern,
+      );
+      continue;
+    }
+
+    hasUnscopedBranch = true;
+    for (const workspaceName of workspaceNames) {
+      appendWorkspacePattern(
+        targetPatternsByWorkspaceKey,
+        orderedWorkspaceNames,
+        workspaceName,
+        entry.branch,
+      );
+    }
+  }
+
+  if (orderedWorkspaceNames.length === 0) {
+    return undefined;
+  }
+
+  const targets = orderedWorkspaceNames.map((workspaceName) => {
+    const workspaceKey = getWorkspaceNameKey(workspaceName);
+    const target = targetPatternsByWorkspaceKey.get(workspaceKey);
+    if (!target) {
+      throw new Error(`Failed to resolve scoped workspace target for '${workspaceName}'.`);
+    }
+    return {
+      workspaceName: target.workspaceName,
+      pattern: target.patterns.length === 1 ? target.patterns[0] : `{${target.patterns.join(',')}}`,
+    };
+  });
+
+  return {
+    targets,
+    scopeLabel: hasUnscopedBranch
+      ? null
+      : orderedWorkspaceNames.length === 1
+      ? orderedWorkspaceNames[0]
+      : `{${orderedWorkspaceNames.join(',')}}`,
+  };
+}
+
+function appendWorkspacePattern(
+  targetPatternsByWorkspaceKey: Map<string, { workspaceName: string; patterns: string[]; seen: Set<string> }>,
+  orderedWorkspaceNames: string[],
+  workspaceName: string,
+  pattern: string,
+): void {
+  const workspaceKey = getWorkspaceNameKey(workspaceName);
+  const normalizedPatternKey = getPatternKey(pattern);
+  const existingTarget = targetPatternsByWorkspaceKey.get(workspaceKey);
+  if (existingTarget) {
+    if (existingTarget.seen.has(normalizedPatternKey)) {
+      return;
+    }
+    existingTarget.seen.add(normalizedPatternKey);
+    existingTarget.patterns.push(pattern);
+    return;
+  }
+
+  targetPatternsByWorkspaceKey.set(workspaceKey, {
+    workspaceName,
+    patterns: [pattern],
+    seen: new Set([normalizedPatternKey]),
+  });
+  orderedWorkspaceNames.push(workspaceName);
+}
+
+function tryParseTopLevelBraceAlternationBranches(inputPath: string): string[] | undefined {
+  if (!inputPath.startsWith('{')) {
+    return undefined;
+  }
+
+  const branches: string[] = [];
+  let braceDepth = 0;
+  let branchStartIndex = 1;
+  let inCharacterClass = false;
+
+  for (let index = 0; index < inputPath.length; index += 1) {
+    const char = inputPath[index];
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (char === ']') {
+        inCharacterClass = false;
+      }
+      continue;
+    }
+    if (char === '[') {
+      inCharacterClass = true;
+      continue;
+    }
+    if (char === '{') {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === '}') {
+      braceDepth -= 1;
+      if (braceDepth === 0) {
+        if (index !== inputPath.length - 1) {
+          return undefined;
+        }
+        const branch = inputPath.slice(branchStartIndex, index).trim();
+        if (branch.length === 0) {
+          return undefined;
+        }
+        branches.push(branch);
+        return branches;
+      }
+      if (braceDepth < 0) {
+        return undefined;
+      }
+      continue;
+    }
+    if (char === ',' && braceDepth === 1) {
+      const branch = inputPath.slice(branchStartIndex, index).trim();
+      if (branch.length === 0) {
+        return undefined;
+      }
+      branches.push(branch);
+      branchStartIndex = index + 1;
+    }
+  }
+
+  return undefined;
 }
 
 function findWorkspaceName(name: string, workspaceNames: readonly string[]): string | undefined {
@@ -102,6 +277,11 @@ function findWorkspaceName(name: string, workspaceNames: readonly string[]): str
 
 function getWorkspaceNameKey(name: string): string {
   return process.platform === 'win32' ? name.toLowerCase() : name;
+}
+
+function getPatternKey(pattern: string): string {
+  const normalized = pattern.trim().replace(/\\/gu, '/').replace(/\/{2,}/gu, '/');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 function findFirstPathSeparatorIndex(value: string): number {

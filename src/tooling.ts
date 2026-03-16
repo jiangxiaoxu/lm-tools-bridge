@@ -369,8 +369,9 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
   'If includePattern is omitted, search runs across all initialized workspace folders.',
   'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative.',
+  'In multi-root workspaces, top-level brace alternatives can mix WorkspaceName/... and workspace-relative branches; unscoped branches apply to all current workspaces, and scoped branches stay limited to their selected workspaces.',
   "includePattern does not support '|' alternation. Use brace globs such as {A,B}, or move alternation into query with querySyntax='regex'.",
-  'includePattern examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js',
+  'includePattern examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, {WorkspaceName/Source/**/*.{h,cpp,cs},WorkspaceName/Script/**/*.as}, {WorkspaceA/Source/**/*.h,WorkspaceB/Script/**/*.as,src/**/*.as}, **/*.{js,ts}, src/**, **/foo/**/*.js',
   'Supported inputs: query, caseSensitive, querySyntax, includePattern, maxResults, beforeContextLines, afterContextLines.',
 ].join('\n');
 
@@ -406,7 +407,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
     },
     includePattern: {
       type: 'string',
-      description: "Optional path or glob scope: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative. Glob examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, **/*.{js,ts}, src/**, **/foo/**/*.js. includePattern does not support '|' alternation; use brace globs such as '{A,B}'.",
+      description: "Optional path or glob scope: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative. In multi-root workspaces, top-level brace alternatives can mix WorkspaceName/... and workspace-relative branches; unscoped branches apply to all current workspaces, while scoped branches stay limited to their selected workspaces. Glob examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, {WorkspaceName/Source/**/*.{h,cpp,cs},WorkspaceName/Script/**/*.as}, {WorkspaceA/Source/**/*.h,WorkspaceB/Script/**/*.as,src/**/*.as}, **/*.{js,ts}, src/**, **/foo/**/*.js. includePattern does not support '|' alternation; use brace globs such as '{A,B}'.",
     },
     maxResults: {
       type: 'integer',
@@ -437,6 +438,7 @@ const LM_QGREP_FILES_DESCRIPTION = [
   "By default, querySyntax='glob' and query is interpreted using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).",
   'In glob mode, queries without / are matched at any depth (for example, *.md behaves like **/*.md).',
   'In multi-root workspaces, WorkspaceName/<glob> scopes to one workspace, and {WorkspaceA,WorkspaceB}/<glob> aggregates the selected workspaces only.',
+  'In multi-root workspaces, top-level brace alternatives can mix WorkspaceName/... and workspace-relative branches; unscoped branches apply to all current workspaces, while scoped branches stay limited to their selected workspaces.',
   'In files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching.',
   "In files glob mode, query does not support '|' alternation. Use brace globs such as {A,B}, or set querySyntax='regex'.",
   'Output is plain text with absolute paths (/).',
@@ -447,6 +449,8 @@ const LM_QGREP_FILES_DESCRIPTION = [
   '{"query":"**/*.{ts,js}","maxResults":200}',
   '{"query":"WorkspaceName/**/Manager*.h"}',
   '{"query":"{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}"}',
+  '{"query":"{WorkspaceName/Source/**/*.{h,cpp,cs},WorkspaceName/Script/**/*.as}"}',
+  '{"query":"{WorkspaceA/Source/**/*.h,WorkspaceB/Script/**/*.as,src/**/*.as}"}',
   '{"query":"WorkspaceA/src/.*\\\\.ts$","querySyntax":"regex"}',
 ].join('\n');
 
@@ -455,7 +459,7 @@ const LM_QGREP_FILES_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: "File search query string. Default mode uses querySyntax='glob' with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in multi-root workspaces, WorkspaceName/<glob> scopes to one workspace and {WorkspaceA,WorkspaceB}/<glob> aggregates selected workspaces only; in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; glob mode does not support '|' alternation, so use brace globs such as '{A,B}' or set querySyntax='regex'.",
+      description: "File search query string. Default mode uses querySyntax='glob' with VS Code glob semantics (*, ?, **, [], [!...], {a,b}); queries without / match at any depth (for example, *.md behaves like **/*.md); in multi-root workspaces, WorkspaceName/<glob> scopes to one workspace, {WorkspaceA,WorkspaceB}/<glob> aggregates selected workspaces only, and top-level brace alternatives can mix WorkspaceName/... and workspace-relative branches, where unscoped branches apply to all current workspaces while scoped branches stay limited to their selected workspaces; in mixed scoped/unscoped cases, summary scope remains 'all initialized workspaces'; in files glob mode, matching is performed against file paths, not file contents, and uses whole-path anchoring rather than substring matching; glob mode does not support '|' alternation, so use brace globs such as '{A,B}' or set querySyntax='regex'.",
     },
     querySyntax: {
       type: 'string',

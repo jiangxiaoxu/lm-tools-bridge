@@ -23,10 +23,24 @@ const BRACE_SCOPED_NORMALIZED_QUERY = '{WorkspaceB,WorkspaceA,WorkspaceB}/Source
 const BRACE_SCOPED_TEXT_QUERY = '#include';
 const BRACE_SCOPED_REGEX_INCLUDE_QUERY = '#include\\s+"[^"]+"';
 const BRACE_SCOPED_REGEX_GAME_SETTING_QUERY = 'GameSetting(Value|Registry)';
+const MIXED_SCOPED_UNSCOPED_QUERY = '{WorkspaceA/Source/Tools/**/*.cs,WorkspaceB/Source/Editor/**/*.{h,cpp},Source/Scripting/**/*.as}';
+const MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY = '{WorkspaceA/Source/Scripting/**/*.as,Source/Scripting/**/*.as}';
+const MIXED_SCOPED_UNSCOPED_TEXT_QUERY = 'BraceWorkspaceSignal';
 const BRACE_WORKSPACE_NAMES = ['WorkspaceA', 'WorkspaceB'];
 const BRACE_SCOPED_EXTENSIONS = new Set<string>(['.h', '.cpp', '.cs', '.as']);
 const MIN_EXPECTED_BRACE_SCOPED_FILES = 100;
 const MIN_EXPECTED_PER_WORKSPACE_FILES = 20;
+const MIXED_SCOPED_UNSCOPED_EXPECTED_PATHS = new Set<string>([
+  'WorkspaceA/Source/Scripting/ScopeAnchor.as',
+  'WorkspaceA/Source/Tools/ScopeAnchor.cs',
+  'WorkspaceB/Source/Scripting/BridgeAnchor.as',
+  'WorkspaceB/Source/Editor/Public/BridgeAnchor.h',
+  'WorkspaceB/Source/Editor/Private/BridgeAnchor.cpp',
+]);
+const MIXED_SCOPED_UNSCOPED_OVERLAP_EXPECTED_PATHS = new Set<string>([
+  'WorkspaceA/Source/Scripting/ScopeAnchor.as',
+  'WorkspaceB/Source/Scripting/BridgeAnchor.as',
+]);
 
 interface QgrepFileRecord {
   absolutePath: string;
@@ -90,10 +104,22 @@ async function collectBraceScopedFixtureFiles(): Promise<ExpectedFixtureFile[]> 
   return files;
 }
 
-async function collectBraceScopedFixtureMatches(query: string): Promise<ExpectedFixtureMatch[]> {
+async function collectBraceFixtureFilesByWorkspacePathSet(
+  workspacePaths: ReadonlySet<string>,
+): Promise<ExpectedFixtureFile[]> {
+  const files = await collectBraceScopedFixtureFiles();
+  const selected = files.filter((file) => workspacePaths.has(file.workspacePath));
+  selected.sort(compareFileRecords);
+  return selected;
+}
+
+async function collectFixtureMatchesInFiles(
+  files: readonly ExpectedFixtureFile[],
+  query: string,
+): Promise<ExpectedFixtureMatch[]> {
   const normalizedQuery = query.toLowerCase();
   const matches: ExpectedFixtureMatch[] = [];
-  for (const file of await collectBraceScopedFixtureFiles()) {
+  for (const file of files) {
     const fileText = await fs.promises.readFile(file.absolutePath, 'utf8');
     const lines = fileText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     for (let index = 0; index < lines.length; index += 1) {
@@ -110,6 +136,10 @@ async function collectBraceScopedFixtureMatches(query: string): Promise<Expected
   }
   matches.sort(compareMatchRecords);
   return matches;
+}
+
+async function collectBraceScopedFixtureMatches(query: string): Promise<ExpectedFixtureMatch[]> {
+  return collectFixtureMatchesInFiles(await collectBraceScopedFixtureFiles(), query);
 }
 
 async function collectBraceScopedFixtureRegexMatches(
@@ -138,6 +168,28 @@ async function collectBraceScopedFixtureRegexMatches(
 
   matches.sort(compareMatchRecords);
   return matches;
+}
+
+async function collectMixedScopedUnscopedFixtureFiles(): Promise<ExpectedFixtureFile[]> {
+  return collectBraceFixtureFilesByWorkspacePathSet(MIXED_SCOPED_UNSCOPED_EXPECTED_PATHS);
+}
+
+async function collectMixedScopedUnscopedFixtureMatches(): Promise<ExpectedFixtureMatch[]> {
+  return collectFixtureMatchesInFiles(
+    await collectMixedScopedUnscopedFixtureFiles(),
+    MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
+  );
+}
+
+async function collectMixedScopedUnscopedOverlapFixtureFiles(): Promise<ExpectedFixtureFile[]> {
+  return collectBraceFixtureFilesByWorkspacePathSet(MIXED_SCOPED_UNSCOPED_OVERLAP_EXPECTED_PATHS);
+}
+
+async function collectMixedScopedUnscopedOverlapFixtureMatches(): Promise<ExpectedFixtureMatch[]> {
+  return collectFixtureMatchesInFiles(
+    await collectMixedScopedUnscopedOverlapFixtureFiles(),
+    MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
+  );
 }
 
 function assertFixtureRichEnough(expectedFiles: readonly ExpectedFixtureFile[]): void {
@@ -338,6 +390,29 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'applies mixed scoped and unscoped top-level brace alternation to qgrep file search',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedFiles = await collectMixedScopedUnscopedFixtureFiles();
+
+        const payload = await executeQgrepFilesSearch({
+          query: MIXED_SCOPED_UNSCOPED_QUERY,
+          maxResults: 400,
+        });
+
+        assert.equal(payload.scope ?? null, null);
+        assert.equal(payload.querySemanticsApplied, 'glob-vscode');
+        assert.equal(payload.count, expectedFiles.length);
+        assert.equal(payload.totalAvailable, expectedFiles.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 400);
+        assertFileRecordsMatch(payload, expectedFiles);
+      },
+    },
+    {
       name: 'applies brace-scoped includePattern filtering to qgrep text search',
       run: async () => {
         await activateExtension();
@@ -361,6 +436,60 @@ export async function run(): Promise<void> {
         assert.equal(payload.totalAvailableCapped === true, false);
         assert.equal(payload.hardLimitHit === true, false);
         assert.equal(payload.maxResultsApplied, 1500);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'applies mixed scoped and unscoped top-level brace alternation to qgrep text search',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectMixedScopedUnscopedFixtureMatches();
+        assert.ok(expectedMatches.length > 0, 'Expected mixed scoped/unscoped fixture to contain text matches.');
+
+        const payload = await executeQgrepSearch({
+          query: MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
+          includePattern: MIXED_SCOPED_UNSCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.includePattern, MIXED_SCOPED_UNSCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'de-duplicates overlapping scoped and unscoped branches in qgrep text search',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectMixedScopedUnscopedOverlapFixtureMatches();
+        assert.ok(expectedMatches.length > 0, 'Expected overlap fixture to contain text matches.');
+
+        const payload = await executeQgrepSearch({
+          query: MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
+          includePattern: MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.includePattern, MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
         assertMatchRecordsMatch(payload, expectedMatches);
       },
     },

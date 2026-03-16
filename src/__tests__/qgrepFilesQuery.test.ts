@@ -78,15 +78,15 @@ test('glob draft normalizes Windows separators in WorkspaceName-prefixed pattern
 
 test('glob draft expands brace-scoped multi-workspace patterns', () => {
   const draft = buildFilesQueryDraft(
-    '{CthulhuGame,UE5}/**/*.{h,cpp,cs,as}',
+    '{ProjectGame,UE5}/**/*.{h,cpp,cs,as}',
     'glob',
-    ['CthulhuGame', 'UE5', 'Tools'],
+    ['ProjectGame', 'UE5', 'Tools'],
   );
 
   assert.deepEqual(draft, {
     targets: [
       {
-        workspaceName: 'CthulhuGame',
+        workspaceName: 'ProjectGame',
         kind: 'glob-relative',
         pattern: '**/*.{h,cpp,cs,as}',
       },
@@ -96,7 +96,130 @@ test('glob draft expands brace-scoped multi-workspace patterns', () => {
         pattern: '**/*.{h,cpp,cs,as}',
       },
     ],
-    scope: '{CthulhuGame,UE5}',
+    scope: '{ProjectGame,UE5}',
+    semantics: 'glob-vscode',
+  });
+});
+
+test('glob draft normalizes top-level brace alternation with one workspace prefix', () => {
+  const draft = buildFilesQueryDraft(
+    '{ProjectGame/Source/ProjectGame/**/*.{h,cpp,cs},ProjectGame/Script/**/*.as}',
+    'glob',
+    ['ProjectGame', 'UE5'],
+  );
+
+  assert.deepEqual(draft, {
+    targets: [{
+      workspaceName: 'ProjectGame',
+      kind: 'glob-relative',
+      pattern: '{Source/ProjectGame/**/*.{h,cpp,cs},Script/**/*.as}',
+    }],
+    scope: 'ProjectGame',
+    semantics: 'glob-vscode',
+  });
+});
+
+test('glob draft groups mixed-workspace top-level brace alternation branches by workspace', () => {
+  const draft = buildFilesQueryDraft(
+    '{WorkspaceNameA/Source/ProjectGame/**/*.{h,cpp,cs},WorkspaceNameB/Script/**/*.as,WorkspaceNameA/Script/**/*.as}',
+    'glob',
+    ['WorkspaceNameA', 'WorkspaceNameB', 'WorkspaceNameC'],
+  );
+
+  assert.deepEqual(draft, {
+    targets: [
+      {
+        workspaceName: 'WorkspaceNameA',
+        kind: 'glob-relative',
+        pattern: '{Source/ProjectGame/**/*.{h,cpp,cs},Script/**/*.as}',
+      },
+      {
+        workspaceName: 'WorkspaceNameB',
+        kind: 'glob-relative',
+        pattern: 'Script/**/*.as',
+      },
+    ],
+    scope: '{WorkspaceNameA,WorkspaceNameB}',
+    semantics: 'glob-vscode',
+  });
+});
+
+test('glob draft applies mixed scoped and unscoped top-level brace alternation branches to all workspaces', () => {
+  const draft = buildFilesQueryDraft(
+    '{WorkspaceA/foo/**/*.h,bar/**/*.as}',
+    'glob',
+    ['WorkspaceA', 'WorkspaceB'],
+  );
+
+  assert.deepEqual(draft, {
+    targets: [
+      {
+        workspaceName: 'WorkspaceA',
+        kind: 'glob-relative',
+        pattern: '{foo/**/*.h,bar/**/*.as}',
+      },
+      {
+        workspaceName: 'WorkspaceB',
+        kind: 'glob-relative',
+        pattern: 'bar/**/*.as',
+      },
+    ],
+    scope: null,
+    semantics: 'glob-vscode',
+  });
+});
+
+test('glob draft applies shared unscoped branches to every workspace in mixed alternation', () => {
+  const draft = buildFilesQueryDraft(
+    '{WorkspaceA/foo,WorkspaceB/bar,baz}',
+    'glob',
+    ['WorkspaceA', 'WorkspaceB', 'WorkspaceC'],
+  );
+
+  assert.deepEqual(draft, {
+    targets: [
+      {
+        workspaceName: 'WorkspaceA',
+        kind: 'glob-relative',
+        pattern: '{foo,baz}',
+      },
+      {
+        workspaceName: 'WorkspaceB',
+        kind: 'glob-relative',
+        pattern: '{bar,baz}',
+      },
+      {
+        workspaceName: 'WorkspaceC',
+        kind: 'glob-relative',
+        pattern: 'baz',
+      },
+    ],
+    scope: null,
+    semantics: 'glob-vscode',
+  });
+});
+
+test('glob draft de-duplicates repeated scoped and unscoped branches per workspace', () => {
+  const draft = buildFilesQueryDraft(
+    '{WorkspaceA/foo,foo,WorkspaceA/foo,foo}',
+    'glob',
+    ['WorkspaceA', 'WorkspaceB'],
+  );
+
+  assert.deepEqual(draft, {
+    targets: [
+      {
+        workspaceName: 'WorkspaceA',
+        kind: 'glob-relative',
+        pattern: 'foo',
+      },
+      {
+        workspaceName: 'WorkspaceB',
+        kind: 'glob-relative',
+        pattern: 'foo',
+      },
+    ],
+    scope: null,
     semantics: 'glob-vscode',
   });
 });

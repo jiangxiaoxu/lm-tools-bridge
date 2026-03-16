@@ -1153,9 +1153,9 @@ class QgrepService implements vscode.Disposable {
       (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.name),
     );
     if (scoped) {
-      const matcher = compileWorkspaceGlobPathMatcher(scoped.pattern);
-      return scoped.workspaceNames.map((workspaceName) => {
-        const state = this.requireInitializedState(this.requireWorkspaceFolderByName(workspaceName));
+      return scoped.targets.map((target) => {
+        const matcher = compileWorkspaceGlobPathMatcher(target.pattern);
+        const state = this.requireInitializedState(this.requireWorkspaceFolderByName(target.workspaceName));
         return this.createGlobSearchTarget(state, matcher);
       });
     }

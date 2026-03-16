@@ -83,12 +83,14 @@ function buildGlobFilesQueryDraft(
   const trimmed = query.trim();
   const scoped = tryResolveWorkspaceScopePattern(trimmed, workspaceNames);
   if (scoped) {
-    validateFilesGlobPattern(scoped.pattern);
+    for (const target of scoped.targets) {
+      validateFilesGlobPattern(target.pattern);
+    }
     return {
-      targets: scoped.workspaceNames.map((workspaceName) => ({
-        workspaceName,
+      targets: scoped.targets.map((target) => ({
+        workspaceName: target.workspaceName,
         kind: 'glob-relative' as const,
-        pattern: scoped.pattern,
+        pattern: target.pattern,
       })),
       scope: scoped.scopeLabel,
       semantics: 'glob-vscode',

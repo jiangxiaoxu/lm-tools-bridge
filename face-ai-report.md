@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.124`.
+- Version baseline: `1.0.126`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -60,6 +60,7 @@
 - qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server runtime logs remain in `lm-tools-bridge`.
 - qgrep clear-cancel control flow logs (`... cancelled during clear`) are expected `info` entries and should not be treated as qgrep command failures.
 - `lm_qgrepSearchText.includePattern` supports existing path scopes and glob scopes: non-glob paths must resolve to existing locations inside current workspace folders; glob scopes support workspace-relative patterns, `WorkspaceName/**` and `{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}` style workspace scoping, and absolute-path glob patterns (including Windows UNC path globs), and glob inputs are force-compiled into qgrep-compatible `fi` regex filters that run before qgrep output truncation; bare `|` alternation is rejected with guidance to use `{A,B}` or move alternation into `querySyntax='regex'`.
+- `lm_qgrepSearchText.includePattern` and `lm_qgrepSearchFiles.query` also normalize top-level brace alternation branches into per-workspace scoped patterns when at least one branch uses `WorkspaceName/...`; workspace-relative branches in the same alternation apply to all current workspaces, scoped branches stay limited to their selected workspaces, mixed cases return files summary scope as `all initialized workspaces`, and duplicate per-workspace branches are merged before execution to avoid duplicate file or text hits.
 - `lm_qgrepSearchText` uses `includePattern` for path/glob scope; legacy `searchPath` and `includeIgnoredFiles` inputs are ignored and do not affect query behavior.
 - `lm_findTextInFiles`, `lm_qgrepSearchText`, and `lm_qgrepSearchFiles` reject legacy `isRegexp` input and require `querySyntax` instead.
 - `lm_qgrepSearchFiles` rejects legacy `mode`/`searchPath` inputs; `includeIgnoredFiles` is tolerated but ignored.

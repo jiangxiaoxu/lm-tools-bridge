@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.126] - 2026-03-16
+
+### English
+
+#### Changed
+- qgrep brace-glob scope parsing now supports mixed top-level alternation that combines `WorkspaceName/...` branches with workspace-relative branches. Unscoped branches apply to all current workspaces, scoped branches stay limited to their selected workspaces, and overlapping per-workspace branches are merged before execution to avoid duplicate file or text hits.
+
+### 中文
+
+#### 变更
+- qgrep 的 brace glob scope 解析现已支持在顶层 alternation 中混用 `WorkspaceName/...` 分支和普通 workspace-relative 分支. 不带 workspace 前缀的分支会作用于所有当前 workspace, 带前缀的分支只作用于指定 workspace, 同一 workspace 上重叠的分支会在执行前合并, 避免 file search 或 text search 出现重复命中.
+
 ## [1.0.125] - 2026-03-16
 
 ### English

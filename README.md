@@ -67,6 +67,11 @@ Notes:
   - if nothing matches at every level, use the current directory
 - If the bound VS Code instance closes later, rerun handshake. It will not auto-restart after binding.
 
+### Search Notes
+- `lm_qgrepSearchText.includePattern` and `lm_qgrepSearchFiles.query` support VS Code brace globs.
+- In multi-root workspaces, top-level brace alternatives can mix `WorkspaceName/...` and workspace-relative branches. Unscoped branches apply to all current workspaces, scoped branches stay limited to the selected workspaces, and mixed file-search summaries still show `all initialized workspaces`.
+- Example: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
+
 ### Troubleshooting
 - `node` is missing: install Node.js, restart VS Code, then retry.
 - `Untitled multi-root workspace is not supported`: save it as a real `.code-workspace` file first.
@@ -140,6 +145,11 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
   - 之后按层级逐级向上查找,每一层都先查 `.code-workspace`,再查 `.vscode`,再查 `.git`
   - 如果所有层级都没有命中,就使用当前目录
 - 如果绑定后的 VS Code 实例后续关闭,需要重新握手,不会自动重启.
+
+### Search Notes
+- `lm_qgrepSearchText.includePattern` 和 `lm_qgrepSearchFiles.query` 支持 VS Code brace glob.
+- 在 multi-root workspace 里,顶层 brace alternation 可以混用 `WorkspaceName/...` 和普通 workspace-relative branch. 不带 workspace 前缀的 branch 会作用于所有当前 workspace,带前缀的 branch 只作用于指定 workspace,而 mixed file search 的 summary 仍显示 `all initialized workspaces`.
+- 示例: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
 
 ### 故障排查
 - 缺少 `node`: 先安装 Node.js,重启 VS Code 后再试.

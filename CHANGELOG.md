@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.125] - 2026-03-16
+
+### English
+
+#### Changed
+- MCP transport now switches to stdio mode in the bridged runtime path. Update MCP clients from HTTP endpoints to stdio manager wiring to continue receiving tool calls; see `README.md` section `Codex MCP Config` for the new setup steps.
+
+### 中文
+
+#### 变更
+- MCP 已改为 stdio 运行模式, 运行时请将外部 MCP 客户端从 HTTP 方式切换到 stdio 模式, 否则将无法继续正常调用工具. 迁移前请先查看 `README.md` 中的 `### Codex MCP 配置` 节, 按文档完成连接配置.
+
 ## [1.0.124] - 2026-03-14
 
 ### English

@@ -2590,19 +2590,26 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
     ? payload.querySemanticsApplied
     : null;
   const query = typeof payload.query === 'string' ? payload.query : null;
+  const effectiveQuery = typeof payload.effectiveQuery === 'string' ? payload.effectiveQuery : null;
+  const warnings = Array.isArray(payload.warnings)
+    ? payload.warnings.filter((warning): warning is string => typeof warning === 'string' && warning.length > 0)
+    : [];
   const beforeContextLines = typeof payload.beforeContextLines === 'number'
     ? payload.beforeContextLines
     : 0;
   const afterContextLines = typeof payload.afterContextLines === 'number'
     ? payload.afterContextLines
     : 0;
-  const lineMatcher = query && querySemanticsApplied && caseModeApplied
-    ? buildQgrepSearchLineMatcher(query, querySemanticsApplied, caseModeApplied)
+  const lineMatcherQuery = effectiveQuery ?? query;
+  const lineMatcher = lineMatcherQuery && querySemanticsApplied && caseModeApplied
+    ? buildQgrepSearchLineMatcher(lineMatcherQuery, querySemanticsApplied, caseModeApplied)
     : undefined;
   const groupedMatches = groupQgrepSearchMatchesByPath(payload);
   const lines: string[] = [
     'Qgrep search',
     `query: ${query ?? '<unknown>'}`,
+    ...warnings,
+    ...(effectiveQuery && effectiveQuery !== query ? [`effectiveQuery: ${effectiveQuery}`] : []),
     ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
     ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
     `scope: ${includePattern ?? 'all initialized workspaces'}`,

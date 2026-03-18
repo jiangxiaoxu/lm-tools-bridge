@@ -69,6 +69,7 @@ Notes:
 
 ### Search Notes
 - `lm_qgrepSearchText.includePattern` and `lm_qgrepSearchFiles.query` support VS Code brace globs.
+- In `lm_qgrepSearchText` glob mode, simple top-level `A|B|C` mistakes are auto-normalized to `{A,B,C}` and reported with a warning in the text output. More complex `|` usage should use brace globs or `querySyntax='regex'`.
 - In multi-root workspaces, top-level brace alternatives can mix `WorkspaceName/...` and workspace-relative branches. Unscoped branches apply to all current workspaces, scoped branches stay limited to the selected workspaces, and mixed file-search summaries still show `all initialized workspaces`.
 - Example: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
 
@@ -148,6 +149,7 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 
 ### Search Notes
 - `lm_qgrepSearchText.includePattern` 和 `lm_qgrepSearchFiles.query` 支持 VS Code brace glob.
+- `lm_qgrepSearchText` 在 glob 模式下,会把简单顶层 `A|B|C` 误用自动规范化为 `{A,B,C}`,并在文本输出里给出 warning. 更复杂的 `|` 用法请改用 brace glob 或 `querySyntax='regex'`.
 - 在 multi-root workspace 里,顶层 brace alternation 可以混用 `WorkspaceName/...` 和普通 workspace-relative branch. 不带 workspace 前缀的 branch 会作用于所有当前 workspace,带前缀的 branch 只作用于指定 workspace,而 mixed file search 的 summary 仍显示 `all initialized workspaces`.
 - 示例: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
 

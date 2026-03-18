@@ -21,6 +21,8 @@ const QGREP_READY_POLL_INTERVAL_MS = 100;
 const BRACE_SCOPED_QUERY = '{WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
 const BRACE_SCOPED_NORMALIZED_QUERY = '{WorkspaceB,WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
 const BRACE_SCOPED_TEXT_QUERY = '#include';
+const BRACE_SCOPED_PIPE_TEXT_QUERY = 'BraceWorkspaceSignal|GameSettingRegistry';
+const BRACE_SCOPED_PIPE_TEXT_EFFECTIVE_QUERY = '{BraceWorkspaceSignal,GameSettingRegistry}';
 const BRACE_SCOPED_REGEX_INCLUDE_QUERY = '#include\\s+"[^"]+"';
 const BRACE_SCOPED_REGEX_GAME_SETTING_QUERY = 'GameSetting(Value|Registry)';
 const MIXED_SCOPED_UNSCOPED_QUERY = '{WorkspaceA/Source/Tools/**/*.cs,WorkspaceB/Source/Editor/**/*.{h,cpp},Source/Scripting/**/*.as}';
@@ -115,16 +117,21 @@ async function collectBraceFixtureFilesByWorkspacePathSet(
 
 async function collectFixtureMatchesInFiles(
   files: readonly ExpectedFixtureFile[],
-  query: string,
+  queries: string | readonly string[],
 ): Promise<ExpectedFixtureMatch[]> {
-  const normalizedQuery = query.toLowerCase();
+  const queryList = typeof queries === 'string' ? [queries] : [...queries];
+  const useCaseInsensitive = queryList.every((query) => !/[A-Z]/u.test(query));
+  const normalizedQueries = useCaseInsensitive
+    ? queryList.map((query) => query.toLowerCase())
+    : queryList;
   const matches: ExpectedFixtureMatch[] = [];
   for (const file of files) {
     const fileText = await fs.promises.readFile(file.absolutePath, 'utf8');
     const lines = fileText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     for (let index = 0; index < lines.length; index += 1) {
       const lineText = lines[index] ?? '';
-      if (!lineText.toLowerCase().includes(normalizedQuery)) {
+      const candidate = useCaseInsensitive ? lineText.toLowerCase() : lineText;
+      if (!normalizedQueries.some((query) => candidate.includes(query))) {
         continue;
       }
       matches.push({
@@ -140,6 +147,12 @@ async function collectFixtureMatchesInFiles(
 
 async function collectBraceScopedFixtureMatches(query: string): Promise<ExpectedFixtureMatch[]> {
   return collectFixtureMatchesInFiles(await collectBraceScopedFixtureFiles(), query);
+}
+
+async function collectBraceScopedFixtureMatchesForQueries(
+  queries: readonly string[],
+): Promise<ExpectedFixtureMatch[]> {
+  return collectFixtureMatchesInFiles(await collectBraceScopedFixtureFiles(), queries);
 }
 
 async function collectBraceScopedFixtureRegexMatches(
@@ -467,6 +480,41 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'auto-normalizes simple top-level pipe alternation in qgrep text glob queries',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatchesForQueries([
+          'BraceWorkspaceSignal',
+          'GameSettingRegistry',
+        ]);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain normalized pipe query matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_PIPE_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 1500,
+        });
+
+        assert.equal(payload.query, BRACE_SCOPED_PIPE_TEXT_QUERY);
+        assert.equal(payload.effectiveQuery, BRACE_SCOPED_PIPE_TEXT_EFFECTIVE_QUERY);
+        assert.deepEqual(payload.warnings, [
+          `query was implicitly converted from '${BRACE_SCOPED_PIPE_TEXT_QUERY}' to '${BRACE_SCOPED_PIPE_TEXT_EFFECTIVE_QUERY}' because querySyntax='glob'.`,
+        ]);
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 1500);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
       name: 'de-duplicates overlapping scoped and unscoped branches in qgrep text search',
       run: async () => {
         await activateExtension();
@@ -510,6 +558,8 @@ export async function run(): Promise<void> {
 
         assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'regex');
+        assert.equal(payload.effectiveQuery, undefined);
+        assert.equal(payload.warnings, undefined);
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'insensitive');
         assert.equal(payload.count, expectedMatches.length);

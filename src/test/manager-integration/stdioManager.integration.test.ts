@@ -22,6 +22,8 @@ const QGREP_FILES_TOOL_NAME = 'lm_qgrepSearchFiles';
 const HANDSHAKE_TIMEOUT_MS = 180_000;
 const FILE_QUERY = 'Game/Source/**/*.Target.cs';
 const TEXT_QUERY = 'AvatarCharacter';
+const TEXT_PIPE_QUERY = 'AvatarCharacter|AvatarHealthComponent';
+const TEXT_PIPE_EFFECTIVE_QUERY = '{AvatarCharacter,AvatarHealthComponent}';
 const TEXT_INCLUDE_PATTERN = 'Game/Source/GameRuntime/**/*.{h,cpp}';
 
 interface ManagerConnection {
@@ -238,9 +240,11 @@ async function readOptionalFile(filePath: string): Promise<string> {
   }
 }
 
-async function collectExpectedAvatarMatches(rootDir: string): Promise<QgrepTextMatch[]> {
+async function collectExpectedTextMatches(rootDir: string, queries: readonly string[]): Promise<QgrepTextMatch[]> {
   const searchRoot = path.join(rootDir, 'game', 'Source', 'GameRuntime');
   const matches: QgrepTextMatch[] = [];
+  const useCaseInsensitive = queries.every((query) => !/[A-Z]/u.test(query));
+  const normalizedQueries = useCaseInsensitive ? queries.map((query) => query.toLowerCase()) : [...queries];
 
   async function visit(currentPath: string): Promise<void> {
     const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
@@ -261,7 +265,8 @@ async function collectExpectedAvatarMatches(rootDir: string): Promise<QgrepTextM
       const lines = text.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n').split('\n');
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index] ?? '';
-        if (!line.includes(TEXT_QUERY)) {
+        const candidate = useCaseInsensitive ? line.toLowerCase() : line;
+        if (!normalizedQueries.some((query) => candidate.includes(query))) {
           continue;
         }
         matches.push({
@@ -300,7 +305,11 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     extensionDevelopmentPath: repoRoot,
     isolatedDirs,
   });
-  const expectedAvatarMatches = await collectExpectedAvatarMatches(workspace.rootDir);
+  const expectedAvatarMatches = await collectExpectedTextMatches(workspace.rootDir, [TEXT_QUERY]);
+  const expectedPipeMatches = await collectExpectedTextMatches(workspace.rootDir, [
+    'AvatarCharacter',
+    'AvatarHealthComponent',
+  ]);
   const expectedTargetFiles = [
     normalizePath(path.join(workspace.rootDir, 'game', 'Source', 'Game.Target.cs')),
     normalizePath(path.join(workspace.rootDir, 'game', 'Source', 'GameEditor.Target.cs')),
@@ -404,6 +413,45 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     }
     for (const match of expectedAvatarMatches.slice(0, 5)) {
       assertTextIncludes(textSummary, formatQgrepMatchLine(match), 'qgrep search summary');
+    }
+
+    const pipeTextResult = await manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: QGREP_TEXT_TOOL_NAME,
+        arguments: {
+          query: TEXT_PIPE_QUERY,
+          includePattern: TEXT_INCLUDE_PATTERN,
+          maxResults: 300,
+        },
+      },
+    });
+    const pipeTextSummary = getFirstText(pipeTextResult);
+    assertTextIncludes(pipeTextSummary, 'Qgrep search', 'normalized qgrep search summary');
+    assertTextIncludes(pipeTextSummary, `query: ${TEXT_PIPE_QUERY}`, 'normalized qgrep search summary');
+    assertTextIncludes(
+      pipeTextSummary,
+      `query was implicitly converted from '${TEXT_PIPE_QUERY}' to '${TEXT_PIPE_EFFECTIVE_QUERY}' because querySyntax='glob'.`,
+      'normalized qgrep search summary',
+    );
+    assertTextIncludes(
+      pipeTextSummary,
+      `effectiveQuery: ${TEXT_PIPE_EFFECTIVE_QUERY}`,
+      'normalized qgrep search summary',
+    );
+    assertTextIncludes(pipeTextSummary, 'querySemanticsApplied: glob', 'normalized qgrep search summary');
+    assertTextIncludes(pipeTextSummary, 'case: smart-case/sensitive', 'normalized qgrep search summary');
+    assertTextIncludes(pipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'normalized qgrep search summary');
+    assertTextIncludes(
+      pipeTextSummary,
+      `count: ${String(expectedPipeMatches.length)}/${String(expectedPipeMatches.length)}`,
+      'normalized qgrep search summary',
+    );
+    for (const absolutePath of [...new Set(expectedPipeMatches.map((match) => match.absolutePath))]) {
+      assertTextIncludes(pipeTextSummary, absolutePath, 'normalized qgrep search summary', true);
+    }
+    for (const match of expectedPipeMatches.slice(0, 5)) {
+      assertTextIncludes(pipeTextSummary, formatQgrepMatchLine(match), 'normalized qgrep search summary');
     }
   } catch (error) {
     const diagnostics = [

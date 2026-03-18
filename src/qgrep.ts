@@ -7,6 +7,7 @@ import {
   compileGlobToRegexSource,
   compileTextQueryGlobToRegexSource,
   hasUnescapedGlobMeta,
+  normalizeTextQueryGlobPipeAlternation,
   normalizeFilesQueryGlobErrorMessage,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
@@ -385,8 +386,14 @@ class QgrepService implements vscode.Disposable {
     const caseSensitive = this.parseOptionalBooleanInput(input.caseSensitive, 'caseSensitive');
     const beforeContextLines = parseOptionalContextLineCount(input.beforeContextLines, 'beforeContextLines');
     const afterContextLines = parseOptionalContextLineCount(input.afterContextLines, 'afterContextLines');
+    const warnings: string[] = [];
     const querySemanticsApplied: QgrepTextQuerySemantics = querySyntax === 'regex' ? 'regex' : 'glob';
-    const effectiveQuery = querySyntax === 'regex' ? query : compileTextQueryGlobToRegexSource(query);
+    const effectiveQuery = querySyntax === 'regex'
+      ? query
+      : this.normalizeTextQueryGlobWithWarnings(query, warnings);
+    const effectiveBackendQuery = querySyntax === 'regex'
+      ? effectiveQuery
+      : compileTextQueryGlobToRegexSource(effectiveQuery);
     const casePolicy: QgrepTextCasePolicy = caseSensitive === true
       ? 'explicit-case-sensitive'
       : 'smart-case';
@@ -398,10 +405,10 @@ class QgrepService implements vscode.Disposable {
       : this.shouldUseCaseInsensitiveSearchForQuery(query);
     await this.ensureToolSearchReady();
     if (includePattern && this.isGlobIncludePattern(includePattern)) {
-      return this.searchWithGlobIncludePattern(
+      const payload = await this.searchWithGlobIncludePattern(
         includePattern,
         query,
-        effectiveQuery,
+        effectiveBackendQuery,
         querySemanticsApplied,
         casePolicy,
         useCaseInsensitiveSearch,
@@ -409,6 +416,11 @@ class QgrepService implements vscode.Disposable {
         beforeContextLines,
         afterContextLines,
       );
+      return {
+        ...payload,
+        ...(effectiveQuery !== query ? { effectiveQuery } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
     }
 
     const targets = this.resolveSearchTargets(includePattern);
@@ -424,7 +436,7 @@ class QgrepService implements vscode.Disposable {
     for (const target of targets) {
       const targetResult = await this.searchInWorkspace(
         target,
-        effectiveQuery,
+        effectiveBackendQuery,
         useCaseInsensitiveSearch,
         maxResultsApplied,
       );
@@ -447,6 +459,8 @@ class QgrepService implements vscode.Disposable {
 
     return {
       query,
+      ...(effectiveQuery !== query ? { effectiveQuery } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
       includePattern: includePattern ?? null,
       ...maxResultsPayload,
       totalAvailable,
@@ -785,6 +799,17 @@ class QgrepService implements vscode.Disposable {
       throw new Error('query must be a non-empty string.');
     }
     return trimmed;
+  }
+
+  private normalizeTextQueryGlobWithWarnings(query: string, warnings: string[]): string {
+    const result = normalizeTextQueryGlobPipeAlternation(query);
+    if (!result.normalized) {
+      return query;
+    }
+    warnings.push(
+      `query was implicitly converted from '${query}' to '${result.pattern}' because querySyntax='glob'.`,
+    );
+    return result.pattern;
   }
 
   private parseOptionalBooleanInput(value: unknown, key: string): boolean | undefined {

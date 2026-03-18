@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.128] - 2026-03-18
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.128.
+- `lm_qgrepSearchText` now auto-normalizes simple top-level `A|B|C` glob mistakes to brace globs with `warning` and `effectiveQuery` in text output, while more complex non-top-level `|` usage now fails fast with guidance.
+
+### 中文
+
+#### 变更
+- 版本补丁号提升至 1.0.128.
+- `lm_qgrepSearchText` 现在会将简单顶层 `A|B|C` glob 误用自动规范化为 brace glob,并在文本输出中提示 `warning` 与 `effectiveQuery`; 更复杂的非顶层 `|` 用法现在会直接 fail-fast,并提示改用 brace glob 或 `querySyntax='regex'`.
+
 ## [1.0.127] - 2026-03-16
 
 ### English

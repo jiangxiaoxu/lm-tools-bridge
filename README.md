@@ -70,6 +70,7 @@ Notes:
 
 ### Search Notes
 - `lm_qgrepSearchText.includePattern` and `lm_qgrepSearchFiles.query` support VS Code brace globs.
+- qgrep-managed Unreal include rules also index `*.uplugin` and `*.uproject` alongside `*.ush`, `*.usf`, and `*.ini`.
 - `lm_qgrepSearchText` defaults to literal text search. Top-level unescaped `|` means literal OR, only a whole branch wrapped by outer double quotes keeps `|` literal, and unquoted `\|` also keeps `|` literal.
 - Literal branch whitespace is preserved exactly. `A | B` means searching for `A ` or ` B`, not `A` or `B`.
 - Whitespace-only branches between two pipe separators are discarded. `A| |B` behaves like `A|B`.
@@ -158,6 +159,7 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 
 ### Search Notes
 - `lm_qgrepSearchText.includePattern` 和 `lm_qgrepSearchFiles.query` 支持 VS Code brace glob.
+- qgrep 自动维护的 Unreal include 规则现在也会索引 `*.uplugin` 和 `*.uproject`,以及原有的 `*.ush`,`*.usf`,`*.ini`.
 - `lm_qgrepSearchText` 默认按 literal 文本搜索. 顶层未转义 `|` 表示 literal OR,只有被最外层成对双引号完整包裹的 branch 才会保留字面量 `|`,未引用 branch 中的 `\|` 也表示字面量 `|`.
 - literal branch 两侧空格会被严格保留. `A | B` 表示搜索 `A ` 或 ` B`,而不是 `A` 或 `B`.
 - 如果两个 `|` 之间只有空白字符,这一段会被直接丢弃,所以 `A| |B` 等价于 `A|B`.

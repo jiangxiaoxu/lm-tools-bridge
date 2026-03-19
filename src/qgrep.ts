@@ -49,8 +49,9 @@ const QGREP_MANAGED_SEARCH_EXCLUDE_SOURCE_COMMENT = '# source: VS Code search.ex
 const QGREP_MANAGED_SEARCH_EXCLUDE_EMPTY_COMMENT = '# no eligible search.exclude=true patterns';
 const QGREP_MANAGED_SHADER_INCLUDE_BLOCK_BEGIN = '# BEGIN lm-tools-bridge managed shader include';
 const QGREP_MANAGED_SHADER_INCLUDE_BLOCK_END = '# END lm-tools-bridge managed shader include';
-const QGREP_MANAGED_SHADER_INCLUDE_SOURCE_COMMENT = '# source: lm-tools-bridge Unreal Engine include set (*.ush, *.usf, *.ini)';
-const QGREP_MANAGED_SHADER_INCLUDE_RULE = '\\.(ush|usf|ini)$';
+const QGREP_MANAGED_SHADER_INCLUDE_SOURCE_COMMENT =
+  '# source: lm-tools-bridge Unreal Engine include set (*.ush, *.usf, *.ini, *.uplugin, *.uproject)';
+const QGREP_MANAGED_SHADER_INCLUDE_RULE = '\\.(ush|usf|ini|uplugin|uproject)$';
 const QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_BEGIN = '# BEGIN lm-tools-bridge managed powershell include';
 const QGREP_MANAGED_POWERSHELL_INCLUDE_BLOCK_END = '# END lm-tools-bridge managed powershell include';
 const QGREP_MANAGED_POWERSHELL_INCLUDE_SOURCE_COMMENT = '# source: lm-tools-bridge PowerShell include set (*.ps1)';

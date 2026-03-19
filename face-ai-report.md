@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.130`.
+- Version baseline: `1.0.132`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -54,7 +54,7 @@
 - `Qgrep Stop And Clear Indexes` cancels in-flight qgrep index commands (`init`/`update`/`build`) before deleting `.vscode/qgrep` for all current workspaces, reducing clear-time qgrep `workspace.cfg` read errors.
 - Status menu qgrep actions are dynamic: show `Qgrep Init All Workspaces` only when `initializedWorkspaces=0`; otherwise show only `Qgrep Rebuild Indexes` and `Qgrep Stop And Clear Indexes`.
 - Status menu quick pick inserts a visual separator below qgrep actions before general actions (`Open Settings`, `Open Extension Page`).
-- qgrep initialized `workspace.cfg` files include an extension-managed Unreal include block for `*.ush`/`*.usf`/`*.ini` plus an extension-managed PowerShell include block for `*.ps1`, and an extension-managed `search.exclude` block (`true` entries only) with fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`; `.gitignore` is not synced.
+- qgrep initialized `workspace.cfg` files include an extension-managed Unreal include block for `*.ush`/`*.usf`/`*.ini`/`*.uplugin`/`*.uproject` plus an extension-managed PowerShell include block for `*.ps1`, and an extension-managed `search.exclude` block (`true` entries only) with fixed excludes for `.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, and `.vscode`; `.gitignore` is not synced.
 - Generated qgrep regexes (both `workspace.cfg` sync rules and runtime `includePattern` glob filters) are validated to avoid non-capturing groups (`(?:...)`) and other Perl-style `(?...)` constructs because qgrep rejects that syntax.
 - qgrep multi-root storage is per-workspace under `<workspace>/.vscode/qgrep`; `Qgrep Stop And Clear Indexes` removes that directory for all current workspaces and disables maintenance until re-init.
 - qgrep runtime logs are written to a dedicated VS Code log channel `lm-tools-bridge-qgrep`; tooling debug logs use `lm-tools-bridge-tools`; server runtime logs remain in `lm-tools-bridge`.

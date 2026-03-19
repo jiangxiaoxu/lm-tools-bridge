@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.132] - 2026-03-19
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.132.
+- Expanded the qgrep managed Unreal include set so indexed workspaces now include `*.uplugin` and `*.uproject` files alongside `*.ush`, `*.usf`, and `*.ini`.
+
+### 中文
+
+#### 变更
+- 将 patch 版本提升到 1.0.132。
+- 扩展 qgrep 自动维护的 Unreal include 集合,现在除了 `*.ush`,`*.usf`,`*.ini` 之外,还会索引 `*.uplugin` 和 `*.uproject` 文件。
+
 ## [1.0.131] - 2026-03-19
 
 ### English

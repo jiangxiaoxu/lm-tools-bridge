@@ -24,7 +24,9 @@ const QGREP_READY_TIMEOUT_MS = 30_000;
 const QGREP_READY_POLL_INTERVAL_MS = 100;
 const BRACE_SCOPED_QUERY = '{WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
 const BRACE_SCOPED_NORMALIZED_QUERY = '{WorkspaceB,WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
+const BRACE_UNREAL_CONFIG_QUERY = '{WorkspaceA,WorkspaceB}/**/*.{uplugin,uproject}';
 const BRACE_SCOPED_TEXT_QUERY = '#include';
+const BRACE_UNREAL_CONFIG_TEXT_QUERY = 'BraceWorkspaceConfigSignal';
 const BRACE_SCOPED_PIPE_TEXT_QUERY = 'BraceWorkspaceSignal|GameSettingRegistry';
 const BRACE_SCOPED_QUOTED_PIPE_TEXT_QUERY = '"BraceWorkspaceSignal|GameSettingRegistry"';
 const BRACE_SCOPED_ESCAPED_PIPE_TEXT_QUERY = 'BraceWorkspaceSignal\\|GameSettingRegistry';
@@ -42,6 +44,10 @@ const MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY = '{WorkspaceA/Source/Scripting/**/*.a
 const MIXED_SCOPED_UNSCOPED_TEXT_QUERY = 'BraceWorkspaceSignal';
 const BRACE_WORKSPACE_NAMES = ['WorkspaceA', 'WorkspaceB'];
 const BRACE_SCOPED_EXTENSIONS = new Set<string>(['.h', '.cpp', '.cs', '.as']);
+const BRACE_UNREAL_CONFIG_WORKSPACE_PATHS = [
+  'WorkspaceA/BraceWorkspaceA.uproject',
+  'WorkspaceB/Plugins/BraceWorkspacePlugin/BraceWorkspacePlugin.uplugin',
+];
 const MIN_EXPECTED_BRACE_SCOPED_FILES = 100;
 const MIN_EXPECTED_PER_WORKSPACE_FILES = 20;
 const MIXED_SCOPED_UNSCOPED_EXPECTED_PATHS = new Set<string>([
@@ -125,6 +131,29 @@ async function collectBraceFixtureFilesByWorkspacePathSet(
   const selected = files.filter((file) => workspacePaths.has(file.workspacePath));
   selected.sort(compareFileRecords);
   return selected;
+}
+
+async function collectExplicitWorkspacePathFiles(
+  workspacePaths: readonly string[],
+): Promise<ExpectedFixtureFile[]> {
+  const workspaceFolderMap = new Map(getBraceWorkspaceFolders().map((folder) => [folder.name, folder]));
+  const files: ExpectedFixtureFile[] = [];
+  for (const workspacePath of workspacePaths) {
+    const [workspaceName, ...relativeSegments] = workspacePath.split('/');
+    assert.ok(workspaceName, `Expected workspace-qualified path, received '${workspacePath}'.`);
+    const folder = workspaceFolderMap.get(workspaceName);
+    assert.ok(folder, `Expected workspace '${workspaceName}' to exist for '${workspacePath}'.`);
+    const relativePath = relativeSegments.join('/');
+    const absolutePath = path.resolve(folder.uri.fsPath, relativePath);
+    await fs.promises.access(absolutePath, fs.constants.F_OK);
+    files.push({
+      absolutePath: normalizePath(absolutePath),
+      workspacePath,
+      workspaceFolder: workspaceName,
+    });
+  }
+  files.sort(compareFileRecords);
+  return files;
 }
 
 async function collectFixtureMatchesInFiles(
@@ -415,6 +444,29 @@ export async function run(): Promise<void> {
       },
     },
     {
+      name: 'indexes Unreal project and plugin config files through the managed include set',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedFiles = await collectExplicitWorkspacePathFiles(BRACE_UNREAL_CONFIG_WORKSPACE_PATHS);
+
+        const payload = await executeQgrepFilesSearch({
+          query: BRACE_UNREAL_CONFIG_QUERY,
+          maxResults: 50,
+        });
+
+        assert.equal(payload.scope, '{WorkspaceA,WorkspaceB}');
+        assert.equal(payload.querySemanticsApplied, 'glob-vscode');
+        assert.equal(payload.count, expectedFiles.length);
+        assert.equal(payload.totalAvailable, expectedFiles.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 50);
+        assertFileRecordsMatch(payload, expectedFiles);
+      },
+    },
+    {
       name: 'applies mixed scoped and unscoped top-level brace alternation to qgrep file search',
       run: async () => {
         await activateExtension();
@@ -461,6 +513,37 @@ export async function run(): Promise<void> {
         assert.equal(payload.totalAvailableCapped === true, false);
         assert.equal(payload.hardLimitHit === true, false);
         assert.equal(payload.maxResultsApplied, 1500);
+        assert.equal(payload.queryHints, undefined);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'searches inside Unreal project and plugin config files through the managed include set',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectFixtureMatchesInFiles(
+          await collectExplicitWorkspacePathFiles(BRACE_UNREAL_CONFIG_WORKSPACE_PATHS),
+          BRACE_UNREAL_CONFIG_TEXT_QUERY,
+        );
+        assert.ok(expectedMatches.length > 0, 'Expected Unreal config fixture files to contain text matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_UNREAL_CONFIG_TEXT_QUERY,
+          includePattern: BRACE_UNREAL_CONFIG_QUERY,
+          maxResults: 50,
+        });
+
+        assert.equal(payload.includePattern, BRACE_UNREAL_CONFIG_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'literal');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 50);
         assert.equal(payload.queryHints, undefined);
         assertMatchRecordsMatch(payload, expectedMatches);
       },

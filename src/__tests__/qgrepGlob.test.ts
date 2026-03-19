@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
   compileFilesQueryGlobToRegexSource,
   compileGlobToRegexSource,
-  normalizeTextQueryGlobPipeAlternation,
   normalizeFilesQueryGlobPattern,
 } from '../qgrepGlob';
 
@@ -11,11 +10,6 @@ function compileFilesGlobRegex(glob: string): RegExp {
   const normalized = normalizeFilesQueryGlobPattern(glob);
   const source = compileGlobToRegexSource(normalized, 'query glob pattern');
   return new RegExp(`^${source}$`, 'u');
-}
-
-function compileTextGlobRegex(glob: string): RegExp {
-  const source = compileGlobToRegexSource(glob, 'query glob pattern');
-  return new RegExp(source, 'u');
 }
 
 function escapeRegex(value: string): string {
@@ -63,54 +57,6 @@ test('files glob supports brace and negated char class', () => {
   assert.equal(negatedClassRegex.test('a.ts'), false);
   assert.equal(negatedClassRegex.test('b.ts'), true);
   assert.equal(negatedClassRegex.test('src/b.ts'), true);
-});
-
-test('text glob keeps substring matching and VS Code slash behavior', () => {
-  const singleStar = compileTextGlobRegex('foo*bar');
-  assert.equal(singleStar.test('prefix foo123bar suffix'), true);
-  assert.equal(singleStar.test('prefix foo/bar suffix'), false);
-
-  const doubleStar = compileTextGlobRegex('foo**bar');
-  assert.equal(doubleStar.test('prefix foo/bar suffix'), true);
-  assert.equal(doubleStar.test('prefix foo/a/b/bar suffix'), true);
-});
-
-test('text glob keeps ? and {} semantics with slash boundary', () => {
-  const regex = compileTextGlobRegex('ab?{c,d}');
-  assert.equal(regex.test('zzabXczz'), true);
-  assert.equal(regex.test('zzabYdzz'), true);
-  assert.equal(regex.test('zzab/czz'), false);
-});
-
-test('text query top-level pipe alternation auto-normalizes to brace glob', () => {
-  const result = normalizeTextQueryGlobPipeAlternation('Foo|Bar|Baz');
-  assert.deepEqual(result, {
-    pattern: '{Foo,Bar,Baz}',
-    normalized: true,
-  });
-});
-
-test('text query keeps escaped pipe literal without normalization', () => {
-  const result = normalizeTextQueryGlobPipeAlternation('Foo\\|Bar');
-  assert.deepEqual(result, {
-    pattern: 'Foo\\|Bar',
-    normalized: false,
-  });
-});
-
-test('text query keeps character-class pipe literal without normalization', () => {
-  const result = normalizeTextQueryGlobPipeAlternation('Foo[|]Bar');
-  assert.deepEqual(result, {
-    pattern: 'Foo[|]Bar',
-    normalized: false,
-  });
-});
-
-test('text query rejects non-top-level pipe alternation inside brace expressions', () => {
-  assert.throws(
-    () => normalizeTextQueryGlobPipeAlternation('Foo{Bar|Baz}'),
-    /top-level '\|' alternation auto-normalization only supports simple branches/u,
-  );
 });
 
 test('workspace-anchored files glob scopes nested paths to the selected workspace root', () => {

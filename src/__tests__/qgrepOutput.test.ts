@@ -5,22 +5,72 @@ import {
   buildMergedLineWindows,
   buildRenderedSearchBlocks,
   collectQgrepFileOutputPaths,
+  formatQgrepSearchContextSummary,
   formatQgrepFilesSummary,
   formatQgrepSearchLine,
   parseOptionalContextLineCount,
+  QGREP_SEARCH_CONTEXT_LINES_LIMIT,
   requiresStructuredCustomToolResult,
 } from '../qgrepOutput';
 
-test('context line count parser applies default and validates bounds', () => {
-  assert.equal(parseOptionalContextLineCount(undefined, 'beforeContextLines'), 0);
-  assert.equal(parseOptionalContextLineCount(20, 'afterContextLines'), 20);
+test('context line count parser applies default and clamps high values', () => {
+  assert.deepEqual(parseOptionalContextLineCount(undefined, 'beforeContextLines'), {
+    applied: 0,
+    wasClamped: false,
+  });
+  assert.deepEqual(parseOptionalContextLineCount(null, 'afterContextLines'), {
+    applied: 0,
+    wasClamped: false,
+  });
+  assert.deepEqual(parseOptionalContextLineCount(50, 'afterContextLines'), {
+    applied: 50,
+    wasClamped: false,
+  });
+  assert.deepEqual(parseOptionalContextLineCount(80, 'beforeContextLines'), {
+    applied: QGREP_SEARCH_CONTEXT_LINES_LIMIT,
+    requested: 80,
+    wasClamped: true,
+  });
+});
+
+test('context line count parser keeps invalid values fail-fast', () => {
   assert.throws(
     () => parseOptionalContextLineCount(-1, 'beforeContextLines'),
-    /beforeContextLines must be an integer between 0 and 20 when provided\./u,
+    /beforeContextLines must be an integer greater than or equal to 0 when provided\./u,
   );
   assert.throws(
-    () => parseOptionalContextLineCount(21, 'afterContextLines'),
-    /afterContextLines must be an integer between 0 and 20 when provided\./u,
+    () => parseOptionalContextLineCount(2.5, 'afterContextLines'),
+    /afterContextLines must be an integer greater than or equal to 0 when provided\./u,
+  );
+  assert.throws(
+    () => parseOptionalContextLineCount(Number.NaN, 'afterContextLines'),
+    /afterContextLines must be a finite number when provided\./u,
+  );
+  assert.throws(
+    () => parseOptionalContextLineCount(Number.POSITIVE_INFINITY, 'afterContextLines'),
+    /afterContextLines must be a finite number when provided\./u,
+  );
+});
+
+test('qgrep search context summary adds truncation hint only when requested values were capped', () => {
+  assert.deepEqual(
+    formatQgrepSearchContextSummary({
+      beforeContextLines: 2,
+      afterContextLines: 8,
+    }),
+    ['context: before=2, after=8'],
+  );
+
+  assert.deepEqual(
+    formatQgrepSearchContextSummary({
+      beforeContextLines: 50,
+      afterContextLines: 8,
+      beforeContextLinesRequested: 80,
+    }),
+    [
+      'context: before=50, after=8',
+      `contextRequested: before=80, after=8 (capped to ${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)})`,
+    ],
   );
 });
 
@@ -53,7 +103,7 @@ test('rendered blocks include context and mark match lines', () => {
 });
 
 test('context rendering marks additional true matches inside the selected window', () => {
-  const matcher = buildQgrepSearchLineMatcher('foo', 'glob', 'insensitive');
+  const matcher = buildQgrepSearchLineMatcher('foo', 'literal', 'insensitive');
   assert.ok(matcher);
 
   const blocks = buildRenderedSearchBlocks('zero\nfoo\nFOO\nfour', [2], 1, 1, matcher);
@@ -71,7 +121,7 @@ test('context rendering marks additional true matches inside the selected window
 });
 
 test('additional local matches do not expand context windows', () => {
-  const matcher = buildQgrepSearchLineMatcher('foo', 'glob', 'insensitive');
+  const matcher = buildQgrepSearchLineMatcher('foo', 'literal', 'insensitive');
   assert.ok(matcher);
 
   const blocks = buildRenderedSearchBlocks('zero\nfoo\ntwo\nFOO\nfour', [2], 1, 1, matcher);
@@ -88,10 +138,29 @@ test('additional local matches do not expand context windows', () => {
   );
 });
 
-test('line matcher respects glob smart-case sensitive matching', () => {
-  const matcher = buildQgrepSearchLineMatcher('Foo', 'glob', 'sensitive');
+test('line matcher respects literal smart-case sensitive matching', () => {
+  const matcher = buildQgrepSearchLineMatcher('Foo', 'literal', 'sensitive');
   assert.ok(matcher);
   assert.equal(matcher('prefix Foo suffix'), true);
+  assert.equal(matcher('prefix foo suffix'), false);
+});
+
+test('line matcher supports literal union and quoted literal pipe branches', () => {
+  const unionMatcher = buildQgrepSearchLineMatcher('foo|bar', 'literal', 'insensitive');
+  assert.ok(unionMatcher);
+  assert.equal(unionMatcher('zzzBARzzz'), true);
+  assert.equal(unionMatcher('zzzbazzzz'), false);
+
+  const quotedMatcher = buildQgrepSearchLineMatcher('"foo|bar"', 'literal', 'sensitive');
+  assert.ok(quotedMatcher);
+  assert.equal(quotedMatcher('prefix foo|bar suffix'), true);
+  assert.equal(quotedMatcher('prefix foo suffix'), false);
+});
+
+test('line matcher supports literal fallback queries', () => {
+  const matcher = buildQgrepSearchLineMatcher('foo||bar', 'literal-fallback', 'sensitive');
+  assert.ok(matcher);
+  assert.equal(matcher('prefix foo||bar suffix'), true);
   assert.equal(matcher('prefix foo suffix'), false);
 });
 
@@ -104,6 +173,10 @@ test('line matcher supports regex queries', () => {
 
 test('invalid local regex matcher falls back to undefined', () => {
   assert.equal(buildQgrepSearchLineMatcher('(', 'regex', 'sensitive'), undefined);
+});
+
+test('invalid local literal matcher falls back to undefined', () => {
+  assert.equal(buildQgrepSearchLineMatcher('   ', 'literal', 'sensitive'), undefined);
 });
 
 test('search line formatter uses fixed four-space separator', () => {

@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.129] - 2026-03-19
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.129.
+- `lm_qgrepSearchText` now defaults to literal-or-regex text semantics: top-level `|` means literal OR, only whole outer double-quoted branches keep `|` literal, malformed quotes are treated as ordinary characters, and empty split branches fall back to matching the raw query literally.
+- `beforeContextLines` and `afterContextLines` now clamp at `50` instead of failing when oversized, and qgrep text summaries report the originally requested context values when truncation happens.
+
+### 中文
+
+#### 变更
+- 版本补丁号提升至 1.0.129.
+- `lm_qgrepSearchText` 现在固定使用 literal 或 regex 文本语义: 顶层 `|` 表示 literal OR,只有最外层完整双引号包裹的 branch 才会保留字面量 `|`,不完整引号按普通字符处理,空 branch 会回退为按原始 query 做 literal 匹配.
+- `beforeContextLines` 和 `afterContextLines` 的超限输入现在会钳制到 `50`,不再直接报错,并且 qgrep 文本摘要会显示被截断前的原始请求值.
+
 ## [1.0.128] - 2026-03-18
 
 ### English

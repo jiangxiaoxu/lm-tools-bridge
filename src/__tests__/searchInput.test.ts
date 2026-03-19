@@ -13,12 +13,23 @@ test('findText querySyntax defaults to literal', () => {
   assert.equal(syntax, 'literal');
 });
 
-test('qgrep querySyntax accepts regex', () => {
+test('qgrep text querySyntax defaults to literal', () => {
+  const syntax = parseQuerySyntax({
+    input: {},
+    toolName: 'lm_qgrepSearchText',
+    allowed: ['literal', 'regex'],
+    defaultSyntax: 'literal',
+  });
+
+  assert.equal(syntax, 'literal');
+});
+
+test('qgrep text querySyntax accepts regex', () => {
   const syntax = parseQuerySyntax({
     input: { querySyntax: 'regex' },
     toolName: 'lm_qgrepSearchText',
-    allowed: ['glob', 'regex'],
-    defaultSyntax: 'glob',
+    allowed: ['literal', 'regex'],
+    defaultSyntax: 'literal',
   });
 
   assert.equal(syntax, 'regex');
@@ -29,14 +40,26 @@ test('legacy isRegexp is rejected with a migration hint', () => {
     () => parseQuerySyntax({
       input: { isRegexp: true },
       toolName: 'lm_qgrepSearchText',
-      allowed: ['glob', 'regex'],
-      defaultSyntax: 'glob',
+      allowed: ['literal', 'regex'],
+      defaultSyntax: 'literal',
     }),
     /isRegexp is no longer supported for lm_qgrepSearchText/u,
   );
 });
 
-test('invalid querySyntax values are rejected', () => {
+test('invalid qgrep text querySyntax values are rejected', () => {
+  assert.throws(
+    () => parseQuerySyntax({
+      input: { querySyntax: 'glob' },
+      toolName: 'lm_qgrepSearchText',
+      allowed: ['literal', 'regex'],
+      defaultSyntax: 'literal',
+    }),
+    /querySyntax must be one of: 'literal', 'regex'\./u,
+  );
+});
+
+test('invalid qgrep files querySyntax values are rejected', () => {
   assert.throws(
     () => parseQuerySyntax({
       input: { querySyntax: 'literal' },

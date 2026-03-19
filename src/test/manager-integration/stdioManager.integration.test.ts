@@ -23,8 +23,10 @@ const HANDSHAKE_TIMEOUT_MS = 180_000;
 const FILE_QUERY = 'Game/Source/**/*.Target.cs';
 const TEXT_QUERY = 'AvatarCharacter';
 const TEXT_PIPE_QUERY = 'AvatarCharacter|AvatarHealthComponent';
-const TEXT_PIPE_EFFECTIVE_QUERY = '{AvatarCharacter,AvatarHealthComponent}';
+const TEXT_FALLBACK_PIPE_QUERY = 'BrokenPipe||Literal';
 const TEXT_INCLUDE_PATTERN = 'Game/Source/GameRuntime/**/*.{h,cpp}';
+const TEXT_CONTEXT_CLAMP_BEFORE = 80;
+const TEXT_CONTEXT_CLAMP_AFTER = 8;
 
 interface ManagerConnection {
   client: Client;
@@ -310,6 +312,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     'AvatarCharacter',
     'AvatarHealthComponent',
   ]);
+  const expectedFallbackPipeMatches = await collectExpectedTextMatches(workspace.rootDir, [TEXT_FALLBACK_PIPE_QUERY]);
   const expectedTargetFiles = [
     normalizePath(path.join(workspace.rootDir, 'game', 'Source', 'Game.Target.cs')),
     normalizePath(path.join(workspace.rootDir, 'game', 'Source', 'GameEditor.Target.cs')),
@@ -400,7 +403,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const textSummary = getFirstText(textResult);
     assertTextIncludes(textSummary, 'Qgrep search', 'qgrep search summary');
     assertTextIncludes(textSummary, `query: ${TEXT_QUERY}`, 'qgrep search summary');
-    assertTextIncludes(textSummary, 'querySemanticsApplied: glob', 'qgrep search summary');
+    assertTextIncludes(textSummary, 'querySemanticsApplied: literal', 'qgrep search summary');
     assertTextIncludes(textSummary, 'case: smart-case/sensitive', 'qgrep search summary');
     assertTextIncludes(textSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'qgrep search summary');
     assertTextIncludes(
@@ -427,32 +430,73 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
       },
     });
     const pipeTextSummary = getFirstText(pipeTextResult);
-    assertTextIncludes(pipeTextSummary, 'Qgrep search', 'normalized qgrep search summary');
-    assertTextIncludes(pipeTextSummary, `query: ${TEXT_PIPE_QUERY}`, 'normalized qgrep search summary');
-    assertTextIncludes(
-      pipeTextSummary,
-      `query was implicitly converted from '${TEXT_PIPE_QUERY}' to '${TEXT_PIPE_EFFECTIVE_QUERY}' because querySyntax='glob'.`,
-      'normalized qgrep search summary',
-    );
-    assertTextIncludes(
-      pipeTextSummary,
-      `effectiveQuery: ${TEXT_PIPE_EFFECTIVE_QUERY}`,
-      'normalized qgrep search summary',
-    );
-    assertTextIncludes(pipeTextSummary, 'querySemanticsApplied: glob', 'normalized qgrep search summary');
-    assertTextIncludes(pipeTextSummary, 'case: smart-case/sensitive', 'normalized qgrep search summary');
-    assertTextIncludes(pipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'normalized qgrep search summary');
+    assertTextIncludes(pipeTextSummary, 'Qgrep search', 'literal union qgrep search summary');
+    assertTextIncludes(pipeTextSummary, `query: ${TEXT_PIPE_QUERY}`, 'literal union qgrep search summary');
+    assertTextIncludes(pipeTextSummary, 'querySemanticsApplied: literal', 'literal union qgrep search summary');
+    assertTextIncludes(pipeTextSummary, 'case: smart-case/sensitive', 'literal union qgrep search summary');
+    assertTextIncludes(pipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'literal union qgrep search summary');
     assertTextIncludes(
       pipeTextSummary,
       `count: ${String(expectedPipeMatches.length)}/${String(expectedPipeMatches.length)}`,
-      'normalized qgrep search summary',
+      'literal union qgrep search summary',
     );
     for (const absolutePath of [...new Set(expectedPipeMatches.map((match) => match.absolutePath))]) {
-      assertTextIncludes(pipeTextSummary, absolutePath, 'normalized qgrep search summary', true);
+      assertTextIncludes(pipeTextSummary, absolutePath, 'literal union qgrep search summary', true);
     }
     for (const match of expectedPipeMatches.slice(0, 5)) {
-      assertTextIncludes(pipeTextSummary, formatQgrepMatchLine(match), 'normalized qgrep search summary');
+      assertTextIncludes(pipeTextSummary, formatQgrepMatchLine(match), 'literal union qgrep search summary');
     }
+
+    const fallbackPipeTextResult = await manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: QGREP_TEXT_TOOL_NAME,
+        arguments: {
+          query: TEXT_FALLBACK_PIPE_QUERY,
+          includePattern: TEXT_INCLUDE_PATTERN,
+          maxResults: 300,
+        },
+      },
+    });
+    const fallbackPipeTextSummary = getFirstText(fallbackPipeTextResult);
+    assertTextIncludes(fallbackPipeTextSummary, 'Qgrep search', 'literal fallback qgrep search summary');
+    assertTextIncludes(fallbackPipeTextSummary, `query: ${TEXT_FALLBACK_PIPE_QUERY}`, 'literal fallback qgrep search summary');
+    assertTextIncludes(fallbackPipeTextSummary, 'querySemanticsApplied: literal-fallback', 'literal fallback qgrep search summary');
+    assertTextIncludes(fallbackPipeTextSummary, 'case: smart-case/sensitive', 'literal fallback qgrep search summary');
+    assertTextIncludes(fallbackPipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'literal fallback qgrep search summary');
+    assertTextIncludes(
+      fallbackPipeTextSummary,
+      `count: ${String(expectedFallbackPipeMatches.length)}/${String(expectedFallbackPipeMatches.length)}`,
+      'literal fallback qgrep search summary',
+    );
+    for (const absolutePath of [...new Set(expectedFallbackPipeMatches.map((match) => match.absolutePath))]) {
+      assertTextIncludes(fallbackPipeTextSummary, absolutePath, 'literal fallback qgrep search summary', true);
+    }
+    for (const match of expectedFallbackPipeMatches.slice(0, 5)) {
+      assertTextIncludes(fallbackPipeTextSummary, formatQgrepMatchLine(match), 'literal fallback qgrep search summary');
+    }
+
+    const contextClampTextResult = await manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: QGREP_TEXT_TOOL_NAME,
+        arguments: {
+          query: TEXT_QUERY,
+          includePattern: TEXT_INCLUDE_PATTERN,
+          beforeContextLines: TEXT_CONTEXT_CLAMP_BEFORE,
+          afterContextLines: TEXT_CONTEXT_CLAMP_AFTER,
+          maxResults: 300,
+        },
+      },
+    });
+    const contextClampTextSummary = getFirstText(contextClampTextResult);
+    assertTextIncludes(contextClampTextSummary, 'Qgrep search', 'context clamp qgrep search summary');
+    assertTextIncludes(contextClampTextSummary, 'context: before=50, after=8', 'context clamp qgrep search summary');
+    assertTextIncludes(
+      contextClampTextSummary,
+      'contextRequested: before=80, after=8 (capped to 50)',
+      'context clamp qgrep search summary',
+    );
   } catch (error) {
     const diagnostics = [
       manager ? `Manager stderr:\n${manager.getStderr().trim() || '<empty>'}` : '',

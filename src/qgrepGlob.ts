@@ -15,11 +15,6 @@ interface GlobPatternParserState {
   contextLabel: string;
 }
 
-export interface TextQueryGlobPipeNormalizationResult {
-  pattern: string;
-  normalized: boolean;
-}
-
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -131,93 +126,9 @@ export function normalizeFilesQueryGlobPattern(pattern: string): string {
   return withoutLeadingSlash;
 }
 
-export function normalizeTextQueryGlobPipeAlternation(pattern: string): TextQueryGlobPipeNormalizationResult {
-  let braceDepth = 0;
-  let inCharacterClass = false;
-  let sawTopLevelPipe = false;
-  let sawNestedPipe = false;
-  const branches: string[] = [];
-  let branchStart = 0;
-
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    if (char === '\\') {
-      index += 1;
-      continue;
-    }
-    if (inCharacterClass) {
-      if (char === ']') {
-        inCharacterClass = false;
-      }
-      continue;
-    }
-    if (char === '[') {
-      inCharacterClass = true;
-      continue;
-    }
-    if (char === '{') {
-      braceDepth += 1;
-      continue;
-    }
-    if (char === '}') {
-      braceDepth = Math.max(0, braceDepth - 1);
-      continue;
-    }
-    if (char !== '|') {
-      continue;
-    }
-    if (braceDepth === 0) {
-      sawTopLevelPipe = true;
-      branches.push(pattern.slice(branchStart, index));
-      branchStart = index + 1;
-      continue;
-    }
-    sawNestedPipe = true;
-  }
-
-  if (sawNestedPipe) {
-    throw new Error(
-      "Invalid query glob pattern: top-level '|' alternation auto-normalization only supports simple branches. "
-      + "Use '{A,B}' for glob alternatives, or set querySyntax='regex'.",
-    );
-  }
-  if (!sawTopLevelPipe) {
-    return {
-      pattern,
-      normalized: false,
-    };
-  }
-
-  branches.push(pattern.slice(branchStart));
-  if (branches.some((branch) => branch.length === 0)) {
-    throw new Error(
-      "Invalid query glob pattern: top-level '|' alternation must not contain empty branches. "
-      + "Use '{A,B}' for glob alternatives, or set querySyntax='regex'.",
-    );
-  }
-
-  return {
-    pattern: `{${branches.join(',')}}`,
-    normalized: true,
-  };
-}
-
 export function compileFilesQueryGlobToRegexSource(pattern: string): string {
   const normalized = normalizeFilesQueryGlobPattern(pattern);
   return compileGlobToRegexSource(normalized, 'query glob pattern');
-}
-
-export function compileTextQueryGlobToRegexSource(glob: string): string {
-  try {
-    const source = compileGlobToRegexSource(glob, 'query glob pattern');
-    // Validate generated regex in JS first for early error reporting.
-    // qgrep query execution still uses RE2-compatible matching rules.
-    // eslint-disable-next-line no-new
-    new RegExp(source, 'u');
-    return source;
-  } catch (error) {
-    throw new Error(normalizeQueryGlobErrorMessage(error));
-  }
 }
 
 export function compileGlobToRegexSource(glob: string, contextLabel: string): string {

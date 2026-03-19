@@ -24,9 +24,11 @@ import {
   buildQgrepSearchLineMatcher,
   buildRenderedSearchBlocks,
   collectQgrepFileOutputPaths,
+  formatQgrepSearchContextSummary,
   formatQgrepFilesSummary,
   formatQgrepSearchLine,
   normalizeQgrepOutputPath,
+  QGREP_SEARCH_CONTEXT_LINES_LIMIT,
   requiresStructuredCustomToolResult,
 } from './qgrepOutput';
 
@@ -359,18 +361,20 @@ const LM_DEBUG_START_SCHEMA: Record<string, unknown> = {
 
 const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep.',
-  "By default, querySyntax='glob' and query is interpreted using VS Code glob semantics (*, ?, **, [], [!...], {a,b}).",
-  'In glob mode, * and ? do not match /, while ** can match across /.',
-  'In text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring.',
+  "By default, querySyntax='literal' and query is treated as exact text.",
+  "In literal mode, top-level unescaped '|' splits the query into multiple literal branches (OR semantics).",
+  "Wrap a whole branch in matching outer double quotes to keep '|' literal inside that branch, or use \\| in an unquoted branch.",
+  'Double quotes only have special meaning when they wrap the whole branch; otherwise they are treated as ordinary characters.',
+  "If literal branch splitting produces an empty branch such as 'A||B', qgrep falls back to matching the entire raw query as one literal string.",
   "Set querySyntax='regex' to switch query interpretation to regular expression mode.",
-  'beforeContextLines/afterContextLines optionally add preview context lines around each match (0-20 each).',
+  `beforeContextLines/afterContextLines optionally add preview context lines around each match (0-${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)} each; higher values are clamped).`,
   'Output is plain text with absolute paths (/) and always includes line numbers.',
   'When caseSensitive=true, search is always case-sensitive. Otherwise smart-case is used (all-lowercase queries run case-insensitive, and queries containing uppercase letters run case-sensitive).',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
   'If includePattern is omitted, search runs across all initialized workspace folders.',
   'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative.',
   'In multi-root workspaces, top-level brace alternatives can mix WorkspaceName/... and workspace-relative branches; unscoped branches apply to all current workspaces, and scoped branches stay limited to their selected workspaces.',
-  "includePattern does not support '|' alternation. Use brace globs such as {A,B}, or move alternation into query with querySyntax='regex'.",
+  "includePattern does not support '|' alternation. Use brace globs such as {A,B}.",
   'includePattern examples: WorkspaceName/**, {WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}, {WorkspaceName/Source/**/*.{h,cpp,cs},WorkspaceName/Script/**/*.as}, {WorkspaceA/Source/**/*.h,WorkspaceB/Script/**/*.as,src/**/*.as}, **/*.{js,ts}, src/**, **/foo/**/*.js',
   'Supported inputs: query, caseSensitive, querySyntax, includePattern, maxResults, beforeContextLines, afterContextLines.',
 ].join('\n');
@@ -393,7 +397,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
   properties: {
     query: {
       type: 'string',
-      description: "Text search pattern. Default mode uses querySyntax='glob' with VS Code glob semantics (*, ?, **, [], [!...], {a,b}), where * and ? do not match / and ** can match across /; in text glob mode, matching is substring-based and does not apply implicit ^...$ anchoring; set querySyntax='regex' to treat query as a regular expression.",
+      description: "Text search pattern. Default mode uses querySyntax='literal', where query is treated as exact text and top-level unescaped '|' splits the query into multiple literal branches; wrap a whole branch in matching outer double quotes to keep '|' literal inside it, or use \\| in an unquoted branch. Double quotes only have special meaning when they wrap the whole branch; otherwise they are treated as ordinary characters. Empty split branches such as 'A||B' fall back to matching the entire raw query as one literal string. Set querySyntax='regex' to treat query as a regular expression.",
     },
     caseSensitive: {
       type: 'boolean',
@@ -401,9 +405,9 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
     },
     querySyntax: {
       type: 'string',
-      enum: ['glob', 'regex'],
-      default: 'glob',
-      description: "Controls how query is interpreted. Use 'glob' for VS Code-style glob matching or 'regex' for regular expressions.",
+      enum: ['literal', 'regex'],
+      default: 'literal',
+      description: "Controls how query is interpreted. Use 'literal' for exact text or 'regex' for regular expressions.",
     },
     includePattern: {
       type: 'string',
@@ -419,15 +423,13 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
       type: 'integer',
       default: 0,
       minimum: 0,
-      maximum: 20,
-      description: 'Optional number of context lines shown before each match in plain-text output. Integer between 0 and 20.',
+      description: `Optional number of context lines shown before each match in plain-text output. Integer greater than or equal to 0; values above ${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)} are clamped.`,
     },
     afterContextLines: {
       type: 'integer',
       default: 0,
       minimum: 0,
-      maximum: 20,
-      description: 'Optional number of context lines shown after each match in plain-text output. Integer between 0 and 20.',
+      description: `Optional number of context lines shown after each match in plain-text output. Integer greater than or equal to 0; values above ${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)} are clamped.`,
     },
   },
   required: ['query'],
@@ -2590,26 +2592,19 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
     ? payload.querySemanticsApplied
     : null;
   const query = typeof payload.query === 'string' ? payload.query : null;
-  const effectiveQuery = typeof payload.effectiveQuery === 'string' ? payload.effectiveQuery : null;
-  const warnings = Array.isArray(payload.warnings)
-    ? payload.warnings.filter((warning): warning is string => typeof warning === 'string' && warning.length > 0)
-    : [];
   const beforeContextLines = typeof payload.beforeContextLines === 'number'
     ? payload.beforeContextLines
     : 0;
   const afterContextLines = typeof payload.afterContextLines === 'number'
     ? payload.afterContextLines
     : 0;
-  const lineMatcherQuery = effectiveQuery ?? query;
-  const lineMatcher = lineMatcherQuery && querySemanticsApplied && caseModeApplied
-    ? buildQgrepSearchLineMatcher(lineMatcherQuery, querySemanticsApplied, caseModeApplied)
+  const lineMatcher = query && querySemanticsApplied && caseModeApplied
+    ? buildQgrepSearchLineMatcher(query, querySemanticsApplied, caseModeApplied)
     : undefined;
   const groupedMatches = groupQgrepSearchMatchesByPath(payload);
   const lines: string[] = [
     'Qgrep search',
     `query: ${query ?? '<unknown>'}`,
-    ...warnings,
-    ...(effectiveQuery && effectiveQuery !== query ? [`effectiveQuery: ${effectiveQuery}`] : []),
     ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
     ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
     `scope: ${includePattern ?? 'all initialized workspaces'}`,
@@ -2617,7 +2612,7 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
     ...(hardLimitHit ? ['hardLimitHit: true'] : []),
     ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
     ...(maxResultsApplied !== null ? [`maxResultsApplied: ${maxResultsApplied}`] : []),
-    `context: before=${beforeContextLines}, after=${afterContextLines}`,
+    ...formatQgrepSearchContextSummary(payload),
   ];
   if (groupedMatches.length === 0) {
     lines.push('No matches found.');

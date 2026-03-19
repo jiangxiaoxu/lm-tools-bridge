@@ -2,7 +2,7 @@ import {
   compileFilesQueryGlobToRegexSource,
   normalizeFilesQueryGlobErrorMessage,
 } from './qgrepGlob';
-import { ensureNoBarePipeAlternation, type QgrepQuerySyntax } from './searchInput';
+import { ensureNoBarePipeAlternation, type QgrepFilesQuerySyntax } from './searchInput';
 import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
 
 export type QgrepFilesQuerySemantics = 'glob-vscode' | 'regex';
@@ -27,7 +27,7 @@ export type FilesQueryDraftTarget =
 
 export function buildFilesQueryDraft(
   query: string,
-  querySyntax: QgrepQuerySyntax,
+  querySyntax: QgrepFilesQuerySyntax,
   workspaceNames: readonly string[],
 ): FilesQueryDraft {
   if (querySyntax === 'regex') {

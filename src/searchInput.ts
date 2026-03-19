@@ -1,6 +1,7 @@
 export type FindTextQuerySyntax = 'literal' | 'regex';
-export type QgrepQuerySyntax = 'glob' | 'regex';
-type SupportedQuerySyntax = FindTextQuerySyntax | QgrepQuerySyntax;
+export type QgrepTextQuerySyntax = 'literal' | 'regex';
+export type QgrepFilesQuerySyntax = 'glob' | 'regex';
+type SupportedQuerySyntax = FindTextQuerySyntax | QgrepTextQuerySyntax | QgrepFilesQuerySyntax;
 
 interface ParseQuerySyntaxOptions<TSyntax extends SupportedQuerySyntax> {
   input: Record<string, unknown>;

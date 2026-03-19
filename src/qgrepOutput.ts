@@ -1,6 +1,6 @@
-import { compileTextQueryGlobToRegexSource } from './qgrepGlob';
+import { buildRawLiteralTextQuery, parseLiteralTextQuery } from './qgrepTextQuery';
 
-export const QGREP_SEARCH_CONTEXT_LINES_LIMIT = 20;
+export const QGREP_SEARCH_CONTEXT_LINES_LIMIT = 50;
 
 const QGREP_TEXT_ONLY_TOOL_NAMES = new Set<string>([
   'lm_qgrepSearchText',
@@ -25,6 +25,12 @@ export interface QgrepLineWindow {
   endLine: number;
 }
 
+export interface ParsedOptionalContextLineCount {
+  applied: number;
+  requested?: number;
+  wasClamped: boolean;
+}
+
 export type CustomToolResponseMode = 'text-only' | 'text-and-structured';
 export type QgrepSearchLineMatcher = (lineText: string) => boolean;
 
@@ -33,22 +39,35 @@ export type QgrepSearchLineMatcher = (lineText: string) => boolean;
  *
  * @param value Raw tool input value.
  * @param key Input key name used in validation errors.
- * @returns Parsed non-negative integer, defaulting to 0 when omitted.
+ * @returns Parsed non-negative integer metadata, defaulting to 0 when omitted.
  */
-export function parseOptionalContextLineCount(value: unknown, key: string): number {
+export function parseOptionalContextLineCount(value: unknown, key: string): ParsedOptionalContextLineCount {
   if (value === undefined || value === null) {
-    return 0;
+    return {
+      applied: 0,
+      wasClamped: false,
+    };
   }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`${key} must be a finite number when provided.`);
   }
   const rounded = Math.floor(value);
-  if (rounded !== value || rounded < 0 || rounded > QGREP_SEARCH_CONTEXT_LINES_LIMIT) {
+  if (rounded !== value || rounded < 0) {
     throw new Error(
-      `${key} must be an integer between 0 and ${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)} when provided.`,
+      `${key} must be an integer greater than or equal to 0 when provided.`,
     );
   }
-  return rounded;
+  const applied = Math.min(rounded, QGREP_SEARCH_CONTEXT_LINES_LIMIT);
+  return rounded > QGREP_SEARCH_CONTEXT_LINES_LIMIT
+    ? {
+      applied,
+      requested: rounded,
+      wasClamped: true,
+    }
+    : {
+      applied,
+      wasClamped: false,
+    };
 }
 
 export function resolveCustomToolResponseMode(toolName: string): CustomToolResponseMode {
@@ -68,7 +87,11 @@ export function buildQgrepSearchLineMatcher(
   querySemanticsApplied: string,
   caseModeApplied: string,
 ): QgrepSearchLineMatcher | undefined {
-  if (querySemanticsApplied !== 'glob' && querySemanticsApplied !== 'regex') {
+  if (
+    querySemanticsApplied !== 'literal'
+    && querySemanticsApplied !== 'literal-fallback'
+    && querySemanticsApplied !== 'regex'
+  ) {
     return undefined;
   }
   if (caseModeApplied !== 'sensitive' && caseModeApplied !== 'insensitive') {
@@ -77,9 +100,11 @@ export function buildQgrepSearchLineMatcher(
 
   try {
     const flags = caseModeApplied === 'insensitive' ? 'iu' : 'u';
-    const regexSource = querySemanticsApplied === 'glob'
-      ? compileTextQueryGlobToRegexSource(query)
-      : query;
+    const regexSource = querySemanticsApplied === 'regex'
+      ? query
+      : querySemanticsApplied === 'literal-fallback'
+        ? buildRawLiteralTextQuery(query).regexSource
+        : parseLiteralTextQuery(query).regexSource;
     const matcher = new RegExp(regexSource, flags);
     return (lineText: string) => matcher.test(lineText);
   } catch {
@@ -221,6 +246,34 @@ export function formatQgrepFilesSummary(payload: Record<string, unknown>): strin
     lines.push(file);
   }
   return lines.join('\n');
+}
+
+export function formatQgrepSearchContextSummary(payload: Record<string, unknown>): string[] {
+  const beforeContextLines = typeof payload.beforeContextLines === 'number'
+    ? payload.beforeContextLines
+    : 0;
+  const afterContextLines = typeof payload.afterContextLines === 'number'
+    ? payload.afterContextLines
+    : 0;
+  const beforeContextLinesRequested = typeof payload.beforeContextLinesRequested === 'number'
+    ? payload.beforeContextLinesRequested
+    : null;
+  const afterContextLinesRequested = typeof payload.afterContextLinesRequested === 'number'
+    ? payload.afterContextLinesRequested
+    : null;
+  const lines = [
+    `context: before=${beforeContextLines}, after=${afterContextLines}`,
+  ];
+  if (beforeContextLinesRequested === null && afterContextLinesRequested === null) {
+    return lines;
+  }
+
+  lines.push(
+    `contextRequested: before=${String(beforeContextLinesRequested ?? beforeContextLines)}, `
+    + `after=${String(afterContextLinesRequested ?? afterContextLines)} `
+    + `(capped to ${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)})`,
+  );
+  return lines;
 }
 
 function normalizeLineNumbers(values: readonly number[], totalLines: number): number[] {

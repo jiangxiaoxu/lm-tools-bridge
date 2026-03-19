@@ -22,9 +22,15 @@ const BRACE_SCOPED_QUERY = '{WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
 const BRACE_SCOPED_NORMALIZED_QUERY = '{WorkspaceB,WorkspaceA,WorkspaceB}/Source/**/*.{h,cpp,cs,as}';
 const BRACE_SCOPED_TEXT_QUERY = '#include';
 const BRACE_SCOPED_PIPE_TEXT_QUERY = 'BraceWorkspaceSignal|GameSettingRegistry';
-const BRACE_SCOPED_PIPE_TEXT_EFFECTIVE_QUERY = '{BraceWorkspaceSignal,GameSettingRegistry}';
+const BRACE_SCOPED_QUOTED_PIPE_TEXT_QUERY = '"BraceWorkspaceSignal|GameSettingRegistry"';
+const BRACE_SCOPED_ESCAPED_PIPE_TEXT_QUERY = 'BraceWorkspaceSignal\\|GameSettingRegistry';
+const BRACE_SCOPED_BROKEN_QUOTE_PIPE_TEXT_QUERY = '"BrokenPipeLeft|BrokenPipeRight';
+const BRACE_SCOPED_FALLBACK_PIPE_TEXT_QUERY = 'BrokenPipe||Literal';
+const BRACE_SCOPED_FALLBACK_WHITESPACE_PIPE_TEXT_QUERY = 'BrokenPipe| |Literal';
 const BRACE_SCOPED_REGEX_INCLUDE_QUERY = '#include\\s+"[^"]+"';
 const BRACE_SCOPED_REGEX_GAME_SETTING_QUERY = 'GameSetting(Value|Registry)';
+const BRACE_SCOPED_CONTEXT_CLAMP_BEFORE = 80;
+const BRACE_SCOPED_CONTEXT_CLAMP_AFTER = 8;
 const MIXED_SCOPED_UNSCOPED_QUERY = '{WorkspaceA/Source/Tools/**/*.cs,WorkspaceB/Source/Editor/**/*.{h,cpp},Source/Scripting/**/*.as}';
 const MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY = '{WorkspaceA/Source/Scripting/**/*.as,Source/Scripting/**/*.as}';
 const MIXED_SCOPED_UNSCOPED_TEXT_QUERY = 'BraceWorkspaceSignal';
@@ -440,7 +446,7 @@ export async function run(): Promise<void> {
         });
 
         assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
-        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'insensitive');
         assert.equal(payload.count, expectedMatches.length);
@@ -450,6 +456,30 @@ export async function run(): Promise<void> {
         assert.equal(payload.hardLimitHit === true, false);
         assert.equal(payload.maxResultsApplied, 1500);
         assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'caps oversized context line requests and reports requested values in the payload',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatches(BRACE_SCOPED_TEXT_QUERY);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain text matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          beforeContextLines: BRACE_SCOPED_CONTEXT_CLAMP_BEFORE,
+          afterContextLines: BRACE_SCOPED_CONTEXT_CLAMP_AFTER,
+          maxResults: 1500,
+        });
+
+        assert.equal(payload.beforeContextLines, 50);
+        assert.equal(payload.beforeContextLinesRequested, BRACE_SCOPED_CONTEXT_CLAMP_BEFORE);
+        assert.equal(payload.afterContextLines, BRACE_SCOPED_CONTEXT_CLAMP_AFTER);
+        assert.equal(payload.afterContextLinesRequested, undefined);
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
       },
     },
     {
@@ -467,7 +497,7 @@ export async function run(): Promise<void> {
         });
 
         assert.equal(payload.includePattern, MIXED_SCOPED_UNSCOPED_QUERY);
-        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
         assert.equal(payload.count, expectedMatches.length);
@@ -480,7 +510,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'auto-normalizes simple top-level pipe alternation in qgrep text glob queries',
+      name: 'applies top-level pipe alternation as literal union in qgrep text queries',
       run: async () => {
         await activateExtension();
         await ensureQgrepReady();
@@ -497,12 +527,8 @@ export async function run(): Promise<void> {
         });
 
         assert.equal(payload.query, BRACE_SCOPED_PIPE_TEXT_QUERY);
-        assert.equal(payload.effectiveQuery, BRACE_SCOPED_PIPE_TEXT_EFFECTIVE_QUERY);
-        assert.deepEqual(payload.warnings, [
-          `query was implicitly converted from '${BRACE_SCOPED_PIPE_TEXT_QUERY}' to '${BRACE_SCOPED_PIPE_TEXT_EFFECTIVE_QUERY}' because querySyntax='glob'.`,
-        ]);
         assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
-        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
         assert.equal(payload.count, expectedMatches.length);
@@ -511,6 +537,149 @@ export async function run(): Promise<void> {
         assert.equal(payload.totalAvailableCapped === true, false);
         assert.equal(payload.hardLimitHit === true, false);
         assert.equal(payload.maxResultsApplied, 1500);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'matches quoted literal branches containing pipe characters',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatches('BraceWorkspaceSignal|GameSettingRegistry');
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain quoted literal pipe matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_QUOTED_PIPE_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.query, BRACE_SCOPED_QUOTED_PIPE_TEXT_QUERY);
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'literal');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'matches escaped pipe characters inside unquoted literal branches',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatches('BraceWorkspaceSignal|GameSettingRegistry');
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain escaped literal pipe matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_ESCAPED_PIPE_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.query, BRACE_SCOPED_ESCAPED_PIPE_TEXT_QUERY);
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'literal');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'treats malformed opening double quotes as ordinary characters in literal union queries',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatchesForQueries([
+          '"BrokenPipeLeft',
+          'BrokenPipeRight',
+        ]);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain malformed quote pipe matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_BROKEN_QUOTE_PIPE_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.query, BRACE_SCOPED_BROKEN_QUOTE_PIPE_TEXT_QUERY);
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'literal');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'falls back to raw literal matching when pipe branches are empty',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatches(BRACE_SCOPED_FALLBACK_PIPE_TEXT_QUERY);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain literal fallback pipe matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_FALLBACK_PIPE_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.query, BRACE_SCOPED_FALLBACK_PIPE_TEXT_QUERY);
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'literal-fallback');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
+        assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'falls back to raw literal matching when trimmed pipe branches are empty',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+        const expectedMatches = await collectBraceScopedFixtureMatches(BRACE_SCOPED_FALLBACK_WHITESPACE_PIPE_TEXT_QUERY);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain whitespace literal fallback pipe matches.');
+
+        const payload = await executeQgrepSearch({
+          query: BRACE_SCOPED_FALLBACK_WHITESPACE_PIPE_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.query, BRACE_SCOPED_FALLBACK_WHITESPACE_PIPE_TEXT_QUERY);
+        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.querySemanticsApplied, 'literal-fallback');
+        assert.equal(payload.casePolicy, 'smart-case');
+        assert.equal(payload.caseModeApplied, 'sensitive');
+        assert.equal(payload.count, expectedMatches.length);
+        assert.equal(payload.totalAvailable, expectedMatches.length);
+        assert.equal(payload.capped === true, false);
+        assert.equal(payload.totalAvailableCapped === true, false);
+        assert.equal(payload.hardLimitHit === true, false);
+        assert.equal(payload.maxResultsApplied, 200);
         assertMatchRecordsMatch(payload, expectedMatches);
       },
     },
@@ -529,7 +698,7 @@ export async function run(): Promise<void> {
         });
 
         assert.equal(payload.includePattern, MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY);
-        assert.equal(payload.querySemanticsApplied, 'glob');
+        assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
         assert.equal(payload.count, expectedMatches.length);
@@ -539,6 +708,23 @@ export async function run(): Promise<void> {
         assert.equal(payload.hardLimitHit === true, false);
         assert.equal(payload.maxResultsApplied, 200);
         assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'rejects explicit text glob mode',
+      run: async () => {
+        await activateExtension();
+        await ensureQgrepReady();
+
+        await assert.rejects(
+          () => executeQgrepSearch({
+            query: BRACE_SCOPED_TEXT_QUERY,
+            querySyntax: 'glob',
+            includePattern: BRACE_SCOPED_QUERY,
+            maxResults: 20,
+          }),
+          /querySyntax must be one of: 'literal', 'regex'\./u,
+        );
       },
     },
     {

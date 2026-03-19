@@ -5,9 +5,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   compileFilesQueryGlobToRegexSource,
   compileGlobToRegexSource,
-  compileTextQueryGlobToRegexSource,
   hasUnescapedGlobMeta,
-  normalizeTextQueryGlobPipeAlternation,
   normalizeFilesQueryGlobErrorMessage,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
@@ -21,10 +19,15 @@ import { upsertWorkspaceConfigPathLine } from './qgrepConfig';
 import {
   parseOptionalIncludePattern,
   parseQuerySyntax,
-  type QgrepQuerySyntax,
+  type QgrepFilesQuerySyntax,
+  type QgrepTextQuerySyntax,
 } from './searchInput';
+import { parseLiteralTextQuery } from './qgrepTextQuery';
 import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
-import { parseOptionalContextLineCount } from './qgrepOutput';
+import {
+  parseOptionalContextLineCount,
+  type ParsedOptionalContextLineCount,
+} from './qgrepOutput';
 
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
@@ -192,7 +195,7 @@ interface ParsedQgrepResultSummary {
   capped: boolean;
 }
 
-type QgrepTextQuerySemantics = 'glob' | 'regex';
+type QgrepTextQuerySemantics = 'literal' | 'literal-fallback' | 'regex';
 type QgrepTextCasePolicy = 'smart-case' | 'explicit-case-sensitive';
 interface ParsedQgrepFile {
   absolutePath: string;
@@ -386,14 +389,18 @@ class QgrepService implements vscode.Disposable {
     const caseSensitive = this.parseOptionalBooleanInput(input.caseSensitive, 'caseSensitive');
     const beforeContextLines = parseOptionalContextLineCount(input.beforeContextLines, 'beforeContextLines');
     const afterContextLines = parseOptionalContextLineCount(input.afterContextLines, 'afterContextLines');
-    const warnings: string[] = [];
-    const querySemanticsApplied: QgrepTextQuerySemantics = querySyntax === 'regex' ? 'regex' : 'glob';
-    const effectiveQuery = querySyntax === 'regex'
+    const contextLinesPayload = this.buildContextLinePayload(beforeContextLines, afterContextLines);
+    const parsedLiteralQuery = querySyntax === 'regex'
+      ? undefined
+      : parseLiteralTextQuery(query);
+    const querySemanticsApplied: QgrepTextQuerySemantics = querySyntax === 'regex'
+      ? 'regex'
+      : parsedLiteralQuery!.mode === 'fallback-literal'
+        ? 'literal-fallback'
+        : 'literal';
+    const backendQuery = querySyntax === 'regex'
       ? query
-      : this.normalizeTextQueryGlobWithWarnings(query, warnings);
-    const effectiveBackendQuery = querySyntax === 'regex'
-      ? effectiveQuery
-      : compileTextQueryGlobToRegexSource(effectiveQuery);
+      : parsedLiteralQuery!.regexSource;
     const casePolicy: QgrepTextCasePolicy = caseSensitive === true
       ? 'explicit-case-sensitive'
       : 'smart-case';
@@ -402,13 +409,13 @@ class QgrepService implements vscode.Disposable {
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
     const useCaseInsensitiveSearch = caseSensitive === true
       ? false
-      : this.shouldUseCaseInsensitiveSearchForQuery(query);
+      : this.shouldUseCaseInsensitiveSearchForQuery(querySyntax, query, parsedLiteralQuery);
     await this.ensureToolSearchReady();
     if (includePattern && this.isGlobIncludePattern(includePattern)) {
-      const payload = await this.searchWithGlobIncludePattern(
+      return this.searchWithGlobIncludePattern(
         includePattern,
         query,
-        effectiveBackendQuery,
+        backendQuery,
         querySemanticsApplied,
         casePolicy,
         useCaseInsensitiveSearch,
@@ -416,11 +423,6 @@ class QgrepService implements vscode.Disposable {
         beforeContextLines,
         afterContextLines,
       );
-      return {
-        ...payload,
-        ...(effectiveQuery !== query ? { effectiveQuery } : {}),
-        ...(warnings.length > 0 ? { warnings } : {}),
-      };
     }
 
     const targets = this.resolveSearchTargets(includePattern);
@@ -436,7 +438,7 @@ class QgrepService implements vscode.Disposable {
     for (const target of targets) {
       const targetResult = await this.searchInWorkspace(
         target,
-        effectiveBackendQuery,
+        backendQuery,
         useCaseInsensitiveSearch,
         maxResultsApplied,
       );
@@ -459,8 +461,6 @@ class QgrepService implements vscode.Disposable {
 
     return {
       query,
-      ...(effectiveQuery !== query ? { effectiveQuery } : {}),
-      ...(warnings.length > 0 ? { warnings } : {}),
       includePattern: includePattern ?? null,
       ...maxResultsPayload,
       totalAvailable,
@@ -471,8 +471,7 @@ class QgrepService implements vscode.Disposable {
       querySemanticsApplied,
       casePolicy,
       caseModeApplied: useCaseInsensitiveSearch ? 'insensitive' : 'sensitive',
-      beforeContextLines,
-      afterContextLines,
+      ...contextLinesPayload,
       matches,
     };
   }
@@ -801,17 +800,6 @@ class QgrepService implements vscode.Disposable {
     return trimmed;
   }
 
-  private normalizeTextQueryGlobWithWarnings(query: string, warnings: string[]): string {
-    const result = normalizeTextQueryGlobPipeAlternation(query);
-    if (!result.normalized) {
-      return query;
-    }
-    warnings.push(
-      `query was implicitly converted from '${query}' to '${result.pattern}' because querySyntax='glob'.`,
-    );
-    return result.pattern;
-  }
-
   private parseOptionalBooleanInput(value: unknown, key: string): boolean | undefined {
     if (value === undefined || value === null) {
       return undefined;
@@ -822,16 +810,16 @@ class QgrepService implements vscode.Disposable {
     return value;
   }
 
-  private parseTextQuerySyntax(input: Record<string, unknown>): QgrepQuerySyntax {
+  private parseTextQuerySyntax(input: Record<string, unknown>): QgrepTextQuerySyntax {
     return parseQuerySyntax({
       input,
       toolName: 'lm_qgrepSearchText',
-      allowed: ['glob', 'regex'],
-      defaultSyntax: 'glob',
+      allowed: ['literal', 'regex'],
+      defaultSyntax: 'literal',
     });
   }
 
-  private parseFilesQuerySyntax(input: Record<string, unknown>): QgrepQuerySyntax {
+  private parseFilesQuerySyntax(input: Record<string, unknown>): QgrepFilesQuerySyntax {
     return parseQuerySyntax({
       input,
       toolName: 'lm_qgrepSearchFiles',
@@ -878,6 +866,22 @@ class QgrepService implements vscode.Disposable {
       };
     }
     return { maxResultsApplied };
+  }
+
+  private buildContextLinePayload(
+    beforeContextLines: ParsedOptionalContextLineCount,
+    afterContextLines: ParsedOptionalContextLineCount,
+  ): Record<string, number> {
+    return {
+      beforeContextLines: beforeContextLines.applied,
+      afterContextLines: afterContextLines.applied,
+      ...(beforeContextLines.requested !== undefined
+        ? { beforeContextLinesRequested: beforeContextLines.requested }
+        : {}),
+      ...(afterContextLines.requested !== undefined
+        ? { afterContextLinesRequested: afterContextLines.requested }
+        : {}),
+    };
   }
 
   private buildFilesMaxResultsPayload(maxResults: number): MaxResultsPayload {
@@ -1105,15 +1109,16 @@ class QgrepService implements vscode.Disposable {
   private async searchWithGlobIncludePattern(
     includePattern: string,
     query: string,
-    effectiveQuery: string,
+    backendQuery: string,
     querySemanticsApplied: QgrepTextQuerySemantics,
     casePolicy: QgrepTextCasePolicy,
     useCaseInsensitiveSearch: boolean,
     maxResultsPayload: MaxResultsPayload,
-    beforeContextLines: number,
-    afterContextLines: number,
+    beforeContextLines: ParsedOptionalContextLineCount,
+    afterContextLines: ParsedOptionalContextLineCount,
   ): Promise<Record<string, unknown>> {
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
+    const contextLinesPayload = this.buildContextLinePayload(beforeContextLines, afterContextLines);
     const targets = this.resolveGlobSearchTargets(includePattern);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
@@ -1127,7 +1132,7 @@ class QgrepService implements vscode.Disposable {
     for (const target of targets) {
       const targetResult = await this.searchInWorkspace(
         { state: target.state, filterRegex: target.textFilterRegex },
-        effectiveQuery,
+        backendQuery,
         useCaseInsensitiveSearch,
         maxResultsApplied,
       );
@@ -1160,8 +1165,7 @@ class QgrepService implements vscode.Disposable {
       querySemanticsApplied,
       casePolicy,
       caseModeApplied: useCaseInsensitiveSearch ? 'insensitive' : 'sensitive',
-      beforeContextLines,
-      afterContextLines,
+      ...contextLinesPayload,
       matches,
     };
   }
@@ -1359,8 +1363,15 @@ class QgrepService implements vscode.Disposable {
     };
   }
 
-  private shouldUseCaseInsensitiveSearchForQuery(query: string): boolean {
-    return !/[A-Z]/u.test(query);
+  private shouldUseCaseInsensitiveSearchForQuery(
+    querySyntax: QgrepTextQuerySyntax,
+    query: string,
+    parsedLiteralQuery?: ReturnType<typeof parseLiteralTextQuery>,
+  ): boolean {
+    if (querySyntax === 'regex') {
+      return !/[A-Z]/u.test(query);
+    }
+    return parsedLiteralQuery ? !parsedLiteralQuery.hasUppercaseLiteral : true;
   }
 
   private async searchFilesInWorkspace(

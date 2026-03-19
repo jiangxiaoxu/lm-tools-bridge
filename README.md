@@ -69,9 +69,14 @@ Notes:
 
 ### Search Notes
 - `lm_qgrepSearchText.includePattern` and `lm_qgrepSearchFiles.query` support VS Code brace globs.
-- In `lm_qgrepSearchText` glob mode, simple top-level `A|B|C` mistakes are auto-normalized to `{A,B,C}` and reported with a warning in the text output. More complex `|` usage should use brace globs or `querySyntax='regex'`.
+- `lm_qgrepSearchText` defaults to literal text search. Top-level unescaped `|` means literal OR, only a whole branch wrapped by outer double quotes keeps `|` literal, and unquoted `\|` also keeps `|` literal.
+- Outer double quotes only have special meaning when they wrap the whole branch. Otherwise `"` is treated as a normal character, so `"A|B` means searching for `"A` or `B`.
+- If literal branch splitting creates an empty branch such as `A||B` or `A| |B`, qgrep falls back to matching the entire raw query as one literal string.
+- `beforeContextLines` and `afterContextLines` default to `0`. Values above `50` are clamped, and qgrep search summaries include a `contextRequested: ... (capped to 50)` hint when clamping happens.
+- `lm_qgrepSearchText` only supports `querySyntax='literal'` and `querySyntax='regex'`. Text `glob` mode is no longer supported.
 - In multi-root workspaces, top-level brace alternatives can mix `WorkspaceName/...` and workspace-relative branches. Unscoped branches apply to all current workspaces, scoped branches stay limited to the selected workspaces, and mixed file-search summaries still show `all initialized workspaces`.
-- Example: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
+- Text examples: `AvatarCharacter`, `AvatarCharacter|AvatarHealthComponent`, `"AvatarCharacter|AvatarHealthComponent"`, `AvatarCharacter\|AvatarHealthComponent`, `Avatar(Character|HealthComponent)`.
+- Scope example: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
 
 ### Troubleshooting
 - `node` is missing: install Node.js, restart VS Code, then retry.
@@ -149,9 +154,14 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 
 ### Search Notes
 - `lm_qgrepSearchText.includePattern` 和 `lm_qgrepSearchFiles.query` 支持 VS Code brace glob.
-- `lm_qgrepSearchText` 在 glob 模式下,会把简单顶层 `A|B|C` 误用自动规范化为 `{A,B,C}`,并在文本输出里给出 warning. 更复杂的 `|` 用法请改用 brace glob 或 `querySyntax='regex'`.
+- `lm_qgrepSearchText` 默认按 literal 文本搜索. 顶层未转义 `|` 表示 literal OR,只有被最外层成对双引号完整包裹的 branch 才会保留字面量 `|`,未引用 branch 中的 `\|` 也表示字面量 `|`.
+- 只有完整包裹整个 branch 的最外层双引号才有特殊语法意义. 其他场景里的 `"` 都按普通字符处理,所以 `"A|B` 表示搜索 `"A` 或 `B`.
+- 如果 literal branch 拆分后出现空 branch,例如 `A||B` 或 `A| |B`,qgrep 会退回为把整个原始 query 当成一个 literal 字符串匹配.
+- `beforeContextLines` 和 `afterContextLines` 默认是 `0`. 超过 `50` 的输入会被钳制,并且 qgrep search summary 会额外输出 `contextRequested: ... (capped to 50)` 提示.
+- `lm_qgrepSearchText` 只支持 `querySyntax='literal'` 和 `querySyntax='regex'`. 文本 `glob` 模式已不再支持.
 - 在 multi-root workspace 里,顶层 brace alternation 可以混用 `WorkspaceName/...` 和普通 workspace-relative branch. 不带 workspace 前缀的 branch 会作用于所有当前 workspace,带前缀的 branch 只作用于指定 workspace,而 mixed file search 的 summary 仍显示 `all initialized workspaces`.
-- 示例: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
+- 文本示例: `AvatarCharacter`, `AvatarCharacter|AvatarHealthComponent`, `"AvatarCharacter|AvatarHealthComponent"`, `AvatarCharacter\|AvatarHealthComponent`, `Avatar(Character|HealthComponent)`.
+- 范围示例: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
 
 ### 故障排查
 - 缺少 `node`: 先安装 Node.js,重启 VS Code 后再试.

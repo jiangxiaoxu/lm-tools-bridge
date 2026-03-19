@@ -224,6 +224,13 @@ function getResourceText(result: Awaited<ReturnType<Client['readResource']>>): s
   return typeof first?.text === 'string' ? first.text : '';
 }
 
+function getHandshakeStatusPayload(text: string): Record<string, unknown> {
+  const marker = 'Status snapshot:\n';
+  const index = text.indexOf(marker);
+  assert.notEqual(index, -1, `Expected handshake resource text to include "${marker.trim()}".`);
+  return JSON.parse(text.slice(index + marker.length)) as Record<string, unknown>;
+}
+
 async function waitForFile(filePath: string, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -268,19 +275,35 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   });
   const handshakePayload = handshake.structuredContent as {
     ok?: boolean;
-    target?: { port?: number };
+    target?: { workspaceFolders?: string[]; workspaceFile?: string | null };
     discovery?: {
       bridgedTools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>;
     };
   } | undefined;
   assert.equal(handshakePayload?.ok, true);
-  assert.equal(handshakePayload?.target?.port, workspace.port);
+  assert.deepEqual(handshakePayload?.target?.workspaceFolders, [workspaceRoot]);
+  assert.equal(handshakePayload?.target?.workspaceFile ?? null, null);
   assert.deepEqual(handshakePayload?.discovery?.bridgedTools, [
     {
       name: ECHO_TOOL_NAME,
       description: 'Echo back the provided value.',
     },
   ]);
+  assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload ?? {}, 'mcpSessionId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload?.target ?? {}, 'sessionId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload?.target ?? {}, 'host'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload?.target ?? {}, 'port'), false);
+
+  const handshakeResource = await manager.client.readResource({
+    uri: 'lm-tools-bridge://handshake',
+  });
+  const handshakeStatus = getHandshakeStatusPayload(getResourceText(handshakeResource));
+  const statusTarget = handshakeStatus.target as Record<string, unknown> | null;
+  assert.deepEqual(statusTarget?.workspaceFolders, [workspaceRoot]);
+  assert.equal(statusTarget?.workspaceFile ?? null, null);
+  assert.equal(Object.prototype.hasOwnProperty.call(statusTarget ?? {}, 'sessionId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(statusTarget ?? {}, 'host'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(statusTarget ?? {}, 'port'), false);
 
   const afterTools = await manager.client.listTools();
   assert.deepEqual(getToolNames(afterTools), [ECHO_TOOL_NAME, DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD]);

@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.131] - 2026-03-19
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.131.
+- Trimmed successful `lmToolsBridge.requestWorkspaceMCPServer` payloads to remove `mcpSessionId` and transport/session fields from `target`, keeping only workspace identity plus discovery/guidance data.
+- Trimmed `lm-tools-bridge://handshake` status snapshots so exposed `target` data now contains only `workspaceFolders` and `workspaceFile`.
+
+### 中文
+
+#### 变更
+- 将 patch 版本提升到 1.0.131。
+- 精简成功的 `lmToolsBridge.requestWorkspaceMCPServer` payload,移除 `mcpSessionId` 以及 `target` 下的 transport/session 字段,仅保留 workspace 身份信息和 discovery/guidance 数据。
+- 精简 `lm-tools-bridge://handshake` 的 status snapshot,对外暴露的 `target` 现仅包含 `workspaceFolders` 和 `workspaceFile`。
+
 ## [1.0.130] - 2026-03-19
 
 ### English

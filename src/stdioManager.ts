@@ -646,9 +646,6 @@ async function buildStatusPayload(): Promise<Record<string, unknown>> {
     offlineDurationSec: toOfflineDurationSec(session.offlineSince),
     target: target
       ? {
-        sessionId: target.sessionId,
-        host: target.host,
-        port: target.port,
         workspaceFolders: target.workspaceFolders,
         workspaceFile: target.workspaceFile ?? null,
       }
@@ -1089,12 +1086,8 @@ async function handleRequestWorkspace(server: Server, cwdValue: unknown): Promis
   await server.sendToolListChanged();
   await server.sendResourceListChanged();
   return buildWorkspaceHandshakePayload({
-    mcpSessionId: session.sessionId,
     cwd: session.resolveCwd,
     target: {
-      sessionId: matchedTarget.sessionId,
-      host: matchedTarget.host,
-      port: matchedTarget.port,
       workspaceFolders: matchedTarget.workspaceFolders,
       workspaceFile: matchedTarget.workspaceFile ?? null,
     },

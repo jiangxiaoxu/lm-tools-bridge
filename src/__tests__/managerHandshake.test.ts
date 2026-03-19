@@ -7,12 +7,8 @@ import {
 
 test('handshake payload omits redundant online and health fields', () => {
   const payload = buildWorkspaceHandshakePayload({
-    mcpSessionId: 'mgr-session-1',
     cwd: 'G:/Project/vscode-lm-tools-bridge',
     target: {
-      sessionId: 'workspace-session-1',
-      host: '127.0.0.1',
-      port: 47123,
       workspaceFolders: [
         'G:/Project/vscode-lm-tools-bridge',
         'G:/Project/shared',
@@ -46,12 +42,16 @@ test('handshake payload omits redundant online and health fields', () => {
   });
 
   assert.equal(payload.ok, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, 'mcpSessionId'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(payload, 'online'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(payload, 'health'), false);
   assert.deepEqual(payload.target.workspaceFolders, [
     'G:/Project/vscode-lm-tools-bridge',
     'G:/Project/shared',
   ]);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'sessionId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'host'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'port'), false);
   assert.equal(payload.discovery.resourceTemplates.length, 1);
   assert.equal(
     Object.prototype.hasOwnProperty.call(payload.discovery.bridgedTools[0] ?? {}, 'inputSchema'),
@@ -64,10 +64,8 @@ test('handshake summary keeps useful fields and omits online line', () => {
     ok: true,
     cwd: 'G:/Project/vscode-lm-tools-bridge',
     target: {
-      host: '127.0.0.1',
-      port: 47123,
       workspaceFolders: ['G:/Project/vscode-lm-tools-bridge'],
-      workspaceFile: null,
+      workspaceFile: 'G:/Project/vscode-lm-tools-bridge/app.code-workspace',
     },
     discovery: {
       partial: false,
@@ -83,8 +81,10 @@ test('handshake summary keeps useful fields and omits online line', () => {
   });
 
   assert.match(summary, /workspaceFolders: 1/u);
+  assert.match(summary, /workspaceFile: G:\/Project\/vscode-lm-tools-bridge\/app\.code-workspace/u);
   assert.match(summary, /bridgedTools: 2/u);
   assert.match(summary, /Issues: none/u);
   assert.doesNotMatch(summary, /recoveryOnError:/u);
   assert.doesNotMatch(summary, /^online:/mu);
+  assert.doesNotMatch(summary, /127\.0\.0\.1:47123/u);
 });

@@ -38,16 +38,12 @@ export interface HandshakeGuidance {
 }
 
 export interface WorkspaceHandshakeTarget {
-  sessionId: string;
-  host: string;
-  port: number;
   workspaceFolders: string[];
   workspaceFile: string | null;
 }
 
 export interface WorkspaceHandshakePayload {
   ok: true;
-  mcpSessionId: string;
   cwd: string;
   target: WorkspaceHandshakeTarget;
   discovery: HandshakeDiscoveryPayload;
@@ -55,7 +51,6 @@ export interface WorkspaceHandshakePayload {
 }
 
 interface BuildWorkspaceHandshakePayloadInput {
-  mcpSessionId: string;
   cwd: string;
   target: WorkspaceHandshakeTarget;
   discovery: HandshakeDiscoveryPayload;
@@ -67,7 +62,6 @@ export function buildWorkspaceHandshakePayload(
 ): WorkspaceHandshakePayload {
   return {
     ok: true,
-    mcpSessionId: input.mcpSessionId,
     cwd: input.cwd,
     target: input.target,
     discovery: input.discovery,
@@ -108,7 +102,7 @@ export function formatWorkspaceHandshakeSummary(payload: unknown): string {
     'Workspace handshake summary',
     `ok: ${record.ok === true ? 'true' : 'false'}`,
     `cwd: ${typeof record.cwd === 'string' ? record.cwd : 'n/a'}`,
-    `target: ${String(target?.host ?? 'n/a')}:${String(target?.port ?? 'n/a')}`,
+    `workspaceFile: ${typeof target?.workspaceFile === 'string' ? target.workspaceFile : '(none)'}`,
     `workspaceFolders: ${workspaceFolders.length}`,
     `discovery.partial: ${discovery?.partial === true ? 'true' : 'false'}`,
     `bridgedTools: ${bridgedTools.length}`,

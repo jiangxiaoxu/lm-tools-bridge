@@ -59,6 +59,7 @@ Restart Codex to pick up the new skill.
 
 Notes:
 - Handshake is required before calling bridged workspace tools.
+- Successful handshake payloads expose workspace identity (`workspaceFolders`, `workspaceFile`), `discovery`, and `guidance`, but do not expose manager session ids or workspace transport `host`/`port`.
 - If the target VS Code instance does not exist yet, handshake will try to start the matching VS Code instance first.
 - On Windows, handshake resolves the launch target from `cwd` like this:
   - if `cwd` is a `.code-workspace` file, use it directly
@@ -146,6 +147,7 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 
 说明:
 - 调用桥接 workspace 工具前,必须先握手.
+- 握手成功 payload 只暴露 workspace 身份信息(`workspaceFolders`,`workspaceFile`)、`discovery` 和 `guidance`,不再暴露 manager session id 或 workspace transport `host`/`port`.
 - 如果目标 VS Code 实例还不存在,握手阶段会先尝试拉起匹配的 VS Code 实例.
 - 在 Windows 上,握手会按下面的规则从 `cwd` 解析启动目标:
   - 如果 `cwd` 本身就是 `.code-workspace` 文件,直接使用它

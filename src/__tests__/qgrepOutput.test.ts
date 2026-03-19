@@ -6,12 +6,17 @@ import {
   buildRenderedSearchBlocks,
   collectQgrepFileOutputPaths,
   formatQgrepSearchContextSummary,
+  formatQgrepSearchQueryHintsSummary,
   formatQgrepFilesSummary,
   formatQgrepSearchLine,
   parseOptionalContextLineCount,
   QGREP_SEARCH_CONTEXT_LINES_LIMIT,
   requiresStructuredCustomToolResult,
 } from '../qgrepOutput';
+import {
+  QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK,
+  QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED,
+} from '../qgrepTextQuery';
 
 test('context line count parser applies default and clamps high values', () => {
   assert.deepEqual(parseOptionalContextLineCount(undefined, 'beforeContextLines'), {
@@ -70,6 +75,26 @@ test('qgrep search context summary adds truncation hint only when requested valu
     [
       'context: before=50, after=8',
       `contextRequested: before=80, after=8 (capped to ${String(QGREP_SEARCH_CONTEXT_LINES_LIMIT)})`,
+    ],
+  );
+});
+
+test('qgrep search query hint summary renders only active hints in stable order', () => {
+  assert.deepEqual(
+    formatQgrepSearchQueryHintsSummary({}),
+    [],
+  );
+
+  assert.deepEqual(
+    formatQgrepSearchQueryHintsSummary({
+      queryHints: [
+        QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED,
+        QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK,
+      ],
+    }),
+    [
+      `queryHint: ${QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED}`,
+      `queryHint: ${QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK}`,
     ],
   );
 });
@@ -155,6 +180,14 @@ test('line matcher supports literal union and quoted literal pipe branches', () 
   assert.ok(quotedMatcher);
   assert.equal(quotedMatcher('prefix foo|bar suffix'), true);
   assert.equal(quotedMatcher('prefix foo suffix'), false);
+});
+
+test('line matcher preserves whitespace around literal pipe branches', () => {
+  const matcher = buildQgrepSearchLineMatcher('foo | bar', 'literal', 'sensitive');
+  assert.ok(matcher);
+  assert.equal(matcher('prefix foo  suffix'), true);
+  assert.equal(matcher('prefix  bar suffix'), true);
+  assert.equal(matcher('prefix foo-suffix'), false);
 });
 
 test('line matcher supports literal fallback queries', () => {

@@ -276,6 +276,15 @@ export function formatQgrepSearchContextSummary(payload: Record<string, unknown>
   return lines;
 }
 
+export function formatQgrepSearchQueryHintsSummary(payload: Record<string, unknown>): string[] {
+  if (!Array.isArray(payload.queryHints)) {
+    return [];
+  }
+  return payload.queryHints
+    .filter((hint): hint is string => typeof hint === 'string' && hint.length > 0)
+    .map((hint) => `queryHint: ${hint}`);
+}
+
 function normalizeLineNumbers(values: readonly number[], totalLines: number): number[] {
   const normalized = new Set<number>();
   for (const value of values) {

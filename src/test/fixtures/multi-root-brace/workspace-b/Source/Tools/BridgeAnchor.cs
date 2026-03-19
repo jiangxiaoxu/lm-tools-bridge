@@ -1,5 +1,6 @@
 // BraceWorkspaceSignal
 // BraceWorkspaceSignal|GameSettingRegistry
+// SpacePipeLeft | SpacePipeRight
 // "BrokenPipeLeft
 // BrokenPipeRight
 // BrokenPipe||Literal

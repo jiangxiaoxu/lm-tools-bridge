@@ -6,6 +6,10 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
+  QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK,
+  QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED,
+} from '../../qgrepTextQuery';
+import {
   buildCommonVsCodeLaunchArgs,
   copyDirectory,
   createIsolatedVsCodeDirs,
@@ -23,6 +27,8 @@ const HANDSHAKE_TIMEOUT_MS = 180_000;
 const FILE_QUERY = 'Game/Source/**/*.Target.cs';
 const TEXT_QUERY = 'AvatarCharacter';
 const TEXT_PIPE_QUERY = 'AvatarCharacter|AvatarHealthComponent';
+const TEXT_SPACE_PIPE_QUERY = 'AvatarSpacePipeLeft | AvatarSpacePipeRight';
+const TEXT_DROPPED_SPACE_PIPE_QUERY = 'BrokenPipeSpaceDrop| |LiteralSpaceDrop';
 const TEXT_FALLBACK_PIPE_QUERY = 'BrokenPipe||Literal';
 const TEXT_INCLUDE_PATTERN = 'Game/Source/GameRuntime/**/*.{h,cpp}';
 const TEXT_CONTEXT_CLAMP_BEFORE = 80;
@@ -312,6 +318,14 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     'AvatarCharacter',
     'AvatarHealthComponent',
   ]);
+  const expectedSpacePipeMatches = await collectExpectedTextMatches(workspace.rootDir, [
+    'AvatarSpacePipeLeft ',
+    ' AvatarSpacePipeRight',
+  ]);
+  const expectedDroppedSpacePipeMatches = await collectExpectedTextMatches(workspace.rootDir, [
+    'BrokenPipeSpaceDrop',
+    'LiteralSpaceDrop',
+  ]);
   const expectedFallbackPipeMatches = await collectExpectedTextMatches(workspace.rootDir, [TEXT_FALLBACK_PIPE_QUERY]);
   const expectedTargetFiles = [
     normalizePath(path.join(workspace.rootDir, 'game', 'Source', 'Game.Target.cs')),
@@ -435,6 +449,11 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(pipeTextSummary, 'querySemanticsApplied: literal', 'literal union qgrep search summary');
     assertTextIncludes(pipeTextSummary, 'case: smart-case/sensitive', 'literal union qgrep search summary');
     assertTextIncludes(pipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'literal union qgrep search summary');
+    assert.equal(
+      pipeTextSummary.includes('queryHint:'),
+      false,
+      `Expected literal union qgrep search summary not to include query hints.\nActual text:\n${pipeTextSummary}`,
+    );
     assertTextIncludes(
       pipeTextSummary,
       `count: ${String(expectedPipeMatches.length)}/${String(expectedPipeMatches.length)}`,
@@ -445,6 +464,74 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     }
     for (const match of expectedPipeMatches.slice(0, 5)) {
       assertTextIncludes(pipeTextSummary, formatQgrepMatchLine(match), 'literal union qgrep search summary');
+    }
+
+    const spacePipeTextResult = await manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: QGREP_TEXT_TOOL_NAME,
+        arguments: {
+          query: TEXT_SPACE_PIPE_QUERY,
+          includePattern: TEXT_INCLUDE_PATTERN,
+          maxResults: 300,
+        },
+      },
+    });
+    const spacePipeTextSummary = getFirstText(spacePipeTextResult);
+    assertTextIncludes(spacePipeTextSummary, 'Qgrep search', 'whitespace literal union qgrep search summary');
+    assertTextIncludes(spacePipeTextSummary, `query: ${TEXT_SPACE_PIPE_QUERY}`, 'whitespace literal union qgrep search summary');
+    assertTextIncludes(spacePipeTextSummary, 'querySemanticsApplied: literal', 'whitespace literal union qgrep search summary');
+    assertTextIncludes(spacePipeTextSummary, 'case: smart-case/sensitive', 'whitespace literal union qgrep search summary');
+    assertTextIncludes(spacePipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'whitespace literal union qgrep search summary');
+    assert.equal(
+      spacePipeTextSummary.includes('queryHint:'),
+      false,
+      `Expected whitespace literal union qgrep search summary not to include query hints.\nActual text:\n${spacePipeTextSummary}`,
+    );
+    assertTextIncludes(
+      spacePipeTextSummary,
+      `count: ${String(expectedSpacePipeMatches.length)}/${String(expectedSpacePipeMatches.length)}`,
+      'whitespace literal union qgrep search summary',
+    );
+    for (const absolutePath of [...new Set(expectedSpacePipeMatches.map((match) => match.absolutePath))]) {
+      assertTextIncludes(spacePipeTextSummary, absolutePath, 'whitespace literal union qgrep search summary', true);
+    }
+    for (const match of expectedSpacePipeMatches.slice(0, 5)) {
+      assertTextIncludes(spacePipeTextSummary, formatQgrepMatchLine(match), 'whitespace literal union qgrep search summary');
+    }
+
+    const droppedSpacePipeTextResult = await manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: QGREP_TEXT_TOOL_NAME,
+        arguments: {
+          query: TEXT_DROPPED_SPACE_PIPE_QUERY,
+          includePattern: TEXT_INCLUDE_PATTERN,
+          maxResults: 300,
+        },
+      },
+    });
+    const droppedSpacePipeTextSummary = getFirstText(droppedSpacePipeTextResult);
+    assertTextIncludes(droppedSpacePipeTextSummary, 'Qgrep search', 'dropped whitespace pipe qgrep search summary');
+    assertTextIncludes(droppedSpacePipeTextSummary, `query: ${TEXT_DROPPED_SPACE_PIPE_QUERY}`, 'dropped whitespace pipe qgrep search summary');
+    assertTextIncludes(droppedSpacePipeTextSummary, 'querySemanticsApplied: literal', 'dropped whitespace pipe qgrep search summary');
+    assertTextIncludes(droppedSpacePipeTextSummary, 'case: smart-case/sensitive', 'dropped whitespace pipe qgrep search summary');
+    assertTextIncludes(droppedSpacePipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'dropped whitespace pipe qgrep search summary');
+    assertTextIncludes(
+      droppedSpacePipeTextSummary,
+      `queryHint: ${QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED}`,
+      'dropped whitespace pipe qgrep search summary',
+    );
+    assertTextIncludes(
+      droppedSpacePipeTextSummary,
+      `count: ${String(expectedDroppedSpacePipeMatches.length)}/${String(expectedDroppedSpacePipeMatches.length)}`,
+      'dropped whitespace pipe qgrep search summary',
+    );
+    for (const absolutePath of [...new Set(expectedDroppedSpacePipeMatches.map((match) => match.absolutePath))]) {
+      assertTextIncludes(droppedSpacePipeTextSummary, absolutePath, 'dropped whitespace pipe qgrep search summary', true);
+    }
+    for (const match of expectedDroppedSpacePipeMatches.slice(0, 5)) {
+      assertTextIncludes(droppedSpacePipeTextSummary, formatQgrepMatchLine(match), 'dropped whitespace pipe qgrep search summary');
     }
 
     const fallbackPipeTextResult = await manager.client.callTool({
@@ -464,6 +551,11 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(fallbackPipeTextSummary, 'querySemanticsApplied: literal-fallback', 'literal fallback qgrep search summary');
     assertTextIncludes(fallbackPipeTextSummary, 'case: smart-case/sensitive', 'literal fallback qgrep search summary');
     assertTextIncludes(fallbackPipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'literal fallback qgrep search summary');
+    assertTextIncludes(
+      fallbackPipeTextSummary,
+      `queryHint: ${QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK}`,
+      'literal fallback qgrep search summary',
+    );
     assertTextIncludes(
       fallbackPipeTextSummary,
       `count: ${String(expectedFallbackPipeMatches.length)}/${String(expectedFallbackPipeMatches.length)}`,

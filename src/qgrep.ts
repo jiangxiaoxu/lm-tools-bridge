@@ -393,6 +393,7 @@ class QgrepService implements vscode.Disposable {
     const parsedLiteralQuery = querySyntax === 'regex'
       ? undefined
       : parseLiteralTextQuery(query);
+    const queryHints = parsedLiteralQuery?.queryHints ?? [];
     const querySemanticsApplied: QgrepTextQuerySemantics = querySyntax === 'regex'
       ? 'regex'
       : parsedLiteralQuery!.mode === 'fallback-literal'
@@ -420,6 +421,7 @@ class QgrepService implements vscode.Disposable {
         casePolicy,
         useCaseInsensitiveSearch,
         maxResultsPayload,
+        queryHints,
         beforeContextLines,
         afterContextLines,
       );
@@ -471,6 +473,7 @@ class QgrepService implements vscode.Disposable {
       querySemanticsApplied,
       casePolicy,
       caseModeApplied: useCaseInsensitiveSearch ? 'insensitive' : 'sensitive',
+      ...(queryHints.length > 0 ? { queryHints: [...queryHints] } : {}),
       ...contextLinesPayload,
       matches,
     };
@@ -1114,6 +1117,7 @@ class QgrepService implements vscode.Disposable {
     casePolicy: QgrepTextCasePolicy,
     useCaseInsensitiveSearch: boolean,
     maxResultsPayload: MaxResultsPayload,
+    queryHints: readonly string[],
     beforeContextLines: ParsedOptionalContextLineCount,
     afterContextLines: ParsedOptionalContextLineCount,
   ): Promise<Record<string, unknown>> {
@@ -1165,6 +1169,7 @@ class QgrepService implements vscode.Disposable {
       querySemanticsApplied,
       casePolicy,
       caseModeApplied: useCaseInsensitiveSearch ? 'insensitive' : 'sensitive',
+      ...(queryHints.length > 0 ? { queryHints: [...queryHints] } : {}),
       ...contextLinesPayload,
       matches,
     };

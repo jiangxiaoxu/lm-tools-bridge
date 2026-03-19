@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.130] - 2026-03-19
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.130.
+- `lm_qgrepSearchText` now reports query rewrite details at runtime through `queryHint:` summary lines for whitespace-only pipe branch dropping and raw-literal fallback, while keeping tool descriptions and input schemas more concise.
+- qgrep tool descriptions and input schemas were streamlined to reduce redundancy while preserving complete search and scope examples.
+
+### 中文
+
+#### 变更
+- 版本补丁号提升至 1.0.130.
+- `lm_qgrepSearchText` 现在会在运行时通过 `queryHint:` 摘要行提示 query 重写细节,包括仅空白 pipe branch 的丢弃以及 raw literal fallback,同时保持工具描述和 input schema 更精简.
+- qgrep 相关工具描述与 input schema 已进一步收敛,减少重复信息,同时保留完整的搜索与 scope 示例.
+
 ## [1.0.129] - 2026-03-19
 
 ### English

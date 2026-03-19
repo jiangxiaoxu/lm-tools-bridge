@@ -5,6 +5,8 @@
 #include "Components/CapsuleComponent.h"
 
 // BrokenPipe||Literal
+// BrokenPipeSpaceDrop| |LiteralSpaceDrop
+// AvatarSpacePipeLeft | AvatarSpacePipeRight
 
 AAvatarCharacter::AAvatarCharacter(const FObjectInitializer& ObjectInitializer)
     : Super(ObjectInitializer)

@@ -4,6 +4,11 @@ interface ParsedLiteralQueryBranch {
 
 class LiteralTextQueryParseError extends Error {}
 
+export const QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED
+  = 'whitespace-only branches between pipe separators were discarded.';
+export const QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK
+  = 'empty literal branches forced raw literal fallback.';
+
 export type ParsedLiteralTextQueryMode = 'union' | 'fallback-literal';
 
 export interface ParsedLiteralTextQuery {
@@ -11,31 +16,65 @@ export interface ParsedLiteralTextQuery {
   regexSource: string;
   hasUppercaseLiteral: boolean;
   mode: ParsedLiteralTextQueryMode;
+  queryHints: string[];
+}
+
+interface NormalizedLiteralQueryBranches {
+  branches: string[];
+  droppedWhitespaceOnlyIntermediateBranches: boolean;
 }
 
 export function parseLiteralTextQuery(query: string): ParsedLiteralTextQuery {
-  const trimmedQuery = query.trim();
-  if (trimmedQuery.length === 0) {
+  if (query.trim().length === 0) {
     throw new Error('query must be a non-empty string.');
   }
 
+  const normalizedBranches = normalizeLiteralQueryBranches(splitLiteralQueryBranches(query));
+  const queryHints = normalizedBranches.droppedWhitespaceOnlyIntermediateBranches
+    ? [QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED]
+    : [];
+
   try {
-    const rawBranches = splitLiteralQueryBranches(trimmedQuery);
-    const parsedBranches = rawBranches.map((branch) => parseLiteralQueryBranch(branch));
+    const parsedBranches = normalizedBranches.branches.map((branch) => parseLiteralQueryBranch(branch));
     return buildParsedLiteralTextQuery(
       parsedBranches.map((branch) => branch.term),
       'union',
+      queryHints,
     );
   } catch (error) {
     if (!(error instanceof LiteralTextQueryParseError)) {
       throw error;
     }
-    return buildRawLiteralTextQuery(query);
+    return buildRawLiteralTextQuery(query, [
+      ...queryHints,
+      QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK,
+    ]);
   }
 }
 
-export function buildRawLiteralTextQuery(query: string): ParsedLiteralTextQuery {
-  return buildParsedLiteralTextQuery([query], 'fallback-literal');
+export function buildRawLiteralTextQuery(
+  query: string,
+  queryHints: readonly string[] = [],
+): ParsedLiteralTextQuery {
+  return buildParsedLiteralTextQuery([query], 'fallback-literal', queryHints);
+}
+
+function normalizeLiteralQueryBranches(branches: readonly string[]): NormalizedLiteralQueryBranches {
+  let droppedWhitespaceOnlyIntermediateBranches = false;
+  const normalizedBranches = branches.filter((branch, index) => {
+    if (!/^\s+$/u.test(branch)) {
+      return true;
+    }
+    const keepBranch = index === 0 || index === branches.length - 1;
+    if (!keepBranch) {
+      droppedWhitespaceOnlyIntermediateBranches = true;
+    }
+    return keepBranch;
+  });
+  return {
+    branches: normalizedBranches,
+    droppedWhitespaceOnlyIntermediateBranches,
+  };
 }
 
 function splitLiteralQueryBranches(query: string): string[] {
@@ -44,7 +83,7 @@ function splitLiteralQueryBranches(query: string): string[] {
 
   for (let index = 0; index < query.length; index += 1) {
     const char = query[index];
-    if (char === '"' && current.trim().length === 0 && !hasEscapedPipeBoundary(query, index)) {
+    if (char === '"' && current.length === 0 && !hasEscapedPipeBoundary(query, index)) {
       const quotedBranch = tryConsumeQuotedBranch(query, index);
       if (quotedBranch) {
         current += quotedBranch.segment;
@@ -65,19 +104,18 @@ function splitLiteralQueryBranches(query: string): string[] {
 }
 
 function parseLiteralQueryBranch(rawBranch: string): ParsedLiteralQueryBranch {
-  const trimmedBranch = rawBranch.trim();
-  if (trimmedBranch.length === 0) {
+  if (rawBranch.length === 0) {
     throw new LiteralTextQueryParseError('query literal branches must not be empty.');
   }
 
-  const quote = getWrappedBranchQuote(trimmedBranch);
+  const quote = getWrappedBranchQuote(rawBranch);
   if (!quote) {
     return {
-      term: decodeUnquotedLiteralBranch(trimmedBranch),
+      term: decodeUnquotedLiteralBranch(rawBranch),
     };
   }
 
-  const inner = trimmedBranch.slice(1, -1);
+  const inner = rawBranch.slice(1, -1);
   if (inner.length === 0) {
     throw new LiteralTextQueryParseError('query literal branches must not be empty.');
   }
@@ -134,17 +172,11 @@ function tryConsumeQuotedBranch(
     if (char !== '"') {
       continue;
     }
-
-    let endIndex = index;
-    while (endIndex + 1 < query.length && /\s/u.test(query[endIndex + 1] ?? '')) {
-      endIndex += 1;
-      segment += query[endIndex];
-    }
-    const next = query[endIndex + 1];
-    if (next === undefined || (next === '|' && !hasEscapedPipeBoundary(query, endIndex + 1))) {
+    const next = query[index + 1];
+    if (next === undefined || (next === '|' && !hasEscapedPipeBoundary(query, index + 1))) {
       return {
         segment,
-        endIndex,
+        endIndex: index,
       };
     }
     return undefined;
@@ -178,12 +210,14 @@ function hasEscapedPipeBoundary(query: string, index: number): boolean {
 function buildParsedLiteralTextQuery(
   terms: string[],
   mode: ParsedLiteralTextQueryMode,
+  queryHints: readonly string[] = [],
 ): ParsedLiteralTextQuery {
   return {
     terms,
     regexSource: terms.map((term) => escapeRegex(term)).join('|'),
     hasUppercaseLiteral: terms.some((term) => /[A-Z]/u.test(term)),
     mode,
+    queryHints: [...queryHints],
   };
 }
 

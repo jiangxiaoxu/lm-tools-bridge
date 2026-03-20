@@ -82,6 +82,18 @@ Notes:
 - Text examples: `AvatarCharacter`, `AvatarCharacter|AvatarHealthComponent`, `"AvatarCharacter|AvatarHealthComponent"`, `AvatarCharacter\|AvatarHealthComponent`, `Avatar(Character|HealthComponent)`.
 - Scope example: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
 
+### Diagnostics Notes
+- `lm_getDiagnostics.includePattern` now uses the same path-or-glob scope syntax as the search tools.
+- Supported forms include workspace-relative patterns, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, and absolute paths or globs.
+- `lm_getDiagnostics.includePattern` does not support bare `|` alternation. Use brace globs such as `{A,B}` instead.
+- Examples:
+  - `*.as`: only `.as` files directly under the workspace root
+  - `**/*.as`: recursive `.as` files across the workspace
+  - `*.{h,cpp}`: only `.h` and `.cpp` files directly under the workspace root
+  - `**/*.{h,cpp}`: recursive `.h` and `.cpp` files across the workspace
+  - `Engine/**/*.{h,cpp}`: recursive `.h` and `.cpp` files only in the `Engine` workspace folder
+  - `{Game,Engine}/**/*.{h,cpp}`: recursive `.h` and `.cpp` files only in the selected workspace folders
+
 ### Troubleshooting
 - `node` is missing: install Node.js, restart VS Code, then retry.
 - `Untitled multi-root workspace is not supported`: save it as a real `.code-workspace` file first.
@@ -170,6 +182,18 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 - 在 multi-root workspace 里,顶层 brace alternation 可以混用 `WorkspaceName/...` 和普通 workspace-relative branch. 不带 workspace 前缀的 branch 会作用于所有当前 workspace,带前缀的 branch 只作用于指定 workspace,而 mixed file search 的 summary 仍显示 `all initialized workspaces`.
 - 文本示例: `AvatarCharacter`, `AvatarCharacter|AvatarHealthComponent`, `"AvatarCharacter|AvatarHealthComponent"`, `AvatarCharacter\|AvatarHealthComponent`, `Avatar(Character|HealthComponent)`.
 - 范围示例: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
+
+### Diagnostics Notes
+- `lm_getDiagnostics.includePattern` 现在与搜索工具共用同一套 path-or-glob scope 语法.
+- 支持 workspace-relative pattern、`WorkspaceName/...`、`{WorkspaceA,WorkspaceB}/...` 以及 absolute path / glob.
+- `lm_getDiagnostics.includePattern` 不支持裸 `|` alternation,需要改用 `{A,B}` 这类 brace glob.
+- 示例:
+  - `*.as`: 仅匹配 workspace 根目录下的 `.as` 文件
+  - `**/*.as`: 递归匹配整个 workspace 中的 `.as` 文件
+  - `*.{h,cpp}`: 仅匹配 workspace 根目录下的 `.h` 和 `.cpp` 文件
+  - `**/*.{h,cpp}`: 递归匹配整个 workspace 中的 `.h` 和 `.cpp` 文件
+  - `Engine/**/*.{h,cpp}`: 仅在 `Engine` workspace folder 内递归匹配 `.h` 和 `.cpp`
+  - `{Game,Engine}/**/*.{h,cpp}`: 仅在选定的 workspace folders 内递归匹配 `.h` 和 `.cpp`
 
 ### 故障排查
 - 缺少 `node`: 先安装 Node.js,重启 VS Code 后再试.

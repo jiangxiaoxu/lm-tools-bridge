@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.133] - 2026-03-20
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.133.
+- Breaking change: `lm_getDiagnostics` replaced `filePaths` with `includePattern`, and the new filter now uses the same workspace path/glob syntax as the search tools.
+- `lm_getDiagnostics` filtered output now reports `scope=filtered`, echoes the active `includePattern`, excludes non-workspace diagnostics while filtered, and returns empty results instead of errors when a valid glob matches no files.
+- Clarified `lm_getDiagnostics.includePattern` examples for recursive and multi-extension glob usage in tool metadata and README.
+
+### 中文
+
+#### 变更
+- 将 patch 版本提升到 1.0.133。
+- Breaking change: `lm_getDiagnostics` 将输入过滤参数从 `filePaths` 改为 `includePattern`,并改为复用搜索工具的 workspace path / glob 语法。
+- `lm_getDiagnostics` 在过滤模式下现在会输出 `scope=filtered`,回显当前 `includePattern`,过滤掉不属于当前 workspace 的诊断,并在合法 glob 无匹配时返回空结果而不是报错。
+- 在工具元数据和 README 中补充 `lm_getDiagnostics.includePattern` 的递归与多扩展 glob 示例说明。
+
 ## [1.0.132] - 2026-03-19
 
 ### English

@@ -16,6 +16,7 @@ import {
   waitForFileExists,
   waitForWorkspaceFolderNames,
 } from './testHarness';
+import { buildToolInputSchema, getEnabledExposedToolsSnapshot } from '../../../tooling';
 
 const REQUIRED_COMMANDS = [
   'lm-tools-bridge.qgrepInitAllWorkspaces',
@@ -64,6 +65,33 @@ export async function run(): Promise<void> {
         const commands = await vscode.commands.getCommands(true);
         for (const commandId of REQUIRED_COMMANDS) {
           assertCommandRegistered(commands, commandId);
+        }
+      },
+    },
+    {
+      name: 'exposes lm_getDiagnostics with includePattern-based input schema',
+      run: async () => {
+        await activateExtension();
+        const tool = getEnabledExposedToolsSnapshot().find((candidate) => candidate.name === 'lm_getDiagnostics');
+        if (!tool) {
+          throw new Error('Expected lm_getDiagnostics to be enabled.');
+        }
+        const inputSchema = buildToolInputSchema(tool);
+        if (!inputSchema || typeof inputSchema !== 'object' || Array.isArray(inputSchema)) {
+          throw new Error('Expected lm_getDiagnostics input schema to be an object.');
+        }
+        const schemaRecord = inputSchema as {
+          properties?: Record<string, unknown>;
+        };
+        const properties = schemaRecord.properties;
+        if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+          throw new Error('Expected lm_getDiagnostics input schema properties.');
+        }
+        if (!Object.prototype.hasOwnProperty.call(properties, 'includePattern')) {
+          throw new Error('Expected lm_getDiagnostics schema to expose includePattern.');
+        }
+        if (Object.prototype.hasOwnProperty.call(properties, 'filePaths')) {
+          throw new Error('Expected lm_getDiagnostics schema to remove filePaths.');
         }
       },
     },

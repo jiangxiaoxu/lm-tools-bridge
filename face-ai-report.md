@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.132`.
+- Version baseline: `1.0.133`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -12,6 +12,7 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
+- `lm_getDiagnostics.includePattern` now uses workspace path/glob semantics aligned with other search tools: workspace-relative patterns, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, and absolute paths or globs; bare `|` alternation is rejected, `scope` is `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
 - `lm_findFiles.query` always uses glob semantics and rejects bare `|` alternation with guidance to use brace globs such as `{A,B}`.
@@ -136,7 +137,7 @@
 - [Tool not found or disabled] Read: `src/tooling.ts -> getEnabledExposedToolsSnapshot | invokeExposedTool`; Decide: exposure first, enabled second; Verify: target appears in effective set and call succeeds.
 - [Tool selection config mismatch] Read: `src/tooling.ts -> setExposedTools | setEnabledTools | pruneBuiltInDisabledFromDeltas | pruneEnabledDeltasByExposed`; Decide: required/built-in-disabled/exposed-first rules apply; Verify: deltas normalize and intended tool state persists.
 - [Config scope mismatch] Read: `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`; Decide: evaluate `useWorkspaceSettings` + `.code-workspace`; Verify: tooltip line `Config scope: ...` matches expectation.
-- [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool`; Decide: validate `filePaths` resolution (absolute/`WorkspaceName/...`/relative + unique existing match), `maxResults`, and `severities` before suspecting data loss; Verify: payload contains `scope/files/preview` and expected counts after retry.
+- [Diagnostics validation/truncation] Read: `src/tooling.ts -> runGetDiagnosticsTool` and `src/diagnosticsIncludePattern.ts`; Decide: validate `includePattern` path/glob parsing (`WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, absolute path/glob, bare `|` rejection), `maxResults`, and `severities` before suspecting data loss; Verify: payload contains `scope/includePattern/files/preview`, filtered mode excludes non-workspace diagnostics, and no-match glob filters return empty results instead of errors.
 - [qgrep init/watch lifecycle] Read: `src/qgrep.ts -> initAllWorkspaces | rebuildAllWorkspaces | startWatchForInitializedWorkspaces | startAutoUpdateWatchersForInitializedWorkspaces | stopAndClearAllWorkspaces | updateWorkspaceProgress | search | files`; Decide: manual init command still works, rebuild/clear menu commands now iterate all current workspaces, qgrep search/files auto-init all workspaces and block until indexing/update readiness, startup refresh for initialized workspaces syncs extension-managed `workspace.cfg` blocks before `qgrep update` and one-shot auto-rebuilds when corruption-like assertion signatures are detected, qgrep `watch` covers existing-file content changes, create/delete events trigger debounced `qgrep update`, `search.exclude=true` rules sync into managed `workspace.cfg` excludes (plus fixed `.git` exclude), and clear command disables by deleting `.vscode/qgrep`; Verify: `workspace.cfg` presence controls watch/auto-update startup and tool calls wait during indexing before returning results.
 - [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: text output reports `binary`, workspace counts, aggregate progress, and per-workspace lines.
 - [qgrep search scope rejected] Read: `src/qgrep.ts -> resolveIncludePattern | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported` and `src/qgrepTextQuery.ts -> parseLiteralTextQuery`; Decide: `lm_qgrepSearchText.includePattern` enforces existing path/glob rules, rejects bare `|` alternation, and ignores legacy `searchPath`/`includeIgnoredFiles`; text query defaults to literal with top-level `|`, exact whitespace preservation except for whitespace-only branches between two separators which are dropped, whole-branch outer double quotes only when the branch starts and ends with `"` exactly, raw `\|`, malformed quotes treated as ordinary characters, and empty-branch fallback to raw literal, while explicit `querySyntax='glob'` is rejected; `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp`; Verify: text outside/ambiguous includePattern and literal pipe parsing/fallback return expected behavior, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
@@ -161,7 +162,7 @@
 - VS Code integration runner/fixtures -> `src/test/integration/*`, `src/test/manager-integration/*`, `src/test/fixtures/multi-root/*`, `src/test/fixtures/multi-root-brace/*`.
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
 - Handshake/session routing -> `src/stdioManager.ts`, `src/workspaceDiscovery.ts`, `src/managerHandshake.ts`.
-- Diagnostics contract -> `src/tooling.ts`.
+- Diagnostics contract -> `src/tooling.ts`, `src/diagnosticsIncludePattern.ts`.
 - Server/qgrep status bar behavior -> `src/extension.ts`.
 - Version bump only -> `CHANGELOG.md`.
 

@@ -4,8 +4,13 @@ import { TextDecoder } from 'node:util';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as z from 'zod';
+import {
+  createDiagnosticsIncludePatternMatcher,
+  resolveDiagnosticsWorkspaceFile,
+  type DiagnosticsWorkspaceFolder,
+} from './diagnosticsIncludePattern';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
-import { resolveInputFilePath, resolveStructuredPath } from './workspacePath';
+import { resolveStructuredPath } from './workspacePath';
 import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
 import { showToolConfigPanel, type ToolConfigPanelResult } from './toolConfigPanel';
 import {
@@ -32,6 +37,7 @@ import {
   QGREP_SEARCH_CONTEXT_LINES_LIMIT,
   requiresStructuredCustomToolResult,
 } from './qgrepOutput';
+import { parseOptionalIncludePattern } from './searchInput';
 
 type ToolingLogger = {
   info: (message: string) => void;
@@ -249,20 +255,16 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   required: ['query'],
 };
 
-const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for specific files or across all files. Use this tool to inspect the same Problems diagnostics the user sees, analyze all current issues when no file is specified, and validate changes after edits. The optional filePaths parameter filters diagnostics to specific files and supports workspace-root relative paths, WorkspaceName/... paths, and absolute paths. In multi-root workspaces, relative paths must resolve to a unique existing match or use WorkspaceName/... to disambiguate.';
+const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for the current workspace or a filtered file set. Use this tool to inspect the same Problems diagnostics the user sees, analyze current issues when no filter is specified, and validate changes after edits. The optional includePattern parameter supports path/glob filtering aligned with the search tools. Examples: **/*.as, **/*.{h,cpp}.';
 
 const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    filePaths: {
-      type: 'array',
-      uniqueItems: true,
-      items: {
-        type: 'string',
-        minLength: 1,
-        pattern: '\\S',
-      },
-      description: 'Optional file path filters. Supports workspace-root relative paths, WorkspaceName/... paths, and absolute paths. Paths must exist. In multi-root workspaces, relative paths must resolve uniquely; otherwise use WorkspaceName/... to disambiguate. Empty array means no file filter.',
+    includePattern: {
+      type: 'string',
+      minLength: 1,
+      pattern: '\\S',
+      description: "Optional path or glob scope. Supports workspace-relative patterns, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., and absolute paths or globs. Example patterns: '*.as' (root only), '**/*.as' (recursive), '*.{h,cpp}' (root only), '**/*.{h,cpp}' (recursive), 'Engine/**/*.{h,cpp}', '{Game,Engine}/**/*.{h,cpp}'. includePattern does not support '|' alternation; use brace globs such as '{A,B}' instead.",
     },
     severities: {
       type: 'array',
@@ -506,7 +508,8 @@ interface LmGetDiagnosticsFileResult {
 
 interface LmGetDiagnosticsPayload {
   source: 'vscode.languages.getDiagnostics';
-  scope: 'workspace+external' | 'single-file' | 'multi-file';
+  scope: 'workspace+external' | 'filtered';
+  includePattern: string | null;
   severities: LmGetDiagnosticsSeverity[];
   capped: boolean;
   totalDiagnostics: number;
@@ -2062,28 +2065,21 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
     throw new Error('vscode.languages.getDiagnostics is not available in this VS Code version.');
   }
 
-  const requestedFilePaths = parseLmGetDiagnosticsFilePaths(input.filePaths);
-
+  const includePattern = parseOptionalIncludePattern(input);
   const severities = parseLmGetDiagnosticsSeverities(input.severities);
   const severitySet = new Set<LmGetDiagnosticsSeverity>(severities);
   const maxResults = parseLmGetDiagnosticsMaxResults(input.maxResults);
-  const diagnosticsByUri: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> =
-    requestedFilePaths && requestedFilePaths.length > 0
-    ? getDiagnosticsForFilePaths(getDiagnostics, requestedFilePaths)
-    : getDiagnostics();
+  const diagnosticsByUri = getDiagnostics();
   const scope: LmGetDiagnosticsPayload['scope'] =
-    !requestedFilePaths || requestedFilePaths.length === 0
-      ? 'workspace+external'
-      : requestedFilePaths.length === 1
-        ? 'single-file'
-        : 'multi-file';
+    includePattern ? 'filtered' : 'workspace+external';
 
-  const files = await collectLmGetDiagnosticsFiles(diagnosticsByUri, severitySet);
+  const files = await collectLmGetDiagnosticsFiles(diagnosticsByUri, severitySet, includePattern);
   const totalDiagnostics = files.reduce((count, file) => count + file.diagnostics.length, 0);
   const limited = applyLmGetDiagnosticsLimit(files, maxResults);
   const payload: LmGetDiagnosticsPayload = {
     source: 'vscode.languages.getDiagnostics',
     scope,
+    includePattern: includePattern ?? null,
     severities,
     capped: limited.capped,
     totalDiagnostics,
@@ -2907,33 +2903,28 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
-function getDiagnosticsForFilePaths(
-  getDiagnostics: typeof vscode.languages.getDiagnostics,
-  filePaths: readonly string[],
-): ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> {
-  const entries: Array<readonly [vscode.Uri, readonly vscode.Diagnostic[]]> = [];
-  const seenUris = new Set<string>();
-  for (const filePath of filePaths) {
-    const resolved = resolveInputFilePath(filePath);
-    const uri = vscode.Uri.file(resolved.absoluteFilePath);
-    const key = uri.toString();
-    if (seenUris.has(key)) {
-      continue;
-    }
-    seenUris.add(key);
-    entries.push([uri, getDiagnostics(uri)]);
-  }
-  return entries;
-}
-
 async function collectLmGetDiagnosticsFiles(
   entries: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]>,
   severities: ReadonlySet<LmGetDiagnosticsSeverity>,
+  includePattern: string | undefined,
 ): Promise<LmGetDiagnosticsFileResult[]> {
   const files: LmGetDiagnosticsFileResult[] = [];
   const lineCache = new Map<string, string[] | null>();
+  const workspaceFolders = getLmGetDiagnosticsWorkspaceFolders();
+  const includeMatcher = includePattern
+    ? createDiagnosticsIncludePatternMatcher(includePattern, workspaceFolders)
+    : undefined;
   for (const [uri, diagnostics] of entries) {
     const filePath = resolveLmGetDiagnosticsFilePath(uri);
+    if (includeMatcher) {
+      if (!filePath.readableFilePath) {
+        continue;
+      }
+      const workspaceFile = resolveDiagnosticsWorkspaceFile(filePath.readableFilePath, workspaceFolders);
+      if (!workspaceFile || !includeMatcher.matches(workspaceFile)) {
+        continue;
+      }
+    }
     const normalizedDiagnostics: LmGetDiagnosticsNormalizedDiagnostic[] = [];
     for (const diagnostic of diagnostics) {
       const normalized = await normalizeDiagnosticForLmGetDiagnostics(
@@ -2957,6 +2948,13 @@ async function collectLmGetDiagnosticsFiles(
   }
   files.sort((left, right) => left.absolutePath.localeCompare(right.absolutePath));
   return files;
+}
+
+function getLmGetDiagnosticsWorkspaceFolders(): DiagnosticsWorkspaceFolder[] {
+  return (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
+    name: folder.name,
+    rootPath: folder.uri.fsPath,
+  }));
 }
 
 function resolveLmGetDiagnosticsFilePath(uri: vscode.Uri): {
@@ -3205,33 +3203,6 @@ function parseLmGetDiagnosticsSeverities(input: unknown): LmGetDiagnosticsSeveri
   return values;
 }
 
-function parseLmGetDiagnosticsFilePaths(input: unknown): string[] | undefined {
-  if (input === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(input)) {
-    throw new Error('filePaths must be an array of strings when provided.');
-  }
-  const values: string[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < input.length; index += 1) {
-    const item = input[index];
-    if (typeof item !== 'string') {
-      throw new Error(`filePaths[${index}] must be a string.`);
-    }
-    const normalized = item.trim();
-    if (normalized.length === 0) {
-      throw new Error(`filePaths[${index}] must be a non-empty string.`);
-    }
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    values.push(normalized);
-  }
-  return values;
-}
-
 function isLmGetDiagnosticsSeverity(value: string): value is LmGetDiagnosticsSeverity {
   return (LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES as readonly string[]).includes(value);
 }
@@ -3287,6 +3258,7 @@ function formatLmGetDiagnosticsSummary(payload: LmGetDiagnosticsPayload, returne
     'Diagnostics summary',
     `source: ${payload.source}`,
     `scope: ${payload.scope}`,
+    `includePattern: ${payload.includePattern ?? '<none>'}`,
     `severities: ${payload.severities.join(', ')}`,
     `files: ${payload.files.length}`,
     `diagnostics: ${returnedDiagnostics}/${payload.totalDiagnostics}${payload.capped ? ' (capped)' : ''}`,

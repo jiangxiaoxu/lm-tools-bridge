@@ -40,6 +40,12 @@ import {
   isSupportedWindowsWorkspacePath,
   resolveComparablePath,
 } from './windowsWorkspacePath';
+import {
+  getIncludePatternSpecReadHint,
+  getIncludePatternSpecResourceDescription,
+  getIncludePatternSpecText,
+  INCLUDE_PATTERN_SPEC_URI,
+} from './includePatternSpec';
 
 interface ManagerMatch {
   sessionId: string;
@@ -449,6 +455,7 @@ function buildHandshakeUriTemplates(): HandshakeDiscoveryResourceTemplate[] {
 function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): HandshakeGuidance {
   const nextSteps = [
     `For each bridged tool, ${getSchemaReadHint()}`,
+    getIncludePatternSpecReadHint(),
   ];
   if (discovery.partial || discovery.issues.length > 0) {
     nextSteps.push(`Discovery is partial or has issues: ${getDiscoveryRefreshHint()}`);
@@ -613,6 +620,15 @@ function getNamesResource() {
     name: 'Bridged tool names',
     description: 'Read bridged workspace tool names after handshake.',
     mimeType: 'application/json',
+  };
+}
+
+function getIncludePatternSpecResource() {
+  return {
+    uri: INCLUDE_PATTERN_SPEC_URI,
+    name: 'Shared includePattern syntax',
+    description: getIncludePatternSpecResourceDescription(),
+    mimeType: 'text/plain',
   };
 }
 
@@ -1140,6 +1156,7 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
     'A successful handshake response includes discovery data (callTool/bridgedTools).',
     `After handshake, ${getDiscoveryRefreshHint()}`,
     `Before first tool call, ${getSchemaReadHint()}`,
+    getIncludePatternSpecReadHint(),
     `Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and schema read.`,
     '',
     'Status snapshot:',
@@ -1241,6 +1258,7 @@ function createServer(): Server {
       resources: [
         getHandshakeResource(),
         getCallToolResource(),
+        getIncludePatternSpecResource(),
         getNamesResource(),
       ],
     };
@@ -1265,6 +1283,9 @@ function createServer(): Server {
     }
     if (uri === TOOL_NAMES_RESOURCE_URI) {
       return resourceJson(uri, { tools: getBoundToolNames() });
+    }
+    if (uri === INCLUDE_PATTERN_SPEC_URI) {
+      return resourceJson(uri, getIncludePatternSpecText(), 'text/plain');
     }
     const toolName = getToolNameFromUri(uri, 'lm-tools://tool/');
     if (toolName) {

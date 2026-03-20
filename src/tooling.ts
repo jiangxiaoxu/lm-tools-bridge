@@ -37,6 +37,10 @@ import {
   QGREP_SEARCH_CONTEXT_LINES_LIMIT,
   requiresStructuredCustomToolResult,
 } from './qgrepOutput';
+import {
+  buildIncludePatternSchema,
+  getIncludePatternToolDescriptionSentence,
+} from './includePatternSpec';
 import { parseOptionalIncludePattern } from './searchInput';
 
 type ToolingLogger = {
@@ -208,13 +212,7 @@ const LM_FIND_TEXT_IN_FILES_DESCRIPTION = [
   "querySyntax controls how query is interpreted. Omit it or set querySyntax='literal' for exact text, or set querySyntax='regex' for regular expressions.",
   "If you are not sure what words will appear in the workspace, prefer querySyntax='regex' with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.",
   "For example, use querySyntax='regex' with query='function|method|procedure' to look for all of those words at once.",
-  'Use includePattern as a path or glob scope to search within matching files, or in a specific file.',
-  'In multi-root workspaces, includePattern also supports WorkspaceName/** (for example, UE5/**) to limit search to a specific workspace folder.',
-  'Glob patterns match from the root of the workspace folder. Examples:',
-  '- **/*.{js,ts} to match all js/ts files in the workspace.',
-  '- src/** to match all files under the top-level src folder.',
-  '- **/foo/**/*.js to match all js files under any foo folder in the workspace.',
-  "includePattern does not support '|' alternation. Use brace globs such as {A,B} instead.",
+  getIncludePatternToolDescriptionSentence(),
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
   'When caseSensitive is false, smart-case is used by default (including regex searches). Set caseSensitive to true to force case-sensitive matching.',
@@ -238,10 +236,7 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
       default: 'literal',
       description: "Controls how query is interpreted. Use 'literal' for exact text or 'regex' for regular expressions.",
     },
-    includePattern: {
-      type: 'string',
-      description: "Optional path or glob scope. Supports absolute paths, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., and workspace-relative patterns. To search recursively inside a folder, use a proper glob pattern like 'src/folder/**'. includePattern does not support '|' alternation; use brace globs such as '{A,B}'.",
-    },
+    includePattern: buildIncludePatternSchema(),
     maxResults: {
       type: 'number',
       description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
@@ -255,17 +250,19 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
   required: ['query'],
 };
 
-const LM_GET_DIAGNOSTICS_DESCRIPTION = 'Get compile and lint diagnostics for the current workspace or a filtered file set. Use this tool to inspect the same Problems diagnostics the user sees, analyze current issues when no filter is specified, and validate changes after edits. The optional includePattern parameter supports path/glob filtering aligned with the search tools. Examples: **/*.as, **/*.{h,cpp}.';
+const LM_GET_DIAGNOSTICS_DESCRIPTION = [
+  'Get compile and lint diagnostics for the current workspace or a filtered file set.',
+  'Use this tool to inspect the same Problems diagnostics the user sees, analyze current issues when no filter is specified, and validate changes after edits.',
+  getIncludePatternToolDescriptionSentence(),
+].join(' ');
 
 const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    includePattern: {
-      type: 'string',
+    includePattern: buildIncludePatternSchema({
       minLength: 1,
       pattern: '\\S',
-      description: "Optional path or glob scope. Supports workspace-relative patterns, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., and absolute paths or globs. Example patterns: '*.as' (root only), '**/*.as' (recursive), '*.{h,cpp}' (root only), '**/*.{h,cpp}' (recursive), 'Engine/**/*.{h,cpp}', '{Game,Engine}/**/*.{h,cpp}'. includePattern does not support '|' alternation; use brace globs such as '{A,B}' instead.",
-    },
+    }),
     severities: {
       type: 'array',
       uniqueItems: true,
@@ -367,21 +364,11 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   "Default querySyntax='literal' matches exact text; set querySyntax='regex' for regular expressions.",
   "In literal mode, top-level unescaped '|' provides literal OR semantics.",
   'If includePattern is omitted, search runs across all initialized workspace folders.',
-  'includePattern supports both paths and glob patterns in the same forms: absolute, WorkspaceName/..., {WorkspaceA,WorkspaceB}/..., or workspace-relative.',
-  'In multi-root workspaces, top-level brace alternatives can mix WorkspaceName/... and workspace-relative branches; unscoped branches apply to all current workspaces, and scoped branches stay limited to their selected workspaces.',
-  "includePattern does not support '|' alternation. Use brace globs such as {A,B}.",
+  getIncludePatternToolDescriptionSentence(),
   'beforeContextLines/afterContextLines add optional preview context lines.',
   'When caseSensitive is false or omitted, smart-case is used.',
   'Output is plain text with absolute paths (/) and always includes line numbers.',
   'qgrep indexing and search are workspace-only; external folders cannot be indexed or searched.',
-  'includePattern value examples:',
-  '"WorkspaceName/**"',
-  '"{WorkspaceA,WorkspaceB}/**/*.{h,cpp,cs,as}"',
-  '"{WorkspaceName/Source/**/*.{h,cpp,cs},WorkspaceName/Script/**/*.as}"',
-  '"{WorkspaceA/Source/**/*.h,WorkspaceB/Script/**/*.as,src/**/*.as}"',
-  '"**/*.{js,ts}"',
-  '"src/**"',
-  '"**/foo/**/*.js"',
 ].join('\n');
 
 const LM_QGREP_GET_STATUS_DESCRIPTION = 'Get qgrep binary, workspace, and indexing status.';
@@ -409,10 +396,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
       default: 'literal',
       description: "Controls query interpretation: 'literal' or 'regex'.",
     },
-    includePattern: {
-      type: 'string',
-      description: "Optional path or glob scope. Use brace globs such as '{A,B}' instead of '|' alternation.",
-    },
+    includePattern: buildIncludePatternSchema(),
     maxResults: {
       type: 'integer',
       default: 300,

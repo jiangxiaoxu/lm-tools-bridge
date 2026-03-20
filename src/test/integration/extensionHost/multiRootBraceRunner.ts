@@ -19,6 +19,7 @@ import {
   runIntegrationTests,
   waitForWorkspaceFolderNames,
 } from './testHarness';
+import { executeFindTextInFilesSearch } from '../../../searchTools';
 
 const QGREP_READY_TIMEOUT_MS = 30_000;
 const QGREP_READY_POLL_INTERVAL_MS = 100;
@@ -76,6 +77,12 @@ interface QgrepMatchRecord extends QgrepFileRecord {
 interface ExpectedFixtureFile extends QgrepFileRecord {}
 
 interface ExpectedFixtureMatch extends QgrepMatchRecord {}
+
+interface FindTextMatchRecord {
+  path: string;
+  line: number;
+  preview: string;
+}
 
 function normalizePath(pathValue: string): string {
   return pathValue.replace(/\\/gu, '/');
@@ -358,6 +365,53 @@ function assertMatchRecordsMatch(payload: Record<string, unknown>, expectedMatch
   );
 }
 
+function collectFindTextMatchRecords(payload: Record<string, unknown>): FindTextMatchRecord[] {
+  assert.ok(Array.isArray(payload.matches), 'Expected payload.matches to be an array.');
+  return payload.matches.map((entry, index) => {
+    assert.ok(entry && typeof entry === 'object' && !Array.isArray(entry), `Expected matches[${String(index)}] to be an object.`);
+    const record = entry as {
+      path?: unknown;
+      line?: unknown;
+      preview?: unknown;
+    };
+    assert.equal(typeof record.path, 'string', `Expected matches[${String(index)}].path to be a string.`);
+    assert.equal(typeof record.line, 'number', `Expected matches[${String(index)}].line to be a number.`);
+    assert.equal(typeof record.preview, 'string', `Expected matches[${String(index)}].preview to be a string.`);
+    return {
+      path: normalizePath(record.path as string),
+      line: record.line as number,
+      preview: record.preview as string,
+    };
+  });
+}
+
+function assertFindTextMatchRecordsMatch(
+  payload: Record<string, unknown>,
+  expectedMatches: readonly ExpectedFixtureMatch[],
+): void {
+  const actual = collectFindTextMatchRecords(payload).sort((left, right) => {
+    const pathResult = left.path.localeCompare(right.path);
+    if (pathResult !== 0) {
+      return pathResult;
+    }
+    return left.line - right.line;
+  });
+  const expected = expectedMatches
+    .map((match) => ({
+      path: match.absolutePath,
+      line: match.line,
+      preview: match.preview,
+    }))
+    .sort((left, right) => {
+      const pathResult = left.path.localeCompare(right.path);
+      if (pathResult !== 0) {
+        return pathResult;
+      }
+      return left.line - right.line;
+    });
+  assert.deepEqual(actual, expected);
+}
+
 async function ensureQgrepReady(): Promise<void> {
   const clearSummary = await runQgrepStopAndClearCommand();
   assert.equal(clearSummary.failed, 0, `Expected qgrep clear to succeed: ${clearSummary.message}`);
@@ -546,6 +600,82 @@ export async function run(): Promise<void> {
         assert.equal(payload.maxResultsApplied, 50);
         assert.equal(payload.queryHints, undefined);
         assertMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'applies brace-scoped includePattern filtering to lm_findTextInFiles',
+      run: async () => {
+        await activateExtension();
+        const expectedMatches = await collectBraceScopedFixtureMatches(BRACE_SCOPED_TEXT_QUERY);
+        assert.ok(expectedMatches.length > 0, 'Expected brace-scoped fixture to contain ripgrep text matches.');
+
+        const payload = await executeFindTextInFilesSearch({
+          query: BRACE_SCOPED_TEXT_QUERY,
+          includePattern: BRACE_SCOPED_QUERY,
+          maxResults: 1500,
+        });
+
+        assert.equal(payload.capped, false);
+        assert.equal(payload.uniqueMatches, expectedMatches.length);
+        assert.equal(payload.totalMatches, expectedMatches.length);
+        assertFindTextMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'applies mixed scoped and unscoped brace alternation to lm_findTextInFiles',
+      run: async () => {
+        await activateExtension();
+        const expectedMatches = await collectMixedScopedUnscopedFixtureMatches();
+        assert.ok(expectedMatches.length > 0, 'Expected mixed scoped/unscoped fixture to contain ripgrep text matches.');
+
+        const payload = await executeFindTextInFilesSearch({
+          query: MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
+          includePattern: MIXED_SCOPED_UNSCOPED_QUERY,
+          maxResults: 200,
+        });
+
+        assert.equal(payload.capped, false);
+        assert.equal(payload.uniqueMatches, expectedMatches.length);
+        assert.equal(payload.totalMatches, expectedMatches.length);
+        assertFindTextMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'accepts absolute file includePattern in lm_findTextInFiles',
+      run: async () => {
+        await activateExtension();
+        const [expectedFile] = await collectExplicitWorkspacePathFiles([BRACE_SCOPED_BRIDGE_ANCHOR_FILE]);
+        assert.ok(expectedFile, 'Expected bridge anchor fixture file.');
+        const expectedMatches = await collectFixtureMatchesInFiles([expectedFile], 'SpacePipeLeft');
+        assert.ok(expectedMatches.length > 0, 'Expected absolute includePattern file to contain ripgrep text matches.');
+
+        const payload = await executeFindTextInFilesSearch({
+          query: 'SpacePipeLeft',
+          includePattern: expectedFile.absolutePath,
+          maxResults: 50,
+        });
+
+        assert.equal(payload.capped, false);
+        assert.equal(payload.uniqueMatches, expectedMatches.length);
+        assert.equal(payload.totalMatches, expectedMatches.length);
+        assertFindTextMatchRecordsMatch(payload, expectedMatches);
+      },
+    },
+    {
+      name: 'rejects lm_findTextInFiles includePattern outside current workspaces',
+      run: async () => {
+        await activateExtension();
+        const outsidePattern = process.platform === 'win32'
+          ? 'D:/outside/**/*.ts'
+          : '/outside/**/*.ts';
+
+        await assert.rejects(
+          () => executeFindTextInFilesSearch({
+            query: BRACE_SCOPED_TEXT_QUERY,
+            includePattern: outsidePattern,
+          }),
+          /includePattern is outside current workspaces/u,
+        );
       },
     },
     {

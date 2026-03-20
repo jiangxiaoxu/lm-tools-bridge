@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.134] - 2026-03-20
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.134.
+- Added the shared `lm-tools://spec/includePattern` resource and shared schema metadata so tools using `includePattern` point to one syntax contract.
+- `lm_findTextInFiles.includePattern` now aligns with the shared contract, including brace-scoped workspace selectors, mixed scoped and unscoped top-level brace branches, and absolute paths or globs limited to current workspaces.
+- Handshake guidance now requires clients to read `lm-tools://spec/includePattern` before using any argument named `includePattern`.
+
+### 中文
+
+#### Changed
+- 补丁版本提升到 1.0.134.
+- 新增共享资源 `lm-tools://spec/includePattern` 以及共享 schema metadata, 让使用 `includePattern` 的工具统一指向同一份语法契约.
+- `lm_findTextInFiles.includePattern` 现已与共享契约对齐, 支持带 workspace 作用域的 brace selector, 混合 scoped/unscoped 的顶层 brace 分支, 以及限制在当前 workspace 内的 absolute path 或 glob.
+- handshake guidance 现在要求 client 在使用任何名为 `includePattern` 的参数前先读取 `lm-tools://spec/includePattern`.
+
 ## [1.0.133] - 2026-03-20
 
 ### English

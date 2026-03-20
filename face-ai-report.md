@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.133`.
+- Version baseline: `1.0.134`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -12,11 +12,12 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
-- `lm_getDiagnostics.includePattern` now uses workspace path/glob semantics aligned with other search tools: workspace-relative patterns, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, and absolute paths or globs; bare `|` alternation is rejected, `scope` is `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
+- Shared `includePattern` syntax lives at `lm-tools://spec/includePattern` and is referenced by `lm_findTextInFiles.includePattern`, `lm_qgrepSearchText.includePattern`, and `lm_getDiagnostics.includePattern`; accepted forms include workspace-relative patterns, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
+- `lm_getDiagnostics.includePattern` uses the shared syntax above, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
 - `lm_findFiles.query` always uses glob semantics and rejects bare `|` alternation with guidance to use brace globs such as `{A,B}`.
-- `lm_findTextInFiles` uses VS Code workspace text search, defaults to `querySyntax='literal'`, supports `querySyntax='regex'`, and treats `includePattern` as path/glob scope with fail-fast rejection for bare `|` alternation.
+- `lm_findTextInFiles` uses VS Code workspace text search, defaults to `querySyntax='literal'`, supports `querySyntax='regex'`, and now resolves `includePattern` through the shared syntax contract above, including brace-scoped workspace selectors, mixed scoped/unscoped top-level brace branches, and absolute paths or globs limited to current workspaces.
 - `lm_qgrepSearchText` always executes the bundled binary at `bin/qgrep.exe` and defaults to `querySyntax='literal'`; set `querySyntax='regex'` to switch query interpretation to regex.
 - `lm_qgrepSearchText` uses smart-case when `caseSensitive` is false/omitted (all-lowercase queries are case-insensitive, and queries containing uppercase letters are case-sensitive); `caseSensitive=true` forces sensitive matching.
 - `lm_qgrepSearchText.query` defaults to literal semantics; top-level unescaped `|` splits the query into multiple literal branches without trimming whitespace, whitespace-only branches between two pipe separators are discarded, only whole branches wrapped by outer double quotes exactly keep `|` literal, malformed/partial or space-padded double quotes are treated as ordinary characters, unquoted `\|` keeps `|` literal, and only truly empty split branches fall back to matching the entire raw query as one literal string.
@@ -36,7 +37,7 @@
 - qgrep glob input errors normalize to `Invalid query glob pattern: ...` without duplicating the `Error:` prefix from JS error stringification.
 - qgrep text output parsing treats the first `:line:` delimiter as authoritative, so `preview` keeps literal `:number:` segments without corrupting path/line extraction.
 - Custom tool `content.text` summaries are sanitized before returning: ANSI/control/bidi/zero-width characters are stripped for stable rendering.
-- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; `lm_qgrepSearchText` descriptions stay high-level (default literal matching, regex switch, top-level `|` OR, scope, smart-case) and use `includePattern` value examples rather than full call JSON, while actual query rewrites/fallbacks surface at runtime through `queryHint:` summary lines; `lm_qgrepSearchFiles` descriptions explicitly note whole-path-anchored path matching instead of substring matching, and `lm_qgrepSearchFiles.query` schema descriptions stay field-level instead of restating the whole top-level contract; use `lm_qgrepGetStatus` for readiness details.
+- `lm_qgrepSearchText` and `lm_qgrepSearchFiles` descriptions do not include the explicit "updating below 100% blocks until ready or 150s timeout" sentence and keep hard-limit wording concise; `lm_qgrepSearchText` descriptions stay high-level (default literal matching, regex switch, top-level `|` OR, scope, smart-case) and now point `includePattern` readers to the shared `lm-tools://spec/includePattern` resource instead of repeating full syntax examples inline, while actual query rewrites/fallbacks surface at runtime through `queryHint:` summary lines; `lm_qgrepSearchFiles` descriptions explicitly note whole-path-anchored path matching instead of substring matching, and `lm_qgrepSearchFiles.query` schema descriptions stay field-level instead of restating the whole top-level contract; use `lm_qgrepGetStatus` for readiness details.
 - On indexed workspaces, prefer `lm_qgrepSearchText`/`lm_qgrepSearchFiles` before ripgrep-based search tools for repeated searches because qgrep is typically much faster.
 - `lm_qgrepGetStatus` returns qgrep binary/workspace/index progress status and does not require qgrep init; when no workspace index is initialized, payload also includes an auto-init hint that `lm_qgrepSearchText`/`lm_qgrepSearchFiles` will initialize on query.
 - `lm_qgrepSearchText` and `lm_qgrepSearchFiles` are built-in required exposed tools and default enabled tools.
@@ -92,7 +93,7 @@
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is summary-only (`name`/`description`); tool schemas are read through `lm-tools://schema/{name}` or `lm-tools://tool/{name}` resources when needed.
 - `lm-tools-bridge://handshake` status snapshot also limits `target` to `workspaceFolders` and `workspaceFile`; internal session and transport details stay private.
-- The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://schema/{name}`).
+- The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://schema/{name}`, `lm-tools://spec/includePattern`), and handshake guidance tells clients they must read the shared `includePattern` spec before using any argument named `includePattern`.
 - After handshake, `tools/list` dynamically merges bridged workspace tools into the stdio manager inventory and emits list-changed notifications when the binding changes.
 - If the bound workspace instance goes offline after handshake, the stdio manager clears the binding and returns offline/rebind errors; it does not auto-restart VS Code outside handshake.
 - Stdio manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.
@@ -109,6 +110,8 @@
 - `src/stdioManagerSync.ts -> syncBundledStdioManager | resolveStdioManagerSyncPaths`
 - `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | createWorkspaceDiscoveryTarget | requestWorkspaceDiscovery | tryAcquireLaunchLock | WorkspaceDiscoveryPublisher`
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
+- `src/includePattern.ts -> createIncludePatternSearchPlan | createIncludePatternMatcher | resolveIncludePatternWorkspaceFile`
+- `src/includePatternSpec.ts -> buildIncludePatternSchema | getIncludePatternSpecText | getIncludePatternSpecReadHint`
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
 - `src/qgrep.ts -> activateQgrepService | runQgrepInitAllWorkspacesCommand | runQgrepRebuildIndexesCommand | runQgrepStopAndClearCommand | executeQgrepSearch | executeQgrepFilesSearch`
 - `src/qgrepTextQuery.ts -> parseLiteralTextQuery`

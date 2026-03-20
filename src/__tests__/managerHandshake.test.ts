@@ -37,7 +37,10 @@ test('handshake payload omits redundant online and health fields', () => {
       issues: [],
     },
     guidance: {
-      nextSteps: ['read lm-tools://schema/{name} before the first tool call.'],
+      nextSteps: [
+        'read lm-tools://schema/{name} before the first tool call.',
+        'Before using any tool argument named includePattern, you must read lm-tools://spec/includePattern first.',
+      ],
     },
   });
 
@@ -76,7 +79,10 @@ test('handshake summary keeps useful fields and omits online line', () => {
       issues: [],
     },
     guidance: {
-      nextSteps: ['read lm-tools://schema/{name} before the first tool call.'],
+      nextSteps: [
+        'read lm-tools://schema/{name} before the first tool call.',
+        'Before using any tool argument named includePattern, you must read lm-tools://spec/includePattern first.',
+      ],
     },
   });
 

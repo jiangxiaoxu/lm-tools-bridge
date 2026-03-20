@@ -44,6 +44,38 @@ async function requestJson(url: string): Promise<{ statusCode: number; body: str
   });
 }
 
+async function requestMcp(url: string, payload: Record<string, unknown>): Promise<{ statusCode: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const request = http.request(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        response.on('end', () => {
+          resolve({
+            statusCode: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    request.once('error', reject);
+    request.write(body);
+    request.end();
+  });
+}
+
 export async function run(): Promise<void> {
   await runIntegrationTests('smoke', [
     {
@@ -93,6 +125,18 @@ export async function run(): Promise<void> {
         if (Object.prototype.hasOwnProperty.call(properties, 'filePaths')) {
           throw new Error('Expected lm_getDiagnostics schema to remove filePaths.');
         }
+        const includePattern = properties.includePattern;
+        if (!includePattern || typeof includePattern !== 'object' || Array.isArray(includePattern)) {
+          throw new Error('Expected includePattern schema metadata.');
+        }
+        const metadata = (includePattern as { ['x-lm-tools-bridge-sharedSyntax']?: unknown })['x-lm-tools-bridge-sharedSyntax'];
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+          throw new Error('Expected includePattern shared syntax metadata.');
+        }
+        const metadataRecord = metadata as { uri?: unknown };
+        if (metadataRecord.uri !== 'lm-tools://spec/includePattern') {
+          throw new Error(`Expected includePattern shared syntax URI, got ${JSON.stringify(metadataRecord.uri)}.`);
+        }
       },
     },
     {
@@ -121,6 +165,21 @@ export async function run(): Promise<void> {
         const response = await requestJson(`http://${advertisement.host}:${String(advertisement.port)}/mcp/health`);
         if (response.statusCode !== 200) {
           throw new Error(`Expected /mcp/health to return 200, got ${String(response.statusCode)}.\nBody:\n${response.body}`);
+        }
+
+        const specResponse = await requestMcp(`http://${advertisement.host}:${String(advertisement.port)}/mcp`, {
+          jsonrpc: '2.0',
+          id: 'smoke-include-pattern-spec',
+          method: 'resources/read',
+          params: {
+            uri: 'lm-tools://spec/includePattern',
+          },
+        });
+        if (specResponse.statusCode !== 200) {
+          throw new Error(`Expected includePattern spec resource to return 200, got ${String(specResponse.statusCode)}.\nBody:\n${specResponse.body}`);
+        }
+        if (!specResponse.body.includes('Shared includePattern syntax')) {
+          throw new Error(`Expected includePattern spec resource body.\nBody:\n${specResponse.body}`);
         }
       },
     },

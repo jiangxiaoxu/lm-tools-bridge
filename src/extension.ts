@@ -29,6 +29,11 @@ import {
   toolInfoPayload,
 } from './tooling';
 import {
+  getIncludePatternSpecResourceDescription,
+  getIncludePatternSpecText,
+  INCLUDE_PATTERN_SPEC_URI,
+} from './includePatternSpec';
+import {
   activateQgrepService,
   getQgrepStatusSummary,
   runQgrepInitAllWorkspacesCommand,
@@ -568,6 +573,16 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   registerExposedTools(server);
 
   server.registerResource(
+    'lmToolsIncludePatternSpec',
+    INCLUDE_PATTERN_SPEC_URI,
+    { description: getIncludePatternSpecResourceDescription() },
+    async () => {
+      logDebugDetail(`Resource read: ${INCLUDE_PATTERN_SPEC_URI}`);
+      return resourceJson(INCLUDE_PATTERN_SPEC_URI, getIncludePatternSpecText(), 'text/plain');
+    },
+  );
+
+  server.registerResource(
     'lmToolsNames',
     'lm-tools://names',
     { description: 'List exposed tool names.' },
@@ -744,13 +759,13 @@ function respondJson(res: http.ServerResponse, status: number, payload: Record<s
   res.end(JSON.stringify(payload));
 }
 
-function resourceJson(uri: string, payload: unknown) {
+function resourceJson(uri: string, payload: unknown, mimeType = 'application/json') {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
   return {
     contents: [
       {
         uri,
-        mimeType: 'application/json',
+        mimeType,
         text,
       },
     ],

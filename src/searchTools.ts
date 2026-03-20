@@ -3,6 +3,13 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { rgPath } from '@vscode/ripgrep';
 import {
+  createIncludePatternSearchPlan,
+  resolveIncludePatternWorkspaceFile,
+  type IncludePatternMatcher,
+  type IncludePatternSearchPlan,
+  type IncludePatternWorkspaceFolder,
+} from './includePattern';
+import {
   ensureNoBarePipeAlternation,
   parseOptionalIncludePattern,
   parseQuerySyntax,
@@ -25,6 +32,13 @@ type RipgrepFileSearchResult = {
   files: string[];
   totalMatches: number;
   capped: boolean;
+};
+
+type RipgrepSearchTarget = {
+  folder: vscode.WorkspaceFolder;
+  glob?: string;
+  includeMatcher?: IncludePatternMatcher;
+  workspaceFolders?: readonly IncludePatternWorkspaceFolder[];
 };
 
 export async function executeFindTextInFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -136,7 +150,7 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
 
 function resolveRipgrepTargets(
   includePattern: string | undefined,
-): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
+): RipgrepSearchTarget[] {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
     return [];
@@ -148,11 +162,12 @@ function resolveRipgrepTargets(
   if (!trimmed) {
     return folders.map((folder) => ({ folder }));
   }
-  const parsed = parseWorkspacePrefixedIncludePattern(trimmed);
-  if (parsed) {
-    return [{ folder: parsed.workspaceFolder, glob: parsed.pattern }];
-  }
-  return folders.map((folder) => ({ folder, glob: trimmed }));
+  const workspaceFolders = folders.map((folder) => ({
+    name: folder.name,
+    rootPath: folder.uri.fsPath,
+  }));
+  const plan = createIncludePatternSearchPlan(trimmed, workspaceFolders);
+  return buildRipgrepSearchTargetsFromPlan(plan, folders, workspaceFolders);
 }
 
 function resolveFindFilesTargets(
@@ -206,7 +221,7 @@ function normalizePathForComparison(value: string): string {
 }
 
 async function runRipgrepSearch(
-  target: { folder: vscode.WorkspaceFolder; glob?: string },
+  target: RipgrepSearchTarget,
   options: {
     query: string;
     querySyntax: FindTextQuerySyntax;
@@ -247,7 +262,7 @@ async function runRipgrepSearch(
     stdoutBuffer += chunk.toString('utf8');
     stdoutBuffer = consumeRipgrepLines(stdoutBuffer, (line) => {
       const match = parseRipgrepMatch(line, target.folder);
-      if (!match) {
+      if (!match || !matchRipgrepResultToIncludePattern(match.path, target)) {
         return;
       }
       pushMatch(match);
@@ -266,7 +281,7 @@ async function runRipgrepSearch(
   if (stdoutBuffer.length > 0) {
     consumeRipgrepLines(stdoutBuffer, (line) => {
       const match = parseRipgrepMatch(line, target.folder);
-      if (!match) {
+      if (!match || !matchRipgrepResultToIncludePattern(match.path, target)) {
         return;
       }
       pushMatch(match);
@@ -578,6 +593,47 @@ function getSearchConfigValue<T>(key: string, folder: vscode.WorkspaceFolder, fa
 
 function normalizeGlob(pattern: string): string {
   return pattern.replace(/\\/g, '/');
+}
+
+function buildRipgrepSearchTargetsFromPlan(
+  plan: IncludePatternSearchPlan,
+  folders: readonly vscode.WorkspaceFolder[],
+  workspaceFolders: readonly IncludePatternWorkspaceFolder[],
+): RipgrepSearchTarget[] {
+  const folderByKey = new Map(
+    folders.map((folder) => [
+      process.platform === 'win32' ? folder.name.toLowerCase() : folder.name,
+      folder,
+    ]),
+  );
+
+  return plan.targets.flatMap((target) => {
+    const workspaceKey = process.platform === 'win32' ? target.workspaceName.toLowerCase() : target.workspaceName;
+    const folder = folderByKey.get(workspaceKey);
+    if (!folder) {
+      return [];
+    }
+    return [{
+      folder,
+      glob: target.relativePattern,
+      includeMatcher: plan.matcher,
+      workspaceFolders,
+    }];
+  });
+}
+
+function matchRipgrepResultToIncludePattern(
+  absolutePath: string,
+  target: RipgrepSearchTarget,
+): boolean {
+  if (!target.includeMatcher || !target.workspaceFolders) {
+    return true;
+  }
+  const workspaceFile = resolveIncludePatternWorkspaceFile(absolutePath, target.workspaceFolders);
+  if (!workspaceFile) {
+    return false;
+  }
+  return target.includeMatcher.matches(workspaceFile);
 }
 
 function parseWorkspacePrefixedIncludePattern(entry: string): {

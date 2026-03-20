@@ -15,9 +15,9 @@ test('query glob error wraps plain string input', () => {
   assert.equal(result, 'Invalid query glob pattern: trailing escape (\\).');
 });
 
-test('files glob error remaps includePattern prefix without Error wrapper', () => {
+test('files glob error remaps pathScope prefix without Error wrapper', () => {
   const result = normalizeFilesQueryGlobErrorMessage(
-    new Error('Invalid includePattern glob pattern: trailing escape (\\).'),
+    new Error('Invalid pathScope glob pattern: trailing escape (\\).'),
   );
   assert.equal(result, 'Invalid query glob pattern: trailing escape (\\).');
 });

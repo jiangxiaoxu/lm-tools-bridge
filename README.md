@@ -69,9 +69,9 @@ Notes:
 - If the bound VS Code instance closes later, rerun handshake. It will not auto-restart after binding.
 
 ### Search Notes
-- All `includePattern` fields share `lm-tools://spec/includePattern`. Read it once and reuse the same syntax across `lm_findTextInFiles`, `lm_qgrepSearchText`, and `lm_getDiagnostics`.
-- The shared `includePattern` syntax supports workspace-relative patterns, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, mixed top-level brace branches, and absolute paths or globs inside the current workspaces.
-- `lm_qgrepSearchText.includePattern` and `lm_qgrepSearchFiles.query` support VS Code brace globs.
+- All `pathScope` fields share `lm-tools://spec/pathScope`. Read it once and reuse the same syntax across `lm_findTextInFiles`, `lm_qgrepSearchText`, and `lm_getDiagnostics`.
+- The shared `pathScope` syntax supports `<glob>`, `WorkspaceName/<glob>`, `{WorkspaceA,WorkspaceB}/<glob>`, mixed top-level brace branches, and absolute paths or globs inside the current workspaces.
+- `lm_qgrepSearchText.pathScope` and `lm_qgrepSearchFiles.query` use VS Code glob semantics, including brace globs.
 - qgrep-managed Unreal include rules also index `*.uplugin` and `*.uproject` alongside `*.ush`, `*.usf`, and `*.ini`.
 - `lm_qgrepSearchText` defaults to literal text search. Top-level unescaped `|` means literal OR, only a whole branch wrapped by outer double quotes keeps `|` literal, and unquoted `\|` also keeps `|` literal.
 - Literal branch whitespace is preserved exactly. `A | B` means searching for `A ` or ` B`, not `A` or `B`.
@@ -82,18 +82,17 @@ Notes:
 - `lm_qgrepSearchText` only supports `querySyntax='literal'` and `querySyntax='regex'`. Text `glob` mode is no longer supported.
 - In multi-root workspaces, top-level brace alternatives can mix `WorkspaceName/...` and workspace-relative branches. Unscoped branches apply to all current workspaces, scoped branches stay limited to the selected workspaces, and mixed file-search summaries still show `all initialized workspaces`.
 - Text examples: `AvatarCharacter`, `AvatarCharacter|AvatarHealthComponent`, `"AvatarCharacter|AvatarHealthComponent"`, `AvatarCharacter\|AvatarHealthComponent`, `Avatar(Character|HealthComponent)`.
-- Scope example: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
+- Scope example: `{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h,Config/**/*.ini,**/Source/**/*.{h,cpp}}`.
 
-### Shared includePattern Notes
-- `lm_findTextInFiles.includePattern`, `lm_qgrepSearchText.includePattern`, and `lm_getDiagnostics.includePattern` all use the shared `lm-tools://spec/includePattern` syntax.
-- Bare `|` alternation is not supported. Use brace globs such as `{A,B}` instead.
-- Examples:
-  - `*.as`: only `.as` files directly under the workspace root
-  - `**/*.as`: recursive `.as` files across the workspace
-  - `*.{h,cpp}`: only `.h` and `.cpp` files directly under the workspace root
-  - `**/*.{h,cpp}`: recursive `.h` and `.cpp` files across the workspace
-  - `Engine/**/*.{h,cpp}`: recursive `.h` and `.cpp` files only in the `Engine` workspace folder
-  - `{Game,Engine}/**/*.{h,cpp}`: recursive `.h` and `.cpp` files only in the selected workspace folders
+### Shared pathScope Notes
+- `lm_findTextInFiles.pathScope`, `lm_qgrepSearchText.pathScope`, and `lm_getDiagnostics.pathScope` all use the shared `lm-tools://spec/pathScope` syntax.
+- `pathScope` limits workspace file paths before text search or diagnostics filtering runs.
+- Use VS Code glob semantics. `*` is not recursive, and `**` is recursive.
+- Use brace globs, not bare `|` alternation.
+- In mixed top-level brace branches, unscoped branches apply to all current workspaces.
+- In `{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h,Config/**/*.ini,**/Source/**/*.{h,cpp}}`, the first two branches are scoped, `Config/**/*.ini` is root-anchored unscoped, and `**/Source/**/*.{h,cpp}` is any-depth unscoped.
+- Common examples: `Script/**/*.as`, `GameWorkspace/Script/**/*.as`, `{GameWorkspace,UE5}/**/*.{h,cpp,as}`, `{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h}`.
+- Invalid or misleading examples: `GameWorkspace|UE5/**/*.as` is invalid; `GameWorkspace/*/*.as` is valid but not recursive.
 
 ### Troubleshooting
 - `node` is missing: install Node.js, restart VS Code, then retry.
@@ -171,9 +170,9 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 - 如果绑定后的 VS Code 实例后续关闭,需要重新握手,不会自动重启.
 
 ### Search Notes
-- 所有 `includePattern` 字段都共用 `lm-tools://spec/includePattern`. 读取一次后,即可在 `lm_findTextInFiles`、`lm_qgrepSearchText` 和 `lm_getDiagnostics` 之间复用同一套语法.
-- 这套共享 `includePattern` 语法支持 workspace-relative pattern、`WorkspaceName/...`、`{WorkspaceA,WorkspaceB}/...`、mixed 顶层 brace branch,以及当前 workspaces 内的 absolute path / glob.
-- `lm_qgrepSearchText.includePattern` 和 `lm_qgrepSearchFiles.query` 支持 VS Code brace glob.
+- 所有 `pathScope` 字段都共用 `lm-tools://spec/pathScope`. 读取一次后,即可在 `lm_findTextInFiles`、`lm_qgrepSearchText` 和 `lm_getDiagnostics` 之间复用同一套语法.
+- 这套共享 `pathScope` 语法支持 `<glob>`、`WorkspaceName/<glob>`、`{WorkspaceA,WorkspaceB}/<glob>`、mixed 顶层 brace branch,以及当前 workspaces 内的 absolute path / glob.
+- `lm_qgrepSearchText.pathScope` 和 `lm_qgrepSearchFiles.query` 使用 VS Code glob 语义,包括 brace glob.
 - qgrep 自动维护的 Unreal include 规则现在也会索引 `*.uplugin` 和 `*.uproject`,以及原有的 `*.ush`,`*.usf`,`*.ini`.
 - `lm_qgrepSearchText` 默认按 literal 文本搜索. 顶层未转义 `|` 表示 literal OR,只有被最外层成对双引号完整包裹的 branch 才会保留字面量 `|`,未引用 branch 中的 `\|` 也表示字面量 `|`.
 - literal branch 两侧空格会被严格保留. `A | B` 表示搜索 `A ` 或 ` B`,而不是 `A` 或 `B`.
@@ -184,18 +183,16 @@ $skill-installer install https://github.com/jiangxiaoxu/lm-tools-bridge/tree/mas
 - `lm_qgrepSearchText` 只支持 `querySyntax='literal'` 和 `querySyntax='regex'`. 文本 `glob` 模式已不再支持.
 - 在 multi-root workspace 里,顶层 brace alternation 可以混用 `WorkspaceName/...` 和普通 workspace-relative branch. 不带 workspace 前缀的 branch 会作用于所有当前 workspace,带前缀的 branch 只作用于指定 workspace,而 mixed file search 的 summary 仍显示 `all initialized workspaces`.
 - 文本示例: `AvatarCharacter`, `AvatarCharacter|AvatarHealthComponent`, `"AvatarCharacter|AvatarHealthComponent"`, `AvatarCharacter\|AvatarHealthComponent`, `Avatar(Character|HealthComponent)`.
-- 范围示例: `{Game/Source/**/*.{h,cpp},Engine/Script/**/*.as,src/**/*.as}`.
+- 范围示例: `{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h,Config/**/*.ini,**/Source/**/*.{h,cpp}}`.
 
-### Shared includePattern Notes
-- `lm_findTextInFiles.includePattern`,`lm_qgrepSearchText.includePattern` 和 `lm_getDiagnostics.includePattern` 现在都使用共享的 `lm-tools://spec/includePattern` 语法.
-- 不支持裸 `|` alternation,需要改用 `{A,B}` 这类 brace glob.
-- 示例:
-  - `*.as`: 仅匹配 workspace 根目录下的 `.as` 文件
-  - `**/*.as`: 递归匹配整个 workspace 中的 `.as` 文件
-  - `*.{h,cpp}`: 仅匹配 workspace 根目录下的 `.h` 和 `.cpp` 文件
-  - `**/*.{h,cpp}`: 递归匹配整个 workspace 中的 `.h` 和 `.cpp` 文件
-  - `Engine/**/*.{h,cpp}`: 仅在 `Engine` workspace folder 内递归匹配 `.h` 和 `.cpp`
-  - `{Game,Engine}/**/*.{h,cpp}`: 仅在选定的 workspace folders 内递归匹配 `.h` 和 `.cpp`
+### Shared pathScope Notes
+- `lm_findTextInFiles.pathScope`,`lm_qgrepSearchText.pathScope` 和 `lm_getDiagnostics.pathScope` 现在都使用共享的 `lm-tools://spec/pathScope` 语法.
+- `pathScope` 会在文本搜索或诊断过滤前先收窄 workspace 文件路径范围.
+- 使用 VS Code glob 语义. `*` 不递归,`**` 才递归.
+- 不支持裸 `|` alternation,需要改用 brace glob.
+- 在 `{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h,Config/**/*.ini,**/Source/**/*.{h,cpp}}` 中,前两个 branch 是 scoped,`Config/**/*.ini` 是从每个 workspace 根开始的 unscoped branch,而 `**/Source/**/*.{h,cpp}` 是 any-depth 的 unscoped branch.
+- 常见示例: `Script/**/*.as`,`GameWorkspace/Script/**/*.as`,`{GameWorkspace,UE5}/**/*.{h,cpp,as}`,`{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h}`,`{GameWorkspace/Script/**/*.as,UE5/Engine/**/Source/**/*.h,Config/**/*.ini,**/Source/**/*.{h,cpp}}`.
+- 错误或易误用示例: `GameWorkspace|UE5/**/*.as` 是无效写法; `GameWorkspace/*/*.as` 合法但不是递归匹配.
 
 ### 故障排查
 - 缺少 `node`: 先安装 Node.js,重启 VS Code 后再试.

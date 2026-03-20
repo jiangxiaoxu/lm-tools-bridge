@@ -101,7 +101,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'exposes lm_getDiagnostics with includePattern-based input schema',
+      name: 'exposes lm_getDiagnostics with pathScope-based input schema',
       run: async () => {
         await activateExtension();
         const tool = getEnabledExposedToolsSnapshot().find((candidate) => candidate.name === 'lm_getDiagnostics');
@@ -119,23 +119,23 @@ export async function run(): Promise<void> {
         if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
           throw new Error('Expected lm_getDiagnostics input schema properties.');
         }
-        if (!Object.prototype.hasOwnProperty.call(properties, 'includePattern')) {
-          throw new Error('Expected lm_getDiagnostics schema to expose includePattern.');
+        if (!Object.prototype.hasOwnProperty.call(properties, 'pathScope')) {
+          throw new Error('Expected lm_getDiagnostics schema to expose pathScope.');
         }
         if (Object.prototype.hasOwnProperty.call(properties, 'filePaths')) {
           throw new Error('Expected lm_getDiagnostics schema to remove filePaths.');
         }
-        const includePattern = properties.includePattern;
-        if (!includePattern || typeof includePattern !== 'object' || Array.isArray(includePattern)) {
-          throw new Error('Expected includePattern schema metadata.');
+        const pathScope = properties.pathScope;
+        if (!pathScope || typeof pathScope !== 'object' || Array.isArray(pathScope)) {
+          throw new Error('Expected pathScope schema metadata.');
         }
-        const metadata = (includePattern as { ['x-lm-tools-bridge-sharedSyntax']?: unknown })['x-lm-tools-bridge-sharedSyntax'];
+        const metadata = (pathScope as { ['x-lm-tools-bridge-sharedSyntax']?: unknown })['x-lm-tools-bridge-sharedSyntax'];
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-          throw new Error('Expected includePattern shared syntax metadata.');
+          throw new Error('Expected pathScope shared syntax metadata.');
         }
         const metadataRecord = metadata as { uri?: unknown };
-        if (metadataRecord.uri !== 'lm-tools://spec/includePattern') {
-          throw new Error(`Expected includePattern shared syntax URI, got ${JSON.stringify(metadataRecord.uri)}.`);
+        if (metadataRecord.uri !== 'lm-tools://spec/pathScope') {
+          throw new Error(`Expected pathScope shared syntax URI, got ${JSON.stringify(metadataRecord.uri)}.`);
         }
       },
     },
@@ -172,14 +172,14 @@ export async function run(): Promise<void> {
           id: 'smoke-include-pattern-spec',
           method: 'resources/read',
           params: {
-            uri: 'lm-tools://spec/includePattern',
+            uri: 'lm-tools://spec/pathScope',
           },
         });
         if (specResponse.statusCode !== 200) {
-          throw new Error(`Expected includePattern spec resource to return 200, got ${String(specResponse.statusCode)}.\nBody:\n${specResponse.body}`);
+          throw new Error(`Expected pathScope spec resource to return 200, got ${String(specResponse.statusCode)}.\nBody:\n${specResponse.body}`);
         }
-        if (!specResponse.body.includes('Shared includePattern syntax')) {
-          throw new Error(`Expected includePattern spec resource body.\nBody:\n${specResponse.body}`);
+        if (!specResponse.body.includes('Shared pathScope syntax')) {
+          throw new Error(`Expected pathScope spec resource body.\nBody:\n${specResponse.body}`);
         }
       },
     },

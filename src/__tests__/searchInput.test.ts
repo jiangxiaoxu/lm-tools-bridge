@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ensureNoBarePipeAlternation, parseOptionalIncludePattern, parseQuerySyntax } from '../searchInput';
+import { ensureNoBarePipeAlternation, parseOptionalPathScope, parseQuerySyntax } from '../searchInput';
 
 test('findText querySyntax defaults to literal', () => {
   const syntax = parseQuerySyntax({
@@ -71,16 +71,16 @@ test('invalid qgrep files querySyntax values are rejected', () => {
   );
 });
 
-test('includePattern rejects bare pipe alternation', () => {
+test('pathScope rejects bare pipe alternation', () => {
   assert.throws(
-    () => parseOptionalIncludePattern({ includePattern: 'UE5/One/**/*.{h,cpp}|UE5/Two/**/*.{h,cpp}' }),
-    /includePattern does not support '\|' alternation/u,
+    () => parseOptionalPathScope({ pathScope: 'UE5/One/**/*.{h,cpp}|UE5/Two/**/*.{h,cpp}' }),
+    /pathScope does not support '\|' alternation/u,
   );
 });
 
-test('includePattern keeps escaped pipe literals', () => {
-  const includePattern = parseOptionalIncludePattern({ includePattern: 'Source/Docs/Version\\|History.txt' });
-  assert.equal(includePattern, 'Source/Docs/Version\\|History.txt');
+test('pathScope keeps escaped pipe literals', () => {
+  const pathScope = parseOptionalPathScope({ pathScope: 'Source/Docs/Version\\|History.txt' });
+  assert.equal(pathScope, 'Source/Docs/Version\\|History.txt');
 });
 
 test('shared glob/path validation rejects bare pipe alternation', () => {

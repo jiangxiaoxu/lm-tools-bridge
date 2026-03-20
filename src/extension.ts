@@ -29,10 +29,10 @@ import {
   toolInfoPayload,
 } from './tooling';
 import {
-  getIncludePatternSpecResourceDescription,
-  getIncludePatternSpecText,
-  INCLUDE_PATTERN_SPEC_URI,
-} from './includePatternSpec';
+  getPathScopeSpecResourceDescription,
+  getPathScopeSpecText,
+  PATH_SCOPE_SPEC_URI,
+} from './pathScopeSpec';
 import {
   activateQgrepService,
   getQgrepStatusSummary,
@@ -573,12 +573,12 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   registerExposedTools(server);
 
   server.registerResource(
-    'lmToolsIncludePatternSpec',
-    INCLUDE_PATTERN_SPEC_URI,
-    { description: getIncludePatternSpecResourceDescription() },
+    'lmToolsPathScopeSpec',
+    PATH_SCOPE_SPEC_URI,
+    { description: getPathScopeSpecResourceDescription() },
     async () => {
-      logDebugDetail(`Resource read: ${INCLUDE_PATTERN_SPEC_URI}`);
-      return resourceJson(INCLUDE_PATTERN_SPEC_URI, getIncludePatternSpecText(), 'text/plain');
+      logDebugDetail(`Resource read: ${PATH_SCOPE_SPEC_URI}`);
+      return resourceJson(PATH_SCOPE_SPEC_URI, getPathScopeSpecText(), 'text/plain');
     },
   );
 

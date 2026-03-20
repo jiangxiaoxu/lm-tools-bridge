@@ -544,7 +544,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'applies brace-scoped includePattern filtering to qgrep text search',
+      name: 'applies brace-scoped pathScope filtering to qgrep text search',
       run: async () => {
         await activateExtension();
         await ensureQgrepReady();
@@ -553,11 +553,11 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 1500,
         });
 
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'insensitive');
@@ -584,11 +584,11 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_UNREAL_CONFIG_TEXT_QUERY,
-          includePattern: BRACE_UNREAL_CONFIG_QUERY,
+          pathScope: BRACE_UNREAL_CONFIG_QUERY,
           maxResults: 50,
         });
 
-        assert.equal(payload.includePattern, BRACE_UNREAL_CONFIG_QUERY);
+        assert.equal(payload.pathScope, BRACE_UNREAL_CONFIG_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -603,7 +603,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'applies brace-scoped includePattern filtering to lm_findTextInFiles',
+      name: 'applies brace-scoped pathScope filtering to lm_findTextInFiles',
       run: async () => {
         await activateExtension();
         const expectedMatches = await collectBraceScopedFixtureMatches(BRACE_SCOPED_TEXT_QUERY);
@@ -611,7 +611,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeFindTextInFilesSearch({
           query: BRACE_SCOPED_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 1500,
         });
 
@@ -630,7 +630,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeFindTextInFilesSearch({
           query: MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
-          includePattern: MIXED_SCOPED_UNSCOPED_QUERY,
+          pathScope: MIXED_SCOPED_UNSCOPED_QUERY,
           maxResults: 200,
         });
 
@@ -641,17 +641,17 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'accepts absolute file includePattern in lm_findTextInFiles',
+      name: 'accepts absolute file pathScope in lm_findTextInFiles',
       run: async () => {
         await activateExtension();
         const [expectedFile] = await collectExplicitWorkspacePathFiles([BRACE_SCOPED_BRIDGE_ANCHOR_FILE]);
         assert.ok(expectedFile, 'Expected bridge anchor fixture file.');
         const expectedMatches = await collectFixtureMatchesInFiles([expectedFile], 'SpacePipeLeft');
-        assert.ok(expectedMatches.length > 0, 'Expected absolute includePattern file to contain ripgrep text matches.');
+        assert.ok(expectedMatches.length > 0, 'Expected absolute pathScope file to contain ripgrep text matches.');
 
         const payload = await executeFindTextInFilesSearch({
           query: 'SpacePipeLeft',
-          includePattern: expectedFile.absolutePath,
+          pathScope: expectedFile.absolutePath,
           maxResults: 50,
         });
 
@@ -662,7 +662,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'rejects lm_findTextInFiles includePattern outside current workspaces',
+      name: 'rejects lm_findTextInFiles pathScope outside current workspaces',
       run: async () => {
         await activateExtension();
         const outsidePattern = process.platform === 'win32'
@@ -672,9 +672,9 @@ export async function run(): Promise<void> {
         await assert.rejects(
           () => executeFindTextInFilesSearch({
             query: BRACE_SCOPED_TEXT_QUERY,
-            includePattern: outsidePattern,
+            pathScope: outsidePattern,
           }),
-          /includePattern is outside current workspaces/u,
+          /pathScope is outside current workspaces/u,
         );
       },
     },
@@ -688,7 +688,7 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           beforeContextLines: BRACE_SCOPED_CONTEXT_CLAMP_BEFORE,
           afterContextLines: BRACE_SCOPED_CONTEXT_CLAMP_AFTER,
           maxResults: 1500,
@@ -712,11 +712,11 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
-          includePattern: MIXED_SCOPED_UNSCOPED_QUERY,
+          pathScope: MIXED_SCOPED_UNSCOPED_QUERY,
           maxResults: 200,
         });
 
-        assert.equal(payload.includePattern, MIXED_SCOPED_UNSCOPED_QUERY);
+        assert.equal(payload.pathScope, MIXED_SCOPED_UNSCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -742,12 +742,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 1500,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -771,12 +771,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_QUOTED_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 200,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_QUOTED_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -800,12 +800,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_ESCAPED_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 200,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_ESCAPED_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -832,12 +832,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_SPACE_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_BRIDGE_ANCHOR_FILE,
+          pathScope: BRACE_SCOPED_BRIDGE_ANCHOR_FILE,
           maxResults: 200,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_SPACE_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_BRIDGE_ANCHOR_FILE);
+        assert.equal(payload.pathScope, BRACE_SCOPED_BRIDGE_ANCHOR_FILE);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -864,12 +864,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_BROKEN_QUOTE_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 200,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_BROKEN_QUOTE_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -893,12 +893,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_FALLBACK_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 200,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_FALLBACK_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal-fallback');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -925,12 +925,12 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_SINGLE_SPACE_PIPE_TEXT_QUERY,
-          includePattern: BRACE_SCOPED_BRIDGE_ANCHOR_FILE,
+          pathScope: BRACE_SCOPED_BRIDGE_ANCHOR_FILE,
           maxResults: 200,
         });
 
         assert.equal(payload.query, BRACE_SCOPED_SINGLE_SPACE_PIPE_TEXT_QUERY);
-        assert.equal(payload.includePattern, BRACE_SCOPED_BRIDGE_ANCHOR_FILE);
+        assert.equal(payload.pathScope, BRACE_SCOPED_BRIDGE_ANCHOR_FILE);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -954,11 +954,11 @@ export async function run(): Promise<void> {
 
         const payload = await executeQgrepSearch({
           query: MIXED_SCOPED_UNSCOPED_TEXT_QUERY,
-          includePattern: MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY,
+          pathScope: MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY,
           maxResults: 200,
         });
 
-        assert.equal(payload.includePattern, MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY);
+        assert.equal(payload.pathScope, MIXED_SCOPED_UNSCOPED_OVERLAP_QUERY);
         assert.equal(payload.querySemanticsApplied, 'literal');
         assert.equal(payload.casePolicy, 'smart-case');
         assert.equal(payload.caseModeApplied, 'sensitive');
@@ -981,7 +981,7 @@ export async function run(): Promise<void> {
           () => executeQgrepSearch({
             query: BRACE_SCOPED_TEXT_QUERY,
             querySyntax: 'glob',
-            includePattern: BRACE_SCOPED_QUERY,
+            pathScope: BRACE_SCOPED_QUERY,
             maxResults: 20,
           }),
           /querySyntax must be one of: 'literal', 'regex'\./u,
@@ -989,7 +989,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'applies brace-scoped includePattern filtering to qgrep regex text search with smart-case',
+      name: 'applies brace-scoped pathScope filtering to qgrep regex text search with smart-case',
       run: async () => {
         await activateExtension();
         await ensureQgrepReady();
@@ -999,11 +999,11 @@ export async function run(): Promise<void> {
         const payload = await executeQgrepSearch({
           query: BRACE_SCOPED_REGEX_INCLUDE_QUERY,
           querySyntax: 'regex',
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 1500,
         });
 
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'regex');
         assert.equal(payload.effectiveQuery, undefined);
         assert.equal(payload.warnings, undefined);
@@ -1019,7 +1019,7 @@ export async function run(): Promise<void> {
       },
     },
     {
-      name: 'fails fast when includePattern uses pipe alternation',
+      name: 'fails fast when pathScope uses pipe alternation',
       run: async () => {
         await activateExtension();
         await ensureQgrepReady();
@@ -1027,10 +1027,10 @@ export async function run(): Promise<void> {
         await assert.rejects(
           () => executeQgrepSearch({
             query: BRACE_SCOPED_TEXT_QUERY,
-            includePattern: 'WorkspaceA/Source/**/*.{h,cpp}|WorkspaceB/Source/**/*.{h,cpp}',
+            pathScope: 'WorkspaceA/Source/**/*.{h,cpp}|WorkspaceB/Source/**/*.{h,cpp}',
             maxResults: 20,
           }),
-          /includePattern does not support '\|' alternation/u,
+          /pathScope does not support '\|' alternation/u,
         );
       },
     },
@@ -1049,11 +1049,11 @@ export async function run(): Promise<void> {
           query: BRACE_SCOPED_REGEX_GAME_SETTING_QUERY,
           querySyntax: 'regex',
           caseSensitive: true,
-          includePattern: BRACE_SCOPED_QUERY,
+          pathScope: BRACE_SCOPED_QUERY,
           maxResults: 1500,
         });
 
-        assert.equal(payload.includePattern, BRACE_SCOPED_QUERY);
+        assert.equal(payload.pathScope, BRACE_SCOPED_QUERY);
         assert.equal(payload.querySemanticsApplied, 'regex');
         assert.equal(payload.casePolicy, 'explicit-case-sensitive');
         assert.equal(payload.caseModeApplied, 'sensitive');

@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
 import {
-  createDiagnosticsIncludePatternMatcher,
+  createDiagnosticsPathScopeMatcher,
   resolveDiagnosticsWorkspaceFile,
   type DiagnosticsWorkspaceFolder,
-} from '../diagnosticsIncludePattern';
+} from '../diagnosticsPathScope';
 
 function toPortablePath(...segments: string[]): string {
   return path.resolve(path.join(...segments)).replace(/\\/gu, '/');
@@ -33,9 +33,9 @@ function getWorkspaceFile(
   return resolved;
 }
 
-test('workspace-relative diagnostics includePattern matches across all workspaces', () => {
+test('workspace-relative diagnostics pathScope matches across all workspaces', () => {
   const folders = getWorkspaceFolders();
-  const matcher = createDiagnosticsIncludePatternMatcher('src/**/*.ts', folders);
+  const matcher = createDiagnosticsPathScopeMatcher('src/**/*.ts', folders);
 
   const gameFile = getWorkspaceFile(folders, `${folders[0].rootPath}/src/app/main.ts`);
   const engineFile = getWorkspaceFile(folders, `${folders[1].rootPath}/src/core/engine.ts`);
@@ -46,9 +46,9 @@ test('workspace-relative diagnostics includePattern matches across all workspace
   assert.equal(matcher.matches(nonMatch), false);
 });
 
-test('WorkspaceName-prefixed diagnostics includePattern scopes to a single workspace', () => {
+test('WorkspaceName-prefixed diagnostics pathScope scopes to a single workspace', () => {
   const folders = getWorkspaceFolders();
-  const matcher = createDiagnosticsIncludePatternMatcher('Game/src/**/*.ts', folders);
+  const matcher = createDiagnosticsPathScopeMatcher('Game/src/**/*.ts', folders);
 
   const gameFile = getWorkspaceFile(folders, `${folders[0].rootPath}/src/app/main.ts`);
   const engineFile = getWorkspaceFile(folders, `${folders[1].rootPath}/src/app/main.ts`);
@@ -57,9 +57,9 @@ test('WorkspaceName-prefixed diagnostics includePattern scopes to a single works
   assert.equal(matcher.matches(engineFile), false);
 });
 
-test('brace-scoped diagnostics includePattern scopes to the selected workspaces', () => {
+test('brace-scoped diagnostics pathScope scopes to the selected workspaces', () => {
   const folders = getWorkspaceFolders();
-  const matcher = createDiagnosticsIncludePatternMatcher('{Game,Engine}/src/**/*.{ts,tsx}', folders);
+  const matcher = createDiagnosticsPathScopeMatcher('{Game,Engine}/src/**/*.{ts,tsx}', folders);
 
   const gameFile = getWorkspaceFile(folders, `${folders[0].rootPath}/src/app/main.ts`);
   const engineFile = getWorkspaceFile(folders, `${folders[1].rootPath}/src/view/main.tsx`);
@@ -70,9 +70,9 @@ test('brace-scoped diagnostics includePattern scopes to the selected workspaces'
   assert.equal(matcher.matches(nonMatch), false);
 });
 
-test('absolute diagnostics includePattern matches files inside current workspaces', () => {
+test('absolute diagnostics pathScope matches files inside current workspaces', () => {
   const folders = getWorkspaceFolders();
-  const matcher = createDiagnosticsIncludePatternMatcher(`${folders[0].rootPath}/src/**/*.ts`, folders);
+  const matcher = createDiagnosticsPathScopeMatcher(`${folders[0].rootPath}/src/**/*.ts`, folders);
 
   const gameFile = getWorkspaceFile(folders, `${folders[0].rootPath}/src/app/main.ts`);
   const engineFile = getWorkspaceFile(folders, `${folders[1].rootPath}/src/app/main.ts`);
@@ -81,15 +81,15 @@ test('absolute diagnostics includePattern matches files inside current workspace
   assert.equal(matcher.matches(engineFile), false);
 });
 
-test('absolute diagnostics includePattern outside current workspaces is rejected', () => {
+test('absolute diagnostics pathScope outside current workspaces is rejected', () => {
   const folders = getWorkspaceFolders();
   const outsidePattern = process.platform === 'win32'
     ? 'D:/outside/**/*.ts'
     : '/outside/**/*.ts';
 
   assert.throws(
-    () => createDiagnosticsIncludePatternMatcher(outsidePattern, folders),
-    /includePattern is outside current workspaces/u,
+    () => createDiagnosticsPathScopeMatcher(outsidePattern, folders),
+    /pathScope is outside current workspaces/u,
   );
 });
 

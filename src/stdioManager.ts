@@ -41,11 +41,11 @@ import {
   resolveComparablePath,
 } from './windowsWorkspacePath';
 import {
-  getIncludePatternSpecReadHint,
-  getIncludePatternSpecResourceDescription,
-  getIncludePatternSpecText,
-  INCLUDE_PATTERN_SPEC_URI,
-} from './includePatternSpec';
+  getPathScopeSpecReadHint,
+  getPathScopeSpecResourceDescription,
+  getPathScopeSpecText,
+  PATH_SCOPE_SPEC_URI,
+} from './pathScopeSpec';
 
 interface ManagerMatch {
   sessionId: string;
@@ -455,7 +455,7 @@ function buildHandshakeUriTemplates(): HandshakeDiscoveryResourceTemplate[] {
 function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): HandshakeGuidance {
   const nextSteps = [
     `For each bridged tool, ${getSchemaReadHint()}`,
-    getIncludePatternSpecReadHint(),
+    getPathScopeSpecReadHint(),
   ];
   if (discovery.partial || discovery.issues.length > 0) {
     nextSteps.push(`Discovery is partial or has issues: ${getDiscoveryRefreshHint()}`);
@@ -623,11 +623,11 @@ function getNamesResource() {
   };
 }
 
-function getIncludePatternSpecResource() {
+function getPathScopeSpecResource() {
   return {
-    uri: INCLUDE_PATTERN_SPEC_URI,
-    name: 'Shared includePattern syntax',
-    description: getIncludePatternSpecResourceDescription(),
+    uri: PATH_SCOPE_SPEC_URI,
+    name: 'Shared pathScope syntax',
+    description: getPathScopeSpecResourceDescription(),
     mimeType: 'text/plain',
   };
 }
@@ -1156,7 +1156,7 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
     'A successful handshake response includes discovery data (callTool/bridgedTools).',
     `After handshake, ${getDiscoveryRefreshHint()}`,
     `Before first tool call, ${getSchemaReadHint()}`,
-    getIncludePatternSpecReadHint(),
+    getPathScopeSpecReadHint(),
     `Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and schema read.`,
     '',
     'Status snapshot:',
@@ -1258,7 +1258,7 @@ function createServer(): Server {
       resources: [
         getHandshakeResource(),
         getCallToolResource(),
-        getIncludePatternSpecResource(),
+        getPathScopeSpecResource(),
         getNamesResource(),
       ],
     };
@@ -1284,8 +1284,8 @@ function createServer(): Server {
     if (uri === TOOL_NAMES_RESOURCE_URI) {
       return resourceJson(uri, { tools: getBoundToolNames() });
     }
-    if (uri === INCLUDE_PATTERN_SPEC_URI) {
-      return resourceJson(uri, getIncludePatternSpecText(), 'text/plain');
+    if (uri === PATH_SCOPE_SPEC_URI) {
+      return resourceJson(uri, getPathScopeSpecText(), 'text/plain');
     }
     const toolName = getToolNameFromUri(uri, 'lm-tools://tool/');
     if (toolName) {

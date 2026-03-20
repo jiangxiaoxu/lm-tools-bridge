@@ -30,7 +30,7 @@ const TEXT_PIPE_QUERY = 'AvatarCharacter|AvatarHealthComponent';
 const TEXT_SPACE_PIPE_QUERY = 'AvatarSpacePipeLeft | AvatarSpacePipeRight';
 const TEXT_DROPPED_SPACE_PIPE_QUERY = 'BrokenPipeSpaceDrop| |LiteralSpaceDrop';
 const TEXT_FALLBACK_PIPE_QUERY = 'BrokenPipe||Literal';
-const TEXT_INCLUDE_PATTERN = 'Game/Source/GameRuntime/**/*.{h,cpp}';
+const TEXT_PATH_SCOPE = 'Game/Source/GameRuntime/**/*.{h,cpp}';
 const TEXT_CONTEXT_CLAMP_BEFORE = 80;
 const TEXT_CONTEXT_CLAMP_AFTER = 8;
 
@@ -409,7 +409,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_QUERY,
-          includePattern: TEXT_INCLUDE_PATTERN,
+          pathScope: TEXT_PATH_SCOPE,
           maxResults: 300,
         },
       },
@@ -419,7 +419,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(textSummary, `query: ${TEXT_QUERY}`, 'qgrep search summary');
     assertTextIncludes(textSummary, 'querySemanticsApplied: literal', 'qgrep search summary');
     assertTextIncludes(textSummary, 'case: smart-case/sensitive', 'qgrep search summary');
-    assertTextIncludes(textSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'qgrep search summary');
+    assertTextIncludes(textSummary, `scope: ${TEXT_PATH_SCOPE}`, 'qgrep search summary');
     assertTextIncludes(
       textSummary,
       `count: ${String(expectedAvatarMatches.length)}/${String(expectedAvatarMatches.length)}`,
@@ -438,7 +438,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_PIPE_QUERY,
-          includePattern: TEXT_INCLUDE_PATTERN,
+          pathScope: TEXT_PATH_SCOPE,
           maxResults: 300,
         },
       },
@@ -448,7 +448,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(pipeTextSummary, `query: ${TEXT_PIPE_QUERY}`, 'literal union qgrep search summary');
     assertTextIncludes(pipeTextSummary, 'querySemanticsApplied: literal', 'literal union qgrep search summary');
     assertTextIncludes(pipeTextSummary, 'case: smart-case/sensitive', 'literal union qgrep search summary');
-    assertTextIncludes(pipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'literal union qgrep search summary');
+    assertTextIncludes(pipeTextSummary, `scope: ${TEXT_PATH_SCOPE}`, 'literal union qgrep search summary');
     assert.equal(
       pipeTextSummary.includes('queryHint:'),
       false,
@@ -472,7 +472,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_SPACE_PIPE_QUERY,
-          includePattern: TEXT_INCLUDE_PATTERN,
+          pathScope: TEXT_PATH_SCOPE,
           maxResults: 300,
         },
       },
@@ -482,7 +482,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(spacePipeTextSummary, `query: ${TEXT_SPACE_PIPE_QUERY}`, 'whitespace literal union qgrep search summary');
     assertTextIncludes(spacePipeTextSummary, 'querySemanticsApplied: literal', 'whitespace literal union qgrep search summary');
     assertTextIncludes(spacePipeTextSummary, 'case: smart-case/sensitive', 'whitespace literal union qgrep search summary');
-    assertTextIncludes(spacePipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'whitespace literal union qgrep search summary');
+    assertTextIncludes(spacePipeTextSummary, `scope: ${TEXT_PATH_SCOPE}`, 'whitespace literal union qgrep search summary');
     assert.equal(
       spacePipeTextSummary.includes('queryHint:'),
       false,
@@ -506,7 +506,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_DROPPED_SPACE_PIPE_QUERY,
-          includePattern: TEXT_INCLUDE_PATTERN,
+          pathScope: TEXT_PATH_SCOPE,
           maxResults: 300,
         },
       },
@@ -516,7 +516,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(droppedSpacePipeTextSummary, `query: ${TEXT_DROPPED_SPACE_PIPE_QUERY}`, 'dropped whitespace pipe qgrep search summary');
     assertTextIncludes(droppedSpacePipeTextSummary, 'querySemanticsApplied: literal', 'dropped whitespace pipe qgrep search summary');
     assertTextIncludes(droppedSpacePipeTextSummary, 'case: smart-case/sensitive', 'dropped whitespace pipe qgrep search summary');
-    assertTextIncludes(droppedSpacePipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'dropped whitespace pipe qgrep search summary');
+    assertTextIncludes(droppedSpacePipeTextSummary, `scope: ${TEXT_PATH_SCOPE}`, 'dropped whitespace pipe qgrep search summary');
     assertTextIncludes(
       droppedSpacePipeTextSummary,
       `queryHint: ${QGREP_QUERY_HINT_WHITESPACE_BRANCH_DISCARDED}`,
@@ -540,7 +540,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_FALLBACK_PIPE_QUERY,
-          includePattern: TEXT_INCLUDE_PATTERN,
+          pathScope: TEXT_PATH_SCOPE,
           maxResults: 300,
         },
       },
@@ -550,7 +550,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     assertTextIncludes(fallbackPipeTextSummary, `query: ${TEXT_FALLBACK_PIPE_QUERY}`, 'literal fallback qgrep search summary');
     assertTextIncludes(fallbackPipeTextSummary, 'querySemanticsApplied: literal-fallback', 'literal fallback qgrep search summary');
     assertTextIncludes(fallbackPipeTextSummary, 'case: smart-case/sensitive', 'literal fallback qgrep search summary');
-    assertTextIncludes(fallbackPipeTextSummary, `scope: ${TEXT_INCLUDE_PATTERN}`, 'literal fallback qgrep search summary');
+    assertTextIncludes(fallbackPipeTextSummary, `scope: ${TEXT_PATH_SCOPE}`, 'literal fallback qgrep search summary');
     assertTextIncludes(
       fallbackPipeTextSummary,
       `queryHint: ${QGREP_QUERY_HINT_RAW_LITERAL_FALLBACK}`,
@@ -574,7 +574,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_QUERY,
-          includePattern: TEXT_INCLUDE_PATTERN,
+          pathScope: TEXT_PATH_SCOPE,
           beforeContextLines: TEXT_CONTEXT_CLAMP_BEFORE,
           afterContextLines: TEXT_CONTEXT_CLAMP_AFTER,
           maxResults: 300,

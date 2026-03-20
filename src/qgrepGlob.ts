@@ -35,8 +35,8 @@ export function normalizeFilesQueryGlobErrorMessage(error: unknown): string {
   if (message.startsWith('Invalid query glob pattern')) {
     return message;
   }
-  if (message.startsWith('Invalid includePattern glob pattern')) {
-    return message.replace('Invalid includePattern glob pattern', 'Invalid query glob pattern');
+  if (message.startsWith('Invalid pathScope glob pattern')) {
+    return message.replace('Invalid pathScope glob pattern', 'Invalid query glob pattern');
   }
   return `Invalid query glob pattern: ${message}`;
 }
@@ -107,7 +107,7 @@ function normalizeWorkspaceSearchGlobPatternWithContext(pattern: string, context
 }
 
 export function normalizeWorkspaceSearchGlobPattern(pattern: string): string {
-  return normalizeWorkspaceSearchGlobPatternWithContext(pattern, 'includePattern glob pattern');
+  return normalizeWorkspaceSearchGlobPatternWithContext(pattern, 'pathScope glob pattern');
 }
 
 export function normalizeQueryGlobPattern(pattern: string): string {

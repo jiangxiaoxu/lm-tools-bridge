@@ -43,22 +43,22 @@ export function parseQuerySyntax<TSyntax extends SupportedQuerySyntax>(
   return trimmed as TSyntax;
 }
 
-export function parseOptionalIncludePattern(input: Record<string, unknown>): string | undefined {
-  const value = input.includePattern;
+export function parseOptionalPathScope(input: Record<string, unknown>): string | undefined {
+  const value = input.pathScope;
   if (value === undefined || value === null) {
     return undefined;
   }
   if (typeof value !== 'string') {
-    throw new Error('includePattern must be a string when provided.');
+    throw new Error('pathScope must be a string when provided.');
   }
 
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    throw new Error('includePattern must be a non-empty string when provided.');
+    throw new Error('pathScope must be a non-empty string when provided.');
   }
   ensureNoBarePipeAlternation(
     trimmed,
-    "includePattern does not support '|' alternation. "
+    "pathScope does not support '|' alternation. "
     + "Use '{A,B}' for glob alternatives, or move alternation into query with querySyntax='regex'.",
   );
   return trimmed;

@@ -2,16 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
 import {
-  createIncludePatternSearchPlan,
-  resolveIncludePatternWorkspaceFile,
-  type IncludePatternWorkspaceFolder,
-} from '../includePattern';
+  createPathScopeSearchPlan,
+  resolvePathScopeWorkspaceFile,
+  type PathScopeWorkspaceFolder,
+} from '../pathScope';
 
 function toPortablePath(...segments: string[]): string {
   return path.resolve(path.join(...segments)).replace(/\\/gu, '/');
 }
 
-function getWorkspaceFolders(): IncludePatternWorkspaceFolder[] {
+function getWorkspaceFolders(): PathScopeWorkspaceFolder[] {
   if (process.platform === 'win32') {
     return [
       { name: 'Game', rootPath: toPortablePath('C:/repo/Game') },
@@ -25,17 +25,17 @@ function getWorkspaceFolders(): IncludePatternWorkspaceFolder[] {
 }
 
 function getWorkspaceFile(
-  folders: readonly IncludePatternWorkspaceFolder[],
+  folders: readonly PathScopeWorkspaceFolder[],
   absolutePath: string,
 ) {
-  const resolved = resolveIncludePatternWorkspaceFile(absolutePath, folders);
+  const resolved = resolvePathScopeWorkspaceFile(absolutePath, folders);
   assert.ok(resolved, `Expected workspace file for '${absolutePath}'.`);
   return resolved;
 }
 
-test('mixed scoped and unscoped brace branches expand into per-workspace includePattern targets', () => {
+test('mixed scoped and unscoped brace branches expand into per-workspace pathScope targets', () => {
   const folders = getWorkspaceFolders();
-  const plan = createIncludePatternSearchPlan(
+  const plan = createPathScopeSearchPlan(
     '{Game/src/**/*.ts,Engine/include/**/*.h,src/shared/**/*.ts}',
     folders,
   );
@@ -58,9 +58,9 @@ test('mixed scoped and unscoped brace branches expand into per-workspace include
   assert.equal(plan.matcher.matches(engineNonMatch), false);
 });
 
-test('absolute includePattern targets only related workspaces and preserves match filtering', () => {
+test('absolute pathScope targets only related workspaces and preserves match filtering', () => {
   const folders = getWorkspaceFolders();
-  const plan = createIncludePatternSearchPlan(`${folders[0].rootPath}/src/**/*.ts`, folders);
+  const plan = createPathScopeSearchPlan(`${folders[0].rootPath}/src/**/*.ts`, folders);
 
   assert.deepEqual(plan.targets, [
     { workspaceName: 'Game', relativePattern: 'src/**/*.ts' },

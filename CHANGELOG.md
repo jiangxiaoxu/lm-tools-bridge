@@ -6,6 +6,40 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.136] - 2026-03-20
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.136.
+- Compressed the shared `lm-tools://spec/pathScope` guidance while keeping the mixed scoped and unscoped brace example explicit.
+- Clarified that the shared syntax resource applies only to `pathScope` fields and not to file-search `query` fields, and aligned the README notes with the shorter wording.
+
+### 中文
+
+#### Changed
+- 将 patch 版本提升到 1.0.136。
+- 在保留 scoped 与 unscoped mixed brace 示例的前提下,进一步压缩了共享 `lm-tools://spec/pathScope` 文案。
+- 明确共享语法资源仅适用于 `pathScope` 字段,不适用于 file-search `query` 字段,并同步收敛 README 说明。
+
+## [1.0.135] - 2026-03-20
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.135.
+- Breaking change: renamed the shared path filter input from `includePattern` to `pathScope` across `lm_findTextInFiles`, `lm_qgrepSearchText`, and `lm_getDiagnostics`.
+- Renamed the shared syntax resource to `lm-tools://spec/pathScope` and updated schema metadata, resource registration, and handshake guidance to point to the new contract.
+- Rewrote the shared `pathScope` spec and README notes around accepted forms, important rules, common examples, and invalid or misleading examples using `GameWorkspace` and `UE5`.
+
+### 中文
+
+#### Changed
+- 将 patch 版本提升到 1.0.135.
+- Breaking change: 将 `lm_findTextInFiles`、`lm_qgrepSearchText` 和 `lm_getDiagnostics` 共享的路径过滤输入从 `includePattern` 重命名为 `pathScope`.
+- 将共享语法资源重命名为 `lm-tools://spec/pathScope`,并同步更新 schema metadata、resource 注册和 handshake guidance 指向新的契约.
+- 重写共享 `pathScope` spec 与 README 说明,补充 accepted forms、important rules、common examples 以及 invalid or misleading examples,并统一使用 `GameWorkspace` 和 `UE5` 示例.
+
 ## [1.0.134] - 2026-03-20
 
 ### English

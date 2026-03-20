@@ -5,10 +5,10 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as z from 'zod';
 import {
-  createDiagnosticsIncludePatternMatcher,
+  createDiagnosticsPathScopeMatcher,
   resolveDiagnosticsWorkspaceFile,
   type DiagnosticsWorkspaceFolder,
-} from './diagnosticsIncludePattern';
+} from './diagnosticsPathScope';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
 import { resolveStructuredPath } from './workspacePath';
 import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
@@ -38,10 +38,10 @@ import {
   requiresStructuredCustomToolResult,
 } from './qgrepOutput';
 import {
-  buildIncludePatternSchema,
-  getIncludePatternToolDescriptionSentence,
-} from './includePatternSpec';
-import { parseOptionalIncludePattern } from './searchInput';
+  buildPathScopeSchema,
+  getPathScopeToolDescriptionSentence,
+} from './pathScopeSpec';
+import { parseOptionalPathScope } from './searchInput';
 
 type ToolingLogger = {
   info: (message: string) => void;
@@ -212,7 +212,7 @@ const LM_FIND_TEXT_IN_FILES_DESCRIPTION = [
   "querySyntax controls how query is interpreted. Omit it or set querySyntax='literal' for exact text, or set querySyntax='regex' for regular expressions.",
   "If you are not sure what words will appear in the workspace, prefer querySyntax='regex' with alternation (|) or character classes to search for multiple potential words at once instead of making separate searches.",
   "For example, use querySyntax='regex' with query='function|method|procedure' to look for all of those words at once.",
-  getIncludePatternToolDescriptionSentence(),
+  getPathScopeToolDescriptionSentence(),
   'Use \'includeIgnoredFiles\' to include files normally ignored by .gitignore, other ignore files, and `files.exclude` and `search.exclude` settings.',
   'Warning: using this may cause the search to be slower, only set it when you want to search in ignored folders like node_modules or build outputs.',
   'When caseSensitive is false, smart-case is used by default (including regex searches). Set caseSensitive to true to force case-sensitive matching.',
@@ -236,7 +236,7 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
       default: 'literal',
       description: "Controls how query is interpreted. Use 'literal' for exact text or 'regex' for regular expressions.",
     },
-    includePattern: buildIncludePatternSchema(),
+    pathScope: buildPathScopeSchema(),
     maxResults: {
       type: 'number',
       description: 'The maximum number of results to return. Do not use this unless necessary, it can slow things down. By default, only some matches are returned. If you use this and don\'t see what you\'re looking for, you can try again with a more specific query or a larger maxResults.',
@@ -253,13 +253,13 @@ const LM_FIND_TEXT_IN_FILES_SCHEMA: Record<string, unknown> = {
 const LM_GET_DIAGNOSTICS_DESCRIPTION = [
   'Get compile and lint diagnostics for the current workspace or a filtered file set.',
   'Use this tool to inspect the same Problems diagnostics the user sees, analyze current issues when no filter is specified, and validate changes after edits.',
-  getIncludePatternToolDescriptionSentence(),
+  getPathScopeToolDescriptionSentence(),
 ].join(' ');
 
 const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    includePattern: buildIncludePatternSchema({
+    pathScope: buildPathScopeSchema({
       minLength: 1,
       pattern: '\\S',
     }),
@@ -363,8 +363,8 @@ const LM_QGREP_SEARCH_DESCRIPTION = [
   'Search indexed workspace text using qgrep.',
   "Default querySyntax='literal' matches exact text; set querySyntax='regex' for regular expressions.",
   "In literal mode, top-level unescaped '|' provides literal OR semantics.",
-  'If includePattern is omitted, search runs across all initialized workspace folders.',
-  getIncludePatternToolDescriptionSentence(),
+  'If pathScope is omitted, search runs across all initialized workspace folders.',
+  getPathScopeToolDescriptionSentence(),
   'beforeContextLines/afterContextLines add optional preview context lines.',
   'When caseSensitive is false or omitted, smart-case is used.',
   'Output is plain text with absolute paths (/) and always includes line numbers.',
@@ -396,7 +396,7 @@ const LM_QGREP_SEARCH_SCHEMA: Record<string, unknown> = {
       default: 'literal',
       description: "Controls query interpretation: 'literal' or 'regex'.",
     },
-    includePattern: buildIncludePatternSchema(),
+    pathScope: buildPathScopeSchema(),
     maxResults: {
       type: 'integer',
       default: 300,
@@ -493,7 +493,7 @@ interface LmGetDiagnosticsFileResult {
 interface LmGetDiagnosticsPayload {
   source: 'vscode.languages.getDiagnostics';
   scope: 'workspace+external' | 'filtered';
-  includePattern: string | null;
+  pathScope: string | null;
   severities: LmGetDiagnosticsSeverity[];
   capped: boolean;
   totalDiagnostics: number;
@@ -2049,21 +2049,21 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
     throw new Error('vscode.languages.getDiagnostics is not available in this VS Code version.');
   }
 
-  const includePattern = parseOptionalIncludePattern(input);
+  const pathScope = parseOptionalPathScope(input);
   const severities = parseLmGetDiagnosticsSeverities(input.severities);
   const severitySet = new Set<LmGetDiagnosticsSeverity>(severities);
   const maxResults = parseLmGetDiagnosticsMaxResults(input.maxResults);
   const diagnosticsByUri = getDiagnostics();
   const scope: LmGetDiagnosticsPayload['scope'] =
-    includePattern ? 'filtered' : 'workspace+external';
+    pathScope ? 'filtered' : 'workspace+external';
 
-  const files = await collectLmGetDiagnosticsFiles(diagnosticsByUri, severitySet, includePattern);
+  const files = await collectLmGetDiagnosticsFiles(diagnosticsByUri, severitySet, pathScope);
   const totalDiagnostics = files.reduce((count, file) => count + file.diagnostics.length, 0);
   const limited = applyLmGetDiagnosticsLimit(files, maxResults);
   const payload: LmGetDiagnosticsPayload = {
     source: 'vscode.languages.getDiagnostics',
     scope,
-    includePattern: includePattern ?? null,
+    pathScope: pathScope ?? null,
     severities,
     capped: limited.capped,
     totalDiagnostics,
@@ -2556,7 +2556,7 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
   const totalAvailable = typeof payload.totalAvailable === 'number' ? payload.totalAvailable : count;
   const totalAvailableCapped = payload.totalAvailableCapped === true;
   const hardLimitHit = payload.hardLimitHit === true;
-  const includePattern = typeof payload.includePattern === 'string' ? payload.includePattern : null;
+  const pathScope = typeof payload.pathScope === 'string' ? payload.pathScope : null;
   const maxResultsApplied = typeof payload.maxResultsApplied === 'number'
     ? payload.maxResultsApplied
     : null;
@@ -2586,7 +2586,7 @@ async function formatQgrepSearchSummary(payload: Record<string, unknown>): Promi
     ...(querySemanticsApplied ? [`querySemanticsApplied: ${querySemanticsApplied}`] : []),
     ...queryHintLines,
     ...(casePolicy && caseModeApplied ? [`case: ${casePolicy}/${caseModeApplied}`] : []),
-    `scope: ${includePattern ?? 'all initialized workspaces'}`,
+    `scope: ${pathScope ?? 'all initialized workspaces'}`,
     `count: ${count}/${totalAvailable}${totalAvailableCapped ? '+' : ''}${capped ? ' (capped)' : ''}`,
     ...(hardLimitHit ? ['hardLimitHit: true'] : []),
     ...(maxResultsRequested !== null ? [`maxResultsRequested: ${maxResultsRequested}`] : []),
@@ -2890,13 +2890,13 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
 async function collectLmGetDiagnosticsFiles(
   entries: ReadonlyArray<readonly [vscode.Uri, readonly vscode.Diagnostic[]]>,
   severities: ReadonlySet<LmGetDiagnosticsSeverity>,
-  includePattern: string | undefined,
+  pathScope: string | undefined,
 ): Promise<LmGetDiagnosticsFileResult[]> {
   const files: LmGetDiagnosticsFileResult[] = [];
   const lineCache = new Map<string, string[] | null>();
   const workspaceFolders = getLmGetDiagnosticsWorkspaceFolders();
-  const includeMatcher = includePattern
-    ? createDiagnosticsIncludePatternMatcher(includePattern, workspaceFolders)
+  const includeMatcher = pathScope
+    ? createDiagnosticsPathScopeMatcher(pathScope, workspaceFolders)
     : undefined;
   for (const [uri, diagnostics] of entries) {
     const filePath = resolveLmGetDiagnosticsFilePath(uri);
@@ -3242,7 +3242,7 @@ function formatLmGetDiagnosticsSummary(payload: LmGetDiagnosticsPayload, returne
     'Diagnostics summary',
     `source: ${payload.source}`,
     `scope: ${payload.scope}`,
-    `includePattern: ${payload.includePattern ?? '<none>'}`,
+    `pathScope: ${payload.pathScope ?? '<none>'}`,
     `severities: ${payload.severities.join(', ')}`,
     `files: ${payload.files.length}`,
     `diagnostics: ${returnedDiagnostics}/${payload.totalDiagnostics}${payload.capped ? ' (capped)' : ''}`,

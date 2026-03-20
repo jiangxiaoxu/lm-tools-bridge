@@ -3,15 +3,15 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { rgPath } from '@vscode/ripgrep';
 import {
-  createIncludePatternSearchPlan,
-  resolveIncludePatternWorkspaceFile,
-  type IncludePatternMatcher,
-  type IncludePatternSearchPlan,
-  type IncludePatternWorkspaceFolder,
-} from './includePattern';
+  createPathScopeSearchPlan,
+  resolvePathScopeWorkspaceFile,
+  type PathScopeMatcher,
+  type PathScopeSearchPlan,
+  type PathScopeWorkspaceFolder,
+} from './pathScope';
 import {
   ensureNoBarePipeAlternation,
-  parseOptionalIncludePattern,
+  parseOptionalPathScope,
   parseQuerySyntax,
   type FindTextQuerySyntax,
 } from './searchInput';
@@ -37,8 +37,8 @@ type RipgrepFileSearchResult = {
 type RipgrepSearchTarget = {
   folder: vscode.WorkspaceFolder;
   glob?: string;
-  includeMatcher?: IncludePatternMatcher;
-  workspaceFolders?: readonly IncludePatternWorkspaceFolder[];
+  includeMatcher?: PathScopeMatcher;
+  workspaceFolders?: readonly PathScopeWorkspaceFolder[];
 };
 
 export async function executeFindTextInFilesSearch(input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -52,7 +52,7 @@ export async function executeFindTextInFilesSearch(input: Record<string, unknown
     allowed: ['literal', 'regex'],
     defaultSyntax: 'literal',
   });
-  const includePattern = parseOptionalIncludePattern(input);
+  const pathScope = parseOptionalPathScope(input);
   const caseSensitive = input.caseSensitive === true;
   const includeIgnoredFiles = input.includeIgnoredFiles === true;
   const maxResults = typeof input.maxResults === 'number' && Number.isFinite(input.maxResults)
@@ -65,7 +65,7 @@ export async function executeFindTextInFilesSearch(input: Record<string, unknown
   let capped = false;
   let remaining = maxResults ?? Number.POSITIVE_INFINITY;
 
-  const targets = resolveRipgrepTargets(includePattern);
+  const targets = resolveRipgrepTargets(pathScope);
   for (const target of targets) {
     if (remaining <= 0) {
       capped = true;
@@ -149,16 +149,16 @@ export async function executeFindFilesSearch(input: Record<string, unknown>): Pr
 }
 
 function resolveRipgrepTargets(
-  includePattern: string | undefined,
+  pathScope: string | undefined,
 ): RipgrepSearchTarget[] {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
     return [];
   }
-  if (typeof includePattern !== 'string') {
+  if (typeof pathScope !== 'string') {
     return folders.map((folder) => ({ folder }));
   }
-  const trimmed = includePattern.trim();
+  const trimmed = pathScope.trim();
   if (!trimmed) {
     return folders.map((folder) => ({ folder }));
   }
@@ -166,18 +166,18 @@ function resolveRipgrepTargets(
     name: folder.name,
     rootPath: folder.uri.fsPath,
   }));
-  const plan = createIncludePatternSearchPlan(trimmed, workspaceFolders);
+  const plan = createPathScopeSearchPlan(trimmed, workspaceFolders);
   return buildRipgrepSearchTargetsFromPlan(plan, folders, workspaceFolders);
 }
 
 function resolveFindFilesTargets(
-  includePattern: string,
+  pathScope: string,
 ): Array<{ folder: vscode.WorkspaceFolder; glob?: string }> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
     return [];
   }
-  const trimmed = includePattern.trim();
+  const trimmed = pathScope.trim();
   if (!trimmed) {
     return folders.map((folder) => ({ folder }));
   }
@@ -193,7 +193,7 @@ function resolveFindFilesTargets(
       glob: normalizedRelPath.length > 0 ? normalizedRelPath : '**/*',
     }];
   }
-  const parsed = parseWorkspacePrefixedIncludePattern(trimmed);
+  const parsed = parseWorkspacePrefixedPathScope(trimmed);
   if (parsed) {
     return [{ folder: parsed.workspaceFolder, glob: parsed.pattern }];
   }
@@ -262,7 +262,7 @@ async function runRipgrepSearch(
     stdoutBuffer += chunk.toString('utf8');
     stdoutBuffer = consumeRipgrepLines(stdoutBuffer, (line) => {
       const match = parseRipgrepMatch(line, target.folder);
-      if (!match || !matchRipgrepResultToIncludePattern(match.path, target)) {
+      if (!match || !matchRipgrepResultToPathScope(match.path, target)) {
         return;
       }
       pushMatch(match);
@@ -281,7 +281,7 @@ async function runRipgrepSearch(
   if (stdoutBuffer.length > 0) {
     consumeRipgrepLines(stdoutBuffer, (line) => {
       const match = parseRipgrepMatch(line, target.folder);
-      if (!match || !matchRipgrepResultToIncludePattern(match.path, target)) {
+      if (!match || !matchRipgrepResultToPathScope(match.path, target)) {
         return;
       }
       pushMatch(match);
@@ -596,9 +596,9 @@ function normalizeGlob(pattern: string): string {
 }
 
 function buildRipgrepSearchTargetsFromPlan(
-  plan: IncludePatternSearchPlan,
+  plan: PathScopeSearchPlan,
   folders: readonly vscode.WorkspaceFolder[],
-  workspaceFolders: readonly IncludePatternWorkspaceFolder[],
+  workspaceFolders: readonly PathScopeWorkspaceFolder[],
 ): RipgrepSearchTarget[] {
   const folderByKey = new Map(
     folders.map((folder) => [
@@ -622,21 +622,21 @@ function buildRipgrepSearchTargetsFromPlan(
   });
 }
 
-function matchRipgrepResultToIncludePattern(
+function matchRipgrepResultToPathScope(
   absolutePath: string,
   target: RipgrepSearchTarget,
 ): boolean {
   if (!target.includeMatcher || !target.workspaceFolders) {
     return true;
   }
-  const workspaceFile = resolveIncludePatternWorkspaceFile(absolutePath, target.workspaceFolders);
+  const workspaceFile = resolvePathScopeWorkspaceFile(absolutePath, target.workspaceFolders);
   if (!workspaceFile) {
     return false;
   }
   return target.includeMatcher.matches(workspaceFile);
 }
 
-function parseWorkspacePrefixedIncludePattern(entry: string): {
+function parseWorkspacePrefixedPathScope(entry: string): {
   workspaceFolder: vscode.WorkspaceFolder;
   pattern: string;
 } | undefined {

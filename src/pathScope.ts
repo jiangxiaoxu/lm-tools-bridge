@@ -2,37 +2,37 @@ import * as path from 'node:path';
 import { compileGlobToRegexSource, normalizeWorkspaceSearchGlobPattern } from './qgrepGlob';
 import { tryResolveWorkspaceScopePattern } from './qgrepWorkspaceScope';
 
-export interface IncludePatternWorkspaceFolder {
+export interface PathScopeWorkspaceFolder {
   name: string;
   rootPath: string;
 }
 
-export interface IncludePatternWorkspaceFile {
+export interface PathScopeWorkspaceFile {
   absolutePath: string;
   workspaceName: string;
   relativePath: string;
 }
 
-export interface IncludePatternMatcher {
-  matches(file: IncludePatternWorkspaceFile): boolean;
+export interface PathScopeMatcher {
+  matches(file: PathScopeWorkspaceFile): boolean;
 }
 
-export interface IncludePatternSearchTarget {
+export interface PathScopeSearchTarget {
   workspaceName: string;
   relativePattern?: string;
 }
 
-export interface IncludePatternSearchPlan {
-  matcher: IncludePatternMatcher;
-  targets: IncludePatternSearchTarget[];
+export interface PathScopeSearchPlan {
+  matcher: PathScopeMatcher;
+  targets: PathScopeSearchTarget[];
 }
 
-interface PreparedIncludePatternWorkspaceFolder extends IncludePatternWorkspaceFolder {
+interface PreparedPathScopeWorkspaceFolder extends PathScopeWorkspaceFolder {
   normalizedRootPath: string;
   comparableRootPath: string;
 }
 
-type IncludePatternPathRegex = {
+type PathScopePathRegex = {
   regex: RegExp;
 };
 
@@ -54,8 +54,8 @@ function normalizeRootPath(value: string): string {
 }
 
 function prepareWorkspaceFolders(
-  folders: readonly IncludePatternWorkspaceFolder[],
-): PreparedIncludePatternWorkspaceFolder[] {
+  folders: readonly PathScopeWorkspaceFolder[],
+): PreparedPathScopeWorkspaceFolder[] {
   return folders.map((folder) => ({
     ...folder,
     rootPath: normalizeRootPath(folder.rootPath),
@@ -75,7 +75,7 @@ function isAbsolutePath(inputPath: string): boolean {
   return path.isAbsolute(inputPath) || /^[a-zA-Z]:[\\/]/u.test(inputPath) || inputPath.startsWith('\\\\');
 }
 
-function compileWorkspacePatternRegex(pattern: string): IncludePatternPathRegex {
+function compileWorkspacePatternRegex(pattern: string): PathScopePathRegex {
   const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
   let glob = normalizedPattern.startsWith('/') ? normalizedPattern.slice(1) : normalizedPattern;
   if (glob.length === 0) {
@@ -86,10 +86,10 @@ function compileWorkspacePatternRegex(pattern: string): IncludePatternPathRegex 
   };
 }
 
-function compileAbsolutePatternRegex(pattern: string): IncludePatternPathRegex {
+function compileAbsolutePatternRegex(pattern: string): PathScopePathRegex {
   const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
   if (!isAbsolutePath(normalizedPattern)) {
-    throw new Error(`includePattern must be an absolute path or glob: ${pattern}`);
+    throw new Error(`pathScope must be an absolute path or glob: ${pattern}`);
   }
   return {
     regex: buildRegex(normalizedPattern),
@@ -97,7 +97,7 @@ function compileAbsolutePatternRegex(pattern: string): IncludePatternPathRegex {
 }
 
 function buildRegex(glob: string): RegExp {
-  const source = compileGlobToRegexSource(glob, 'includePattern glob pattern');
+  const source = compileGlobToRegexSource(glob, 'pathScope glob pattern');
   const flags = process.platform === 'win32' ? 'iu' : 'u';
   return new RegExp(`^${source}$`, flags);
 }
@@ -149,7 +149,7 @@ function getWorkspaceNameKey(name: string): string {
 
 function tryDeriveRelativePatternFromAbsolutePattern(
   normalizedPattern: string,
-  folder: PreparedIncludePatternWorkspaceFolder,
+  folder: PreparedPathScopeWorkspaceFolder,
 ): string | undefined {
   const relativePattern = normalizeSlash(path.relative(folder.normalizedRootPath, normalizedPattern));
   if (!relativePattern || relativePattern === '.') {
@@ -161,15 +161,15 @@ function tryDeriveRelativePatternFromAbsolutePattern(
   return relativePattern;
 }
 
-export function resolveIncludePatternWorkspaceFile(
+export function resolvePathScopeWorkspaceFile(
   absolutePath: string,
-  folders: readonly IncludePatternWorkspaceFolder[],
-): IncludePatternWorkspaceFile | undefined {
+  folders: readonly PathScopeWorkspaceFolder[],
+): PathScopeWorkspaceFile | undefined {
   const preparedFolders = prepareWorkspaceFolders(folders);
   const resolvedAbsolutePath = normalizeRootPath(absolutePath);
   const comparableAbsolutePath = normalizeForComparison(absolutePath);
 
-  let bestMatch: PreparedIncludePatternWorkspaceFolder | undefined;
+  let bestMatch: PreparedPathScopeWorkspaceFolder | undefined;
   for (const folder of preparedFolders) {
     const relative = path.relative(folder.comparableRootPath, comparableAbsolutePath);
     const inside = !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -192,28 +192,28 @@ export function resolveIncludePatternWorkspaceFile(
   };
 }
 
-export function createIncludePatternMatcher(
-  includePattern: string,
-  folders: readonly IncludePatternWorkspaceFolder[],
-): IncludePatternMatcher {
-  return createIncludePatternSearchPlan(includePattern, folders).matcher;
+export function createPathScopeMatcher(
+  pathScope: string,
+  folders: readonly PathScopeWorkspaceFolder[],
+): PathScopeMatcher {
+  return createPathScopeSearchPlan(pathScope, folders).matcher;
 }
 
-export function createIncludePatternSearchPlan(
-  includePattern: string,
-  folders: readonly IncludePatternWorkspaceFolder[],
-): IncludePatternSearchPlan {
+export function createPathScopeSearchPlan(
+  pathScope: string,
+  folders: readonly PathScopeWorkspaceFolder[],
+): PathScopeSearchPlan {
   const preparedFolders = prepareWorkspaceFolders(folders);
   if (preparedFolders.length === 0) {
     throw new Error('No workspace folders are open.');
   }
 
-  const normalizedPattern = normalizeWorkspaceSearchGlobPattern(includePattern);
+  const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pathScope);
   if (isAbsolutePath(normalizedPattern)) {
     const checkPrefix = getAbsolutePrefixForWorkspaceCheck(normalizedPattern);
     const matchedFolders = preparedFolders.filter((folder) => arePathsRelated(folder.normalizedRootPath, checkPrefix));
     if (matchedFolders.length === 0) {
-      throw new Error(`includePattern is outside current workspaces: ${includePattern}`);
+      throw new Error(`pathScope is outside current workspaces: ${pathScope}`);
     }
     const absolutePattern = compileAbsolutePatternRegex(normalizedPattern);
     return {
@@ -232,7 +232,7 @@ export function createIncludePatternSearchPlan(
   const workspaceNames = preparedFolders.map((folder) => folder.name);
   const scoped = tryResolveWorkspaceScopePattern(normalizedPattern, workspaceNames);
   if (scoped) {
-    const matchersByWorkspace = new Map<string, IncludePatternPathRegex>();
+    const matchersByWorkspace = new Map<string, PathScopePathRegex>();
     for (const target of scoped.targets) {
       matchersByWorkspace.set(
         getWorkspaceNameKey(target.workspaceName),

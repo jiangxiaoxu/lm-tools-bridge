@@ -267,10 +267,10 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const beforeTools = await manager.client.listTools();
   assert.deepEqual(getToolNames(beforeTools), [DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD]);
 
-  const includePatternSpec = await manager.client.readResource({
-    uri: 'lm-tools://spec/includePattern',
+  const pathScopeSpec = await manager.client.readResource({
+    uri: 'lm-tools://spec/pathScope',
   });
-  assert.match(getResourceText(includePatternSpec), /^Shared includePattern syntax/mu);
+  assert.match(getResourceText(pathScopeSpec), /^Shared pathScope syntax/mu);
 
   const handshake = await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
@@ -302,7 +302,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const handshakeResource = await manager.client.readResource({
     uri: 'lm-tools-bridge://handshake',
   });
-  assert.match(getResourceText(handshakeResource), /lm-tools:\/\/spec\/includePattern/u);
+  assert.match(getResourceText(handshakeResource), /lm-tools:\/\/spec\/pathScope/u);
   const handshakeStatus = getHandshakeStatusPayload(getResourceText(handshakeResource));
   const statusTarget = handshakeStatus.target as Record<string, unknown> | null;
   assert.deepEqual(statusTarget?.workspaceFolders, [workspaceRoot]);

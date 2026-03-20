@@ -39,7 +39,7 @@ test('handshake payload omits redundant online and health fields', () => {
     guidance: {
       nextSteps: [
         'read lm-tools://schema/{name} before the first tool call.',
-        'Before using any tool argument named includePattern, you must read lm-tools://spec/includePattern first.',
+        'Before using any tool argument named pathScope, you must read lm-tools://spec/pathScope first.',
       ],
     },
   });
@@ -81,7 +81,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
     guidance: {
       nextSteps: [
         'read lm-tools://schema/{name} before the first tool call.',
-        'Before using any tool argument named includePattern, you must read lm-tools://spec/includePattern first.',
+        'Before using any tool argument named pathScope, you must read lm-tools://spec/pathScope first.',
       ],
     },
   });

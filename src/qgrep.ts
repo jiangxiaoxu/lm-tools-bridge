@@ -17,7 +17,7 @@ import {
 } from './qgrepFilesQuery';
 import { upsertWorkspaceConfigPathLine } from './qgrepConfig';
 import {
-  parseOptionalIncludePattern,
+  parseOptionalPathScope,
   parseQuerySyntax,
   type QgrepFilesQuerySyntax,
   type QgrepTextQuerySyntax,
@@ -385,7 +385,7 @@ class QgrepService implements vscode.Disposable {
 
   public async search(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const query = this.parseQuery(input);
-    const includePattern = parseOptionalIncludePattern(input);
+    const pathScope = parseOptionalPathScope(input);
     const querySyntax = this.parseTextQuerySyntax(input);
     const caseSensitive = this.parseOptionalBooleanInput(input.caseSensitive, 'caseSensitive');
     const beforeContextLines = parseOptionalContextLineCount(input.beforeContextLines, 'beforeContextLines');
@@ -413,9 +413,9 @@ class QgrepService implements vscode.Disposable {
       ? false
       : this.shouldUseCaseInsensitiveSearchForQuery(querySyntax, query, parsedLiteralQuery);
     await this.ensureToolSearchReady();
-    if (includePattern && this.isGlobIncludePattern(includePattern)) {
-      return this.searchWithGlobIncludePattern(
-        includePattern,
+    if (pathScope && this.isGlobPathScope(pathScope)) {
+      return this.searchWithGlobPathScope(
+        pathScope,
         query,
         backendQuery,
         querySemanticsApplied,
@@ -428,7 +428,7 @@ class QgrepService implements vscode.Disposable {
       );
     }
 
-    const targets = this.resolveSearchTargets(includePattern);
+    const targets = this.resolveSearchTargets(pathScope);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
     }
@@ -464,7 +464,7 @@ class QgrepService implements vscode.Disposable {
 
     return {
       query,
-      includePattern: includePattern ?? null,
+      pathScope: pathScope ?? null,
       ...maxResultsPayload,
       totalAvailable,
       ...(totalAvailableCapped ? { totalAvailableCapped: true } : {}),
@@ -1097,8 +1097,8 @@ class QgrepService implements vscode.Disposable {
     return parts.join(', ');
   }
 
-  private isGlobIncludePattern(includePattern: string): boolean {
-    const trimmed = includePattern.trim();
+  private isGlobPathScope(pathScope: string): boolean {
+    const trimmed = pathScope.trim();
     if (trimmed.length === 0) {
       return false;
     }
@@ -1110,8 +1110,8 @@ class QgrepService implements vscode.Disposable {
     }
   }
 
-  private async searchWithGlobIncludePattern(
-    includePattern: string,
+  private async searchWithGlobPathScope(
+    pathScope: string,
     query: string,
     backendQuery: string,
     querySemanticsApplied: QgrepTextQuerySemantics,
@@ -1124,7 +1124,7 @@ class QgrepService implements vscode.Disposable {
   ): Promise<Record<string, unknown>> {
     const maxResultsApplied = maxResultsPayload.maxResultsApplied;
     const contextLinesPayload = this.buildContextLinePayload(beforeContextLines, afterContextLines);
-    const targets = this.resolveGlobSearchTargets(includePattern);
+    const targets = this.resolveGlobSearchTargets(pathScope);
     if (targets.length === 0) {
       throw new Error(`No initialized qgrep workspace found. ${INIT_COMMAND_HINT}`);
     }
@@ -1160,7 +1160,7 @@ class QgrepService implements vscode.Disposable {
 
     return {
       query,
-      includePattern,
+      pathScope,
       ...maxResultsPayload,
       totalAvailable,
       ...(totalAvailableCapped ? { totalAvailableCapped: true } : {}),
@@ -1176,8 +1176,8 @@ class QgrepService implements vscode.Disposable {
     };
   }
 
-  private resolveGlobSearchTargets(includePattern: string): QgrepGlobSearchTarget[] {
-    const trimmed = includePattern.trim();
+  private resolveGlobSearchTargets(pathScope: string): QgrepGlobSearchTarget[] {
+    const trimmed = pathScope.trim();
     if (isAbsolutePath(trimmed)) {
       const matcher = compileAbsoluteGlobPathMatcher(trimmed);
       return this.getInitializedStates().map((state) => this.createGlobSearchTarget(state, matcher));
@@ -1220,17 +1220,17 @@ class QgrepService implements vscode.Disposable {
     const syntaxError = validateQgrepConfigRegexSyntax(regexSource);
     if (syntaxError) {
       throw new Error(
-        `Invalid includePattern glob pattern: generated qgrep regex is not supported (${syntaxError}).`,
+        `Invalid pathScope glob pattern: generated qgrep regex is not supported (${syntaxError}).`,
       );
     }
     return regexSource;
   }
 
-  private resolveSearchTargets(includePattern: string | undefined): QgrepSearchTarget[] {
-    if (!includePattern) {
+  private resolveSearchTargets(pathScope: string | undefined): QgrepSearchTarget[] {
+    if (!pathScope) {
       return this.getInitializedStates().map((state) => ({ state }));
     }
-    const resolved = this.resolveIncludePattern(includePattern);
+    const resolved = this.resolvePathScope(pathScope);
     const filterRegex = this.buildFilterRegex(resolved.state.folder, resolved.absolutePath);
     return [{
       state: resolved.state,
@@ -1238,7 +1238,7 @@ class QgrepService implements vscode.Disposable {
     }];
   }
 
-  private resolveIncludePattern(inputPath: string): ResolvedSearchPath {
+  private resolvePathScope(inputPath: string): ResolvedSearchPath {
     const folders = vscode.workspace.workspaceFolders ?? [];
     if (folders.length === 0) {
       throw new Error('No workspace folders are open.');
@@ -1248,11 +1248,11 @@ class QgrepService implements vscode.Disposable {
     if (isAbsolutePath(trimmed)) {
       const absolutePath = path.resolve(trimmed);
       if (!fs.existsSync(absolutePath)) {
-        throw new Error(`includePattern does not exist: ${inputPath}`);
+        throw new Error(`pathScope does not exist: ${inputPath}`);
       }
       const folder = this.findWorkspaceForAbsolutePath(absolutePath);
       if (!folder) {
-        throw new Error(`includePattern is outside current workspaces: ${inputPath}`);
+        throw new Error(`pathScope is outside current workspaces: ${inputPath}`);
       }
       const state = this.requireInitializedState(folder);
       return { state, absolutePath };
@@ -1262,10 +1262,10 @@ class QgrepService implements vscode.Disposable {
     if (prefixed) {
       const absolutePath = path.resolve(prefixed.folder.uri.fsPath, prefixed.remainder);
       if (!isPathInsideRoot(prefixed.folder.uri.fsPath, absolutePath)) {
-        throw new Error(`includePattern resolves outside workspace '${prefixed.folder.name}': ${inputPath}`);
+        throw new Error(`pathScope resolves outside workspace '${prefixed.folder.name}': ${inputPath}`);
       }
       if (!fs.existsSync(absolutePath)) {
-        throw new Error(`includePattern does not exist: ${inputPath}`);
+        throw new Error(`pathScope does not exist: ${inputPath}`);
       }
       const state = this.requireInitializedState(prefixed.folder);
       return { state, absolutePath };
@@ -1284,11 +1284,11 @@ class QgrepService implements vscode.Disposable {
     }
 
     if (matches.length === 0) {
-      throw new Error(`includePattern was not found in current workspaces: ${inputPath}`);
+      throw new Error(`pathScope was not found in current workspaces: ${inputPath}`);
     }
     if (matches.length > 1) {
       const candidates = matches.map((item) => item.folder.name).join(', ');
-      throw new Error(`includePattern is ambiguous across workspaces (${candidates}). Use WorkspaceName/... form.`);
+      throw new Error(`pathScope is ambiguous across workspaces (${candidates}). Use WorkspaceName/... form.`);
     }
 
     const onlyMatch = matches[0];
@@ -2735,7 +2735,7 @@ function delayMs(durationMs: number): Promise<void> {
 function compileWorkspaceGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
   const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
   if (normalizedPattern.length === 0) {
-    throw new Error('includePattern glob must be a non-empty string.');
+    throw new Error('pathScope glob must be a non-empty string.');
   }
 
   let glob = normalizedPattern.startsWith('/') ? normalizedPattern.slice(1) : normalizedPattern;
@@ -2756,14 +2756,14 @@ function compileWorkspaceGlobPathMatcher(pattern: string): QgrepGlobPathMatcher 
       matchTarget: 'relative',
     };
   } catch (error) {
-    throw new Error(`Invalid includePattern glob pattern: ${String(error)}`);
+    throw new Error(`Invalid pathScope glob pattern: ${String(error)}`);
   }
 }
 
 function compileAbsoluteGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
   const normalizedPattern = normalizeWorkspaceSearchGlobPattern(pattern);
   if (!isAbsolutePath(normalizedPattern)) {
-    throw new Error(`includePattern glob must be an absolute path pattern: ${pattern}`);
+    throw new Error(`pathScope glob must be an absolute path pattern: ${pattern}`);
   }
 
   const regexSource = compileWorkspaceGlobToRegexSource(normalizedPattern);
@@ -2779,12 +2779,12 @@ function compileAbsoluteGlobPathMatcher(pattern: string): QgrepGlobPathMatcher {
       matchTarget: 'absolute',
     };
   } catch (error) {
-    throw new Error(`Invalid includePattern glob pattern: ${String(error)}`);
+    throw new Error(`Invalid pathScope glob pattern: ${String(error)}`);
   }
 }
 
 function compileWorkspaceGlobToRegexSource(glob: string): string {
-  return compileGlobToRegexSource(glob, 'includePattern glob pattern');
+  return compileGlobToRegexSource(glob, 'pathScope glob pattern');
 }
 
 function normalizeSearchExcludeGlob(pattern: string): string | undefined {

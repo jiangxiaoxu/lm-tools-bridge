@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.137] - 2026-03-22
+
+### English
+
+#### Changed
+- Bumped patch version to 1.0.137.
+
+### 中文
+
+#### Changed
+- 将 patch 版本提升到 1.0.137。
+
 ## [1.0.136] - 2026-03-20
 
 ### English

@@ -118,6 +118,10 @@ function getCustomRuleGroupId(
   return undefined;
 }
 
+function isCopilotToolName(name: string): boolean {
+  return name.startsWith('lm_copilot_') || name.startsWith('copilot_');
+}
+
 function classifyToolSource(
   input: GroupedToolInput,
   customRules: readonly CompiledToolGroupingRule[],
@@ -146,7 +150,7 @@ function classifyToolSource(
   if (input.isCustom) {
     return GROUP_CUSTOM;
   }
-  if (input.name.startsWith('copilot_')) {
+  if (isCopilotToolName(input.name)) {
     return GROUP_COPILOT;
   }
   if (input.name.length > 0) {

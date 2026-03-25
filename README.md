@@ -55,6 +55,7 @@ Optional for Codex app: the `vscode-tools` skill works well with this extension.
 
 Notes:
 - Handshake is required before using bridged workspace tools.
+- VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - If a tool argument uses `pathScope`, read `lm-tools://spec/pathScope` after handshake.
 
 ### Troubleshooting
@@ -111,6 +112,7 @@ enabled = true
 
 说明:
 - 使用桥接 workspace tools 之前,必须先完成握手.
+- 来自 VS Code 的 workspace tool 对外统一带 `lm_` 前缀. 例如 `copilot_searchCodebase` 会暴露为 `lm_copilot_searchCodebase`.
 - 如果某个工具参数使用了 `pathScope`,请在握手后读取 `lm-tools://spec/pathScope`.
 
 ### 故障排查

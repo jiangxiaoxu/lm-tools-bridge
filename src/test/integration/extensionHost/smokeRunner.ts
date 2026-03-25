@@ -16,7 +16,11 @@ import {
   waitForFileExists,
   waitForWorkspaceFolderNames,
 } from './testHarness';
-import { buildToolInputSchema, getEnabledExposedToolsSnapshot } from '../../../tooling';
+import {
+  buildToolInputSchema,
+  getEnabledExposedToolsSnapshot,
+  normalizeToolSelectionState,
+} from '../../../tooling';
 
 const REQUIRED_COMMANDS = [
   'lm-tools-bridge.qgrepInitAllWorkspaces',
@@ -136,6 +140,74 @@ export async function run(): Promise<void> {
         const metadataRecord = metadata as { uri?: unknown };
         if (metadataRecord.uri !== 'lm-tools://spec/pathScope') {
           throw new Error(`Expected pathScope shared syntax URI, got ${JSON.stringify(metadataRecord.uri)}.`);
+        }
+      },
+    },
+    {
+      name: 'normalizes exposed VS Code tool names to the lm_ prefix',
+      run: async () => {
+        await activateExtension();
+        const tools = getEnabledExposedToolsSnapshot();
+        const invalid = tools
+          .map((tool) => tool.name)
+          .filter((name) => !name.startsWith('lm_'));
+        if (invalid.length > 0) {
+          throw new Error(`Expected all exposed tool names to start with lm_. Invalid tools: ${invalid.join(', ')}`);
+        }
+      },
+    },
+    {
+      name: 'migrates legacy exact-name config entries to lm_ names',
+      run: async () => {
+        await activateExtension();
+        const config = vscode.workspace.getConfiguration('lmToolsBridge');
+        const target = vscode.ConfigurationTarget.Global;
+        const previousExposed = config.inspect<string[]>('tools.exposedDelta')?.globalValue;
+        const previousUnexposed = config.inspect<string[]>('tools.unexposedDelta')?.globalValue;
+        const previousEnabled = config.inspect<string[]>('tools.enabledDelta')?.globalValue;
+        const previousDisabled = config.inspect<string[]>('tools.disabledDelta')?.globalValue;
+        const previousSchemaDefaults = config.inspect<string[]>('tools.schemaDefaults')?.globalValue;
+
+        try {
+          await config.update('tools.exposedDelta', ['copilot_searchCodebase'], target);
+          await config.update('tools.unexposedDelta', ['getVSCodeWorkspace'], target);
+          await config.update('tools.enabledDelta', ['copilot_searchCodebase'], target);
+          await config.update('tools.disabledDelta', ['copilot_searchWorkspaceSymbols'], target);
+          await config.update('tools.schemaDefaults', ['copilot_searchCodebase.maxResults=25'], target);
+
+          await normalizeToolSelectionState();
+
+          const exposed = config.inspect<string[]>('tools.exposedDelta')?.globalValue ?? [];
+          const unexposed = config.inspect<string[]>('tools.unexposedDelta')?.globalValue ?? [];
+          const enabled = config.inspect<string[]>('tools.enabledDelta')?.globalValue ?? [];
+          const disabled = config.inspect<string[]>('tools.disabledDelta')?.globalValue ?? [];
+          const schemaDefaults = config.inspect<string[]>('tools.schemaDefaults')?.globalValue ?? [];
+
+          if (!exposed.includes('lm_copilot_searchCodebase') || exposed.includes('copilot_searchCodebase')) {
+            throw new Error(`Expected tools.exposedDelta to migrate to lm_copilot_searchCodebase. Actual: ${JSON.stringify(exposed)}`);
+          }
+          if (!unexposed.includes('lm_getVSCodeWorkspace') || unexposed.includes('getVSCodeWorkspace')) {
+            throw new Error(`Expected tools.unexposedDelta to migrate to lm_getVSCodeWorkspace. Actual: ${JSON.stringify(unexposed)}`);
+          }
+          if (!enabled.includes('lm_copilot_searchCodebase') || enabled.includes('copilot_searchCodebase')) {
+            throw new Error(`Expected tools.enabledDelta to migrate to lm_copilot_searchCodebase. Actual: ${JSON.stringify(enabled)}`);
+          }
+          if (!disabled.includes('lm_copilot_searchWorkspaceSymbols') || disabled.includes('copilot_searchWorkspaceSymbols')) {
+            throw new Error(`Expected tools.disabledDelta to migrate to lm_copilot_searchWorkspaceSymbols. Actual: ${JSON.stringify(disabled)}`);
+          }
+          if (
+            !schemaDefaults.includes('lm_copilot_searchCodebase.maxResults=25')
+            || schemaDefaults.includes('copilot_searchCodebase.maxResults=25')
+          ) {
+            throw new Error(`Expected tools.schemaDefaults to migrate to lm_copilot_searchCodebase.maxResults=25. Actual: ${JSON.stringify(schemaDefaults)}`);
+          }
+        } finally {
+          await config.update('tools.exposedDelta', previousExposed, target);
+          await config.update('tools.unexposedDelta', previousUnexposed, target);
+          await config.update('tools.enabledDelta', previousEnabled, target);
+          await config.update('tools.disabledDelta', previousDisabled, target);
+          await config.update('tools.schemaDefaults', previousSchemaDefaults, target);
+          await normalizeToolSelectionState();
         }
       },
     },

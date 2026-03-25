@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.137",
+  "version": "1.0.138",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -71,7 +71,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional exposed LM tool names to enable relative to the default enabled list."
+          "description": "Additional exposed LM tool names to enable relative to the default enabled list. VS Code-sourced tools are exposed with an lm_ prefix (for example, lm_copilot_searchCodebase)."
         },
         "lmToolsBridge.tools.disabledDelta": {
           "type": "array",
@@ -79,7 +79,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional exposed LM tool names to disable relative to the default enabled list. This takes precedence over tools.enabledDelta."
+          "description": "Additional exposed LM tool names to disable relative to the default enabled list. This takes precedence over tools.enabledDelta. VS Code-sourced tools are exposed with an lm_ prefix."
         },
         "lmToolsBridge.tools.exposedDelta": {
           "type": "array",
@@ -87,7 +87,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional LM tool names to expose relative to the default exposed list."
+          "description": "Additional LM tool names to expose relative to the default exposed list. VS Code-sourced tools are exposed with an lm_ prefix."
         },
         "lmToolsBridge.tools.unexposedDelta": {
           "type": "array",
@@ -95,7 +95,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional LM tool names to unexpose relative to the default exposed list. This takes precedence over tools.exposedDelta. Tools in the built-in default-enabled list remain exposed."
+          "description": "Additional LM tool names to unexpose relative to the default exposed list. This takes precedence over tools.exposedDelta. Tools in the built-in default-enabled list remain exposed. VS Code-sourced tools are exposed with an lm_ prefix."
         },
         "lmToolsBridge.tools.groupingRules": {
           "type": "array",
@@ -103,7 +103,7 @@
             {
               "id": "angelscript",
               "label": "AngelScript",
-              "pattern": "^angelscript_"
+              "pattern": "^lm_angelscript_"
             }
           ],
           "items": {
@@ -141,7 +141,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Input defaults in \"toolName.paramName=value\" format. If a schema defines the param and the caller omits it, this default is injected. Invalid entries are ignored. Supported values: quoted strings (double quotes), true/false, numbers, or arrays \"{a,b,c}\" (elements can be quoted strings, numbers, or booleans; whitespace and empty elements allowed). Unquoted strings and JSON are not accepted. Examples are entry values, not JSON string literals. ';' is only a separator in this description and is not required at the end of actual entries. Examples: lm_findTextInFiles.maxResults=500; tool.param=1; tool.param=\"MyStr\"; tool.param=true; tool.param={6,4}."
+          "description": "Input defaults in \"toolName.paramName=value\" format. If a schema defines the param and the caller omits it, this default is injected. Invalid entries are ignored. Supported values: quoted strings (double quotes), true/false, numbers, or arrays \"{a,b,c}\" (elements can be quoted strings, numbers, or booleans; whitespace and empty elements allowed). Unquoted strings and JSON are not accepted. VS Code-sourced tools are exposed with an lm_ prefix. Examples are entry values, not JSON string literals. ';' is only a separator in this description and is not required at the end of actual entries. Examples: lm_findTextInFiles.maxResults=500; lm_copilot_searchCodebase.maxResults=25; tool.param=true; tool.param={6,4}."
         },
         "lmToolsBridge.debug": {
           "type": "string",

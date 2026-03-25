@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.138] - 2026-03-25
+
+### English
+
+#### Changed
+- Normalized VS Code-sourced tool names to `lm_*`, kept runtime invocation on original source names, and auto-migrated exact-name tool config entries.
+
+### 中文
+
+#### Changed
+- 将来自 VS Code 的工具名统一规范为 `lm_*`, 保持运行时仍调用原始 source tool name, 并自动迁移精确工具名配置项.
+
 ## [1.0.137] - 2026-03-22
 
 ### English

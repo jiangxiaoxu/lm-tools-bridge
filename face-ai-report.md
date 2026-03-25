@@ -3,11 +3,14 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.134`.
+- Version baseline: `1.0.138`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
 - Effective callable tools = exposed set intersection enabled set.
+- VS Code-sourced `vscode.lm.tools` are exposed to MCP with an `lm_` prefix; invocation still routes back to the original VS Code tool name internally.
+- Exact-name tool config entries (`tools.exposedDelta`, `tools.unexposedDelta`, `tools.enabledDelta`, `tools.disabledDelta`, `tools.schemaDefaults`) auto-migrate legacy non-`lm_` VS Code tool names to their normalized `lm_*` names during tool-state normalization; `tools.groupingRules` only warns on likely legacy regex patterns and is not auto-rewritten.
+- If a normalized VS Code tool name collides with an existing custom `lm_*` tool, keep the custom tool and skip the VS Code tool with a warning.
 - `tools.unexposedDelta` overrides `tools.exposedDelta`.
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
@@ -100,7 +103,7 @@
 - Stdio manager JSON-RPC error messages for workspace mismatch/offline-unreachable/direct-call input errors include explicit `Next step:` guidance in `error.message` (no `error.data` change).
 - No manager status/log HTTP pages are part of the current runtime mainline.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths when structured payloads are returned; qgrep tools now return text-only absolute-path output.
-- `copilot_searchCodebase` placeholder output is treated as unavailable.
+- `lm_copilot_searchCodebase` placeholder output is treated as unavailable, while runtime invocation still calls the original VS Code source tool `copilot_searchCodebase`.
 
 ### Primary Entrypoints (Read First)
 - `src/extension.ts -> activate | showStatusMenu | runQgrepInitAllCommand | runQgrepRebuildCommand | runQgrepStopAndClearIndexesCommand | getServerStatus | updateStatusBar | startMcpServer | handleMcpHttpRequest | getWorkspaceTooltipLines`
@@ -110,6 +113,7 @@
 - `src/stdioManagerSync.ts -> syncBundledStdioManager | resolveStdioManagerSyncPaths`
 - `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | createWorkspaceDiscoveryTarget | requestWorkspaceDiscovery | tryAcquireLaunchLock | WorkspaceDiscoveryPublisher`
 - `src/configuration.ts -> resolveActiveConfigTarget | getConfigScopeDescription`
+- `src/toolNameNormalization.ts -> toNormalizedVsCodeToolName | normalizeVsCodeToolInfos | buildLegacyToNormalizedToolNameMap | detectLikelyLegacyGroupingRuleFragments`
 - `src/pathScope.ts -> createPathScopeSearchPlan | createPathScopeMatcher | resolvePathScopeWorkspaceFile`
 - `src/pathScopeSpec.ts -> buildPathScopeSchema | getPathScopeSpecText | getPathScopeSpecReadHint`
 - `src/tooling.ts -> configureExposureTools | configureEnabledTools | invokeExposedTool | runGetDiagnosticsTool | runQgrepGetStatusTool | runQgrepSearchTool | runQgrepFilesTool`
@@ -144,7 +148,8 @@
 - [qgrep init/watch lifecycle] Read: `src/qgrep.ts -> initAllWorkspaces | rebuildAllWorkspaces | startWatchForInitializedWorkspaces | startAutoUpdateWatchersForInitializedWorkspaces | stopAndClearAllWorkspaces | updateWorkspaceProgress | search | files`; Decide: manual init command still works, rebuild/clear menu commands now iterate all current workspaces, qgrep search/files auto-init all workspaces and block until indexing/update readiness, startup refresh for initialized workspaces syncs extension-managed `workspace.cfg` blocks before `qgrep update` and one-shot auto-rebuilds when corruption-like assertion signatures are detected, qgrep `watch` covers existing-file content changes, create/delete events trigger debounced `qgrep update`, `search.exclude=true` rules sync into managed `workspace.cfg` excludes (plus fixed `.git` exclude), and clear command disables by deleting `.vscode/qgrep`; Verify: `workspace.cfg` presence controls watch/auto-update startup and tool calls wait during indexing before returning results.
 - [qgrep status inspection] Read: `src/qgrep.ts -> getQgrepStatusSummary`; Decide: use `lm_qgrepGetStatus` before qgrep search tools or after search/files wait/timeout to inspect binary readiness/init/progress; Verify: text output reports `binary`, workspace counts, aggregate progress, and per-workspace lines.
 - [qgrep search scope rejected] Read: `src/qgrep.ts -> resolvePathScope | resolveGlobSearchTargets | ensureFilesLegacyParamsUnsupported` and `src/qgrepTextQuery.ts -> parseLiteralTextQuery`; Decide: `lm_qgrepSearchText.pathScope` enforces existing path/glob rules, rejects bare `|` alternation, and ignores legacy `searchPath`/`includeIgnoredFiles`; text query defaults to literal with top-level `|`, exact whitespace preservation except for whitespace-only branches between two separators which are dropped, whole-branch outer double quotes only when the branch starts and ends with `"` exactly, raw `\|`, malformed quotes treated as ordinary characters, and empty-branch fallback to raw literal, while explicit `querySyntax='glob'` is rejected; `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp`; Verify: text outside/ambiguous pathScope and literal pipe parsing/fallback return expected behavior, text `searchPath`/`includeIgnoredFiles` do not change behavior, and files legacy params return unsupported errors.
-- [copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
+- [lm_ tool-name normalization] Read: `src/toolNameNormalization.ts` and `src/tooling.ts -> getAllVsCodeToolsSnapshot | normalizeToolSelectionState | invokeExposedTool`; Decide: all VS Code-sourced tools must expose `lm_*` names, exact-name config entries auto-migrate, and runtime invoke must still call original source names; Verify: `tools/list`, resource URIs, config state, and runtime invocation all use the correct exposed/source names.
+- [lm_copilot_searchCodebase placeholder] Read: `src/tooling.ts -> isCopilotSearchCodebasePlaceholderResponse`; Decide: placeholder means unavailable by policy; Verify: error payload returned and fallback tools used.
 - [Discovery pipe missing or untitled multi-root] Read: `src/workspaceDiscovery.ts -> resolveWorkspaceDiscoveryTargetFromWindow | WorkspaceDiscoveryPublisher` and `src/stdioManager.ts -> resolveDiscoveryTargets`; Decide: for supported targets confirm exact upward candidate order and pipe prefix alignment, and for unsaved multi-root require `Save Workspace As...`; Verify: supported targets publish/connect deterministically and untitled multi-root windows stay undiscoverable with a clear message.
 
 ## Section C: Change Impact Map

@@ -42,6 +42,16 @@ import {
   getPathScopeToolDescriptionSentence,
 } from './pathScopeSpec';
 import { parseOptionalPathScope } from './searchInput';
+import {
+  buildLegacyToNormalizedToolNameMap,
+  detectLikelyLegacyGroupingRuleFragments,
+  migrateSchemaDefaultOverrideEntries,
+  migrateToolNameList,
+  normalizeVsCodeToolInfos,
+  toNormalizedVsCodeToolName,
+  type NormalizedVsCodeToolCollision,
+  type NormalizedVsCodeToolInfo,
+} from './toolNameNormalization';
 
 type ToolingLogger = {
   info: (message: string) => void;
@@ -64,11 +74,14 @@ const CONFIG_DISABLED_TOOLS = 'tools.disabledDelta';
 const CONFIG_EXPOSED_TOOLS = 'tools.exposedDelta';
 const CONFIG_UNEXPOSED_TOOLS = 'tools.unexposedDelta';
 const CONFIG_GROUPING_RULES = 'tools.groupingRules';
+const CONFIG_SCHEMA_DEFAULTS = 'tools.schemaDefaults';
 const CONFIG_DEBUG = 'debug';
 const FIND_FILES_TOOL_NAME = 'lm_findFiles';
 const FIND_TEXT_IN_FILES_TOOL_NAME = 'lm_findTextInFiles';
-const COPILOT_SEARCH_CODEBASE_TOOL_NAME = 'copilot_searchCodebase';
+const COPILOT_SEARCH_CODEBASE_SOURCE_TOOL_NAME = 'copilot_searchCodebase';
+const COPILOT_SEARCH_CODEBASE_TOOL_NAME = toNormalizedVsCodeToolName(COPILOT_SEARCH_CODEBASE_SOURCE_TOOL_NAME);
 const COPILOT_SEARCH_CODEBASE_PLACEHOLDER_RESPONSE = 'Here are the full contents of the text files in my workspace:';
+const GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME = 'getVSCodeWorkspace';
 const LM_GET_DIAGNOSTICS_TOOL_NAME = 'lm_getDiagnostics';
 const LM_TASKS_RUN_BUILD_TOOL_NAME = 'lm_tasks_runBuild';
 const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
@@ -83,10 +96,13 @@ const LM_GET_DIAGNOSTICS_PREVIEW_MAX_LINES = 10;
 const LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES = ['error', 'warning', 'information', 'hint'] as const;
 type LmGetDiagnosticsSeverity = typeof LM_GET_DIAGNOSTICS_ALLOWED_SEVERITIES[number];
 const LM_GET_DIAGNOSTICS_DEFAULT_SEVERITIES: readonly LmGetDiagnosticsSeverity[] = ['error', 'warning'];
-const DEFAULT_ENABLED_TOOL_NAMES = [
-  'copilot_searchCodebase',
+const DEFAULT_ENABLED_VSCODE_SOURCE_TOOL_NAMES = [
+  COPILOT_SEARCH_CODEBASE_SOURCE_TOOL_NAME,
   'copilot_searchWorkspaceSymbols',
   'copilot_listCodeUsages',
+];
+const DEFAULT_ENABLED_TOOL_NAMES = [
+  ...DEFAULT_ENABLED_VSCODE_SOURCE_TOOL_NAMES.map((name) => toNormalizedVsCodeToolName(name)),
   'lm_getDiagnostics',
   LM_QGREP_GET_STATUS_TOOL_NAME,
   LM_QGREP_SEARCH_TOOL_NAME,
@@ -102,7 +118,7 @@ const DEFAULT_EXPOSED_TOOL_NAMES = [
   LM_DEBUG_START_TOOL_NAME,
 ];
 const REQUIRED_EXPOSED_TOOL_NAMES = DEFAULT_ENABLED_TOOL_NAMES;
-const BUILTIN_DISABLED_TOOL_NAMES = [
+const BUILTIN_DISABLED_SOURCE_TOOL_NAMES = [
   'copilot_applyPatch',
   'copilot_insertEdit',
   'copilot_replaceString',
@@ -143,12 +159,13 @@ const BUILTIN_DISABLED_TOOL_NAMES = [
   'inline_chat_exit',
   'copilot_githubRepo',
 ];
+const BUILTIN_DISABLED_TOOL_NAMES = BUILTIN_DISABLED_SOURCE_TOOL_NAMES.map((name) => toNormalizedVsCodeToolName(name));
 const BUILTIN_DISABLED_TOOL_SET = new Set(BUILTIN_DISABLED_TOOL_NAMES);
 const DEFAULT_TOOL_GROUPING_RULES: ToolGroupingRuleConfig[] = [
   {
     id: 'angelscript',
     label: 'AngelScript',
-    pattern: '^angelscript_',
+    pattern: '^lm_angelscript_',
   },
 ];
 const TOOL_GROUPING_RULE_MAX_COUNT = 100;
@@ -541,15 +558,20 @@ interface LaunchConfigEntry {
 }
 
 const schemaDefaultOverrideWarnings = new Set<string>();
+const legacyGroupingRuleWarnings = new Set<string>();
+const toolNameNormalizationWarnings = new Set<string>();
 
 export type ToolDetail = 'names' | 'full';
 export type DebugLevel = 'off' | 'simple' | 'detail';
 
-interface CustomToolInformation {
+interface ToolInformationBase {
   name: string;
   description: string;
   tags: string[];
   inputSchema: unknown;
+}
+
+interface CustomToolInformation extends ToolInformationBase {
   isCustom: true;
 }
 
@@ -557,7 +579,39 @@ interface CustomToolDefinition extends CustomToolInformation {
   invoke: (input: Record<string, unknown>) => Promise<vscode.LanguageModelToolResult>;
 }
 
-export type ExposedTool = vscode.LanguageModelToolInformation | CustomToolInformation;
+interface VsCodeToolInformation extends ToolInformationBase {
+  sourceName: string;
+}
+
+export type ExposedTool = VsCodeToolInformation | CustomToolInformation;
+
+function isVsCodeTool(tool: ExposedTool): tool is VsCodeToolInformation {
+  return !('isCustom' in tool);
+}
+
+function isToolBackedBySourceName(tool: ExposedTool, sourceName: string): boolean {
+  return isVsCodeTool(tool) && tool.sourceName === sourceName;
+}
+
+function getKnownVsCodeSourceToolNames(): string[] {
+  const sourceNames = new Set<string>([
+    ...DEFAULT_ENABLED_VSCODE_SOURCE_TOOL_NAMES,
+    ...BUILTIN_DISABLED_SOURCE_TOOL_NAMES,
+    GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME,
+  ]);
+  for (const tool of getAllLmToolsSnapshot()) {
+    const name = typeof tool.name === 'string' ? tool.name.trim() : '';
+    if (name.length > 0) {
+      sourceNames.add(name);
+    }
+  }
+  return [...sourceNames];
+}
+
+function getLegacyVsCodeToolNameMap(): ReadonlyMap<string, string> {
+  return buildLegacyToNormalizedToolNameMap(getKnownVsCodeSourceToolNames());
+}
+
 function getBuiltInDisabledToolSet(): Set<string> {
   return new Set(BUILTIN_DISABLED_TOOL_SET);
 }
@@ -581,10 +635,10 @@ function mergeRequiredExposedTools(exposed: Set<string>): Set<string> {
 }
 
 function getEnabledToolsSetting(): string[] {
-  const enabledDelta = getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, []);
-  const disabledDelta = getConfigValue<string[]>(CONFIG_DISABLED_TOOLS, []);
-  const enabled = new Set(filterToolNames(enabledDelta));
-  const disabled = new Set(filterToolNames(disabledDelta));
+  const enabledDelta = normalizeConfiguredToolNames(getConfigValue<unknown>(CONFIG_ENABLED_TOOLS, []));
+  const disabledDelta = normalizeConfiguredToolNames(getConfigValue<unknown>(CONFIG_DISABLED_TOOLS, []));
+  const enabled = new Set(enabledDelta);
+  const disabled = new Set(disabledDelta);
   for (const name of DEFAULT_ENABLED_TOOL_NAMES) {
     if (!disabled.has(name)) {
       enabled.add(name);
@@ -595,9 +649,9 @@ function getEnabledToolsSetting(): string[] {
 
 function getExposedToolsSetting(): string[] {
   const disabledSet = getBuiltInDisabledToolSet();
-  const exposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_EXPOSED_TOOLS, []))
+  const exposedDelta = normalizeConfiguredToolNames(getConfigValue<unknown>(CONFIG_EXPOSED_TOOLS, []))
     .filter((name) => !disabledSet.has(name));
-  const unexposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_UNEXPOSED_TOOLS, []))
+  const unexposedDelta = normalizeConfiguredToolNames(getConfigValue<unknown>(CONFIG_UNEXPOSED_TOOLS, []))
     .filter((name) => !disabledSet.has(name));
   const exposed = mergeRequiredExposedTools(new Set(exposedDelta));
   const unexposed = new Set(unexposedDelta);
@@ -616,11 +670,27 @@ function filterToolNames(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((name) => typeof name === 'string') : [];
 }
 
+function normalizeConfiguredToolNames(values: unknown): string[] {
+  return migrateToolNameList(filterToolNames(values), getLegacyVsCodeToolNameMap()).values;
+}
+
 function toUniqueSortedToolNames(values: readonly string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 function areToolNameListsEqual(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areUnknownListsEqual(left: readonly unknown[], right: readonly unknown[]): boolean {
   if (left.length !== right.length) {
     return false;
   }
@@ -649,14 +719,47 @@ function parseGroupingRuleFlags(rawFlags: string): { flags: string; dropped: str
   return { flags, dropped };
 }
 
+function warnLikelyLegacyGroupingRule(pattern: string, fragments: readonly string[]): void {
+  const key = `${pattern}=>${fragments.join(',')}`;
+  if (legacyGroupingRuleWarnings.has(key)) {
+    return;
+  }
+  legacyGroupingRuleWarnings.add(key);
+  toolingLogger.warn(
+    `lmToolsBridge.tools.groupingRules may need updates for lm_ normalization: `
+    + `pattern "${pattern}" still matches legacy tool names/fragments (${fragments.join(', ')}). `
+    + 'Update it to the new lm_* names manually.',
+  );
+}
+
 function getToolGroupingRulesFromConfig(): ResolvedToolGroupingRulesResult {
   const warnings: string[] = [];
   const rules: CompiledToolGroupingRule[] = [];
   const seenIds = new Set<string>();
-  const rawRules = getConfigValue<unknown[]>(CONFIG_GROUPING_RULES, DEFAULT_TOOL_GROUPING_RULES as unknown[]);
+  const configuredRules = getConfigValue<unknown>(CONFIG_GROUPING_RULES, undefined);
+  const rawRules = configuredRules === undefined
+    ? DEFAULT_TOOL_GROUPING_RULES as unknown[]
+    : configuredRules;
   if (!Array.isArray(rawRules)) {
     warnings.push('tools.groupingRules ignored: expected array.');
     return { rules, warnings };
+  }
+
+  if (configuredRules !== undefined) {
+    const legacyMap = getLegacyVsCodeToolNameMap();
+    for (const rawRule of rawRules) {
+      if (!isPlainObject(rawRule)) {
+        continue;
+      }
+      const pattern = typeof rawRule.pattern === 'string' ? rawRule.pattern.trim() : '';
+      if (pattern.length === 0) {
+        continue;
+      }
+      const fragments = detectLikelyLegacyGroupingRuleFragments(pattern, legacyMap);
+      if (fragments.length > 0) {
+        warnLikelyLegacyGroupingRule(pattern, fragments);
+      }
+    }
   }
 
   for (let index = 0; index < rawRules.length; index += 1) {
@@ -727,6 +830,51 @@ function logResolvedToolGroupingRules(result: ResolvedToolGroupingRulesResult): 
   toolingLogger.info(`tools.groupingRules resolved ${result.rules.length} rule(s)${summary.length > 0 ? ` => ${summary}` : ''}.`);
 }
 
+async function migrateLegacyToolNameConfigs(): Promise<void> {
+  const resource = getConfigurationResource();
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
+  const target = await resolveToolsConfigTarget(resource);
+  const legacyMap = getLegacyVsCodeToolNameMap();
+  if (legacyMap.size === 0) {
+    return;
+  }
+
+  const currentExposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_EXPOSED_TOOLS, []));
+  const currentUnexposedDelta = filterToolNames(getConfigValue<string[]>(CONFIG_UNEXPOSED_TOOLS, []));
+  const currentEnabledDelta = filterToolNames(getConfigValue<string[]>(CONFIG_ENABLED_TOOLS, []));
+  const currentDisabledDelta = filterToolNames(getConfigValue<string[]>(CONFIG_DISABLED_TOOLS, []));
+  const currentSchemaDefaults = getConfigValue<unknown[]>(CONFIG_SCHEMA_DEFAULTS, []);
+
+  const migratedExposed = migrateToolNameList(currentExposedDelta, legacyMap);
+  const migratedUnexposed = migrateToolNameList(currentUnexposedDelta, legacyMap);
+  const migratedEnabled = migrateToolNameList(currentEnabledDelta, legacyMap);
+  const migratedDisabled = migrateToolNameList(currentDisabledDelta, legacyMap);
+  const migratedSchemaDefaults = Array.isArray(currentSchemaDefaults)
+    ? migrateSchemaDefaultOverrideEntries(currentSchemaDefaults, legacyMap)
+    : { values: currentSchemaDefaults, changed: false };
+
+  if (migratedExposed.changed) {
+    await config.update(CONFIG_EXPOSED_TOOLS, toUniqueSortedToolNames(migratedExposed.values), target);
+  }
+  if (migratedUnexposed.changed) {
+    await config.update(CONFIG_UNEXPOSED_TOOLS, toUniqueSortedToolNames(migratedUnexposed.values), target);
+  }
+  if (migratedEnabled.changed) {
+    await config.update(CONFIG_ENABLED_TOOLS, toUniqueSortedToolNames(migratedEnabled.values), target);
+  }
+  if (migratedDisabled.changed) {
+    await config.update(CONFIG_DISABLED_TOOLS, toUniqueSortedToolNames(migratedDisabled.values), target);
+  }
+  if (
+    Array.isArray(currentSchemaDefaults)
+    && migratedSchemaDefaults.changed
+    && Array.isArray(migratedSchemaDefaults.values)
+    && !areUnknownListsEqual(currentSchemaDefaults, migratedSchemaDefaults.values)
+  ) {
+    await config.update(CONFIG_SCHEMA_DEFAULTS, migratedSchemaDefaults.values, target);
+  }
+}
+
 async function pruneRequiredExposureDeltas(): Promise<void> {
   const resource = getConfigurationResource();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
@@ -795,6 +943,7 @@ export async function pruneEnabledDeltasByExposed(exposed: ReadonlySet<string>):
 }
 
 export async function normalizeToolSelectionState(): Promise<void> {
+  await migrateLegacyToolNameConfigs();
   await pruneBuiltInDisabledFromDeltas();
   await pruneRequiredExposureDeltas();
   const exposedSet = new Set(getExposedToolsSetting());
@@ -1306,8 +1455,11 @@ function extractRequired(schemaRecord: Record<string, unknown>): Set<string> | u
 }
 
 function getSchemaDefaultOverrides(): SchemaDefaultOverrides {
-  const fromConfig = getConfigValue<unknown>('tools.schemaDefaults', []);
-  const overrides = parseSchemaDefaultOverrides(fromConfig);
+  const fromConfig = getConfigValue<unknown>(CONFIG_SCHEMA_DEFAULTS, []);
+  const migratedFromConfig = Array.isArray(fromConfig)
+    ? migrateSchemaDefaultOverrideEntries(fromConfig, getLegacyVsCodeToolNameMap()).values
+    : fromConfig;
+  const overrides = parseSchemaDefaultOverrides(migratedFromConfig);
   const merged: SchemaDefaultOverrides = {};
   const builtinOverrides = parseSchemaDefaultOverrides(BUILTIN_SCHEMA_DEFAULT_OVERRIDES);
   for (const [toolName, toolDefaults] of Object.entries(builtinOverrides)) {
@@ -1719,7 +1871,7 @@ function formatToolErrorText(payload: Record<string, unknown>): string {
 }
 
 export function listToolsPayload(tools: readonly ExposedTool[], detail: ToolDetail) {
-  const orderedTools = prioritizeTool(tools, 'getVSCodeWorkspace');
+  const orderedTools = prioritizeTool(tools, GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME);
   if (detail === 'names') {
     return { tools: orderedTools.map((tool) => tool.name) };
   }
@@ -3543,6 +3695,35 @@ function isCustomTool(tool: ExposedTool): tool is CustomToolDefinition {
   return (tool as CustomToolDefinition).isCustom === true;
 }
 
+function warnToolNameNormalizationCollision(collision: NormalizedVsCodeToolCollision): void {
+  const key = `${collision.reason}:${collision.exposedName}:${collision.sourceName}:${collision.existingSourceName ?? ''}`;
+  if (toolNameNormalizationWarnings.has(key)) {
+    return;
+  }
+  toolNameNormalizationWarnings.add(key);
+  if (collision.reason === 'reserved-name') {
+    toolingLogger.warn(
+      `Skipping VS Code tool "${collision.sourceName}" because normalized name `
+      + `"${collision.exposedName}" conflicts with an existing custom lm_* tool.`,
+    );
+    return;
+  }
+  toolingLogger.warn(
+    `Skipping VS Code tool "${collision.sourceName}" because normalized name `
+    + `"${collision.exposedName}" already belongs to "${collision.existingSourceName ?? 'another tool'}".`,
+  );
+}
+
+function normalizeLmTool(tool: NormalizedVsCodeToolInfo): VsCodeToolInformation {
+  return {
+    name: tool.name,
+    sourceName: tool.sourceName,
+    description: tool.description ?? '',
+    tags: [...tool.tags],
+    inputSchema: tool.inputSchema,
+  };
+}
+
 function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
   return [
     buildFindFilesToolDefinition(),
@@ -3558,8 +3739,25 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
   ];
 }
 
+function getAllVsCodeToolsSnapshot(): readonly VsCodeToolInformation[] {
+  const customTools = getCustomToolsSnapshot();
+  const normalized = normalizeVsCodeToolInfos(
+    getAllLmToolsSnapshot().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      tags: tool.tags,
+      inputSchema: tool.inputSchema,
+    })),
+    new Set(customTools.map((tool) => tool.name)),
+  );
+  for (const collision of normalized.collisions) {
+    warnToolNameNormalizationCollision(collision);
+  }
+  return normalized.tools.map(normalizeLmTool);
+}
+
 function getAllToolsSnapshot(): readonly ExposedTool[] {
-  return [...getAllLmToolsSnapshot(), ...getCustomToolsSnapshot()];
+  return [...getAllVsCodeToolsSnapshot(), ...getCustomToolsSnapshot()];
 }
 
 export function getExposedToolsSnapshot(): readonly ExposedTool[] {
@@ -3582,10 +3780,10 @@ export function prioritizeTool(
 ): ExposedTool[] {
   const ordered = [...tools];
   ordered.sort((left, right) => {
-    if (left.name === preferredName) {
+    if (left.name === preferredName || isToolBackedBySourceName(left, preferredName)) {
       return -1;
     }
-    if (right.name === preferredName) {
+    if (right.name === preferredName || isToolBackedBySourceName(right, preferredName)) {
       return 1;
     }
     return 0;
@@ -3598,7 +3796,7 @@ export function registerExposedTools(server: import('@modelcontextprotocol/sdk/s
     .describe('Tool input object. Use lm-tools://schema/{name} for the expected shape.');
   const tools = getEnabledExposedToolsSnapshot();
   for (const tool of tools) {
-    if (tool.name === 'getVSCodeWorkspace') {
+    if (isToolBackedBySourceName(tool, GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME)) {
       continue;
     }
     // @ts-expect-error TS2589: Deep instantiation from SDK tool generics.
@@ -3737,7 +3935,8 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     if (!lm) {
       return toolErrorResult('vscode.lm is not available in this VS Code version.');
     }
-    const result = await lm.invokeTool(tool.name, {
+    const sourceToolName = isVsCodeTool(tool) ? tool.sourceName : tool.name;
+    const result = await lm.invokeTool(sourceToolName, {
       input: normalizedInput,
       toolInvocationToken: undefined,
     });

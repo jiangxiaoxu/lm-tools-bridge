@@ -20,10 +20,10 @@ import {
 } from './managerHandshake';
 import type {
   HandshakeDiscoveryCallTool,
+  HandshakeDiscoveryBridgedTool,
   HandshakeDiscoveryIssue,
   HandshakeDiscoveryPayload,
   HandshakeDiscoveryResourceTemplate,
-  HandshakeDiscoveryTool,
   HandshakeGuidance,
   WorkspaceHandshakePayload,
 } from './managerHandshake';
@@ -385,22 +385,21 @@ function normalizeHandshakeToolDescription(descriptionValue: unknown): string {
   return typeof descriptionValue === 'string' ? descriptionValue.trim() : '';
 }
 
-function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryTool | undefined {
+function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryBridgedTool | undefined {
   if (!entry || typeof entry !== 'object') {
     return undefined;
   }
-  const record = entry as { name?: unknown; description?: unknown };
+  const record = entry as { name?: unknown };
   const name = typeof record.name === 'string' ? record.name.trim() : '';
   if (!name) {
     return undefined;
   }
   return {
     name,
-    description: normalizeHandshakeToolDescription(record.description),
   };
 }
 
-// Handshake discovery only advertises bridged tool summaries. Clients must read schema resources on demand.
+// Handshake discovery only advertises bridged tool names. Clients must read tool resources on demand.
 function toHandshakeDiscoveryCallTool(entry: unknown): HandshakeDiscoveryCallTool | undefined {
   if (!entry || typeof entry !== 'object') {
     return undefined;
@@ -420,7 +419,10 @@ function toHandshakeDiscoveryCallTool(entry: unknown): HandshakeDiscoveryCallToo
   return normalized;
 }
 
-function mergeHandshakeDiscoveryTools(base: HandshakeDiscoveryTool[], incoming: unknown[]): HandshakeDiscoveryTool[] {
+function mergeHandshakeDiscoveryTools(
+  base: HandshakeDiscoveryBridgedTool[],
+  incoming: unknown[],
+): HandshakeDiscoveryBridgedTool[] {
   const merged = [...base];
   const seen = new Set(base.map((entry) => entry.name));
   for (const entry of incoming) {
@@ -434,7 +436,9 @@ function mergeHandshakeDiscoveryTools(base: HandshakeDiscoveryTool[], incoming: 
   return merged;
 }
 
-function sortHandshakeDiscoveryTools(tools: HandshakeDiscoveryTool[]): HandshakeDiscoveryTool[] {
+function sortHandshakeDiscoveryTools(
+  tools: HandshakeDiscoveryBridgedTool[],
+): HandshakeDiscoveryBridgedTool[] {
   return [...tools].sort((left, right) => left.name.localeCompare(right.name));
 }
 

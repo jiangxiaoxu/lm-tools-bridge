@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.142] - 2026-03-28
+
+### English
+
+#### Changed
+- Reduced handshake `discovery.bridgedTools` entries to tool names only, so clients always fetch descriptions and schemas from `lm-tools://tool/{name}` on demand.
+- Kept `discovery.callTool` descriptive metadata in the handshake payload and updated docs/tests to match the leaner discovery contract.
+
+### 中文
+
+#### Changed
+- 将握手 `discovery.bridgedTools` 条目收敛为仅返回 tool name, 促使客户端按需从 `lm-tools://tool/{name}` 读取 description 和 schema.
+- 保留握手 `discovery.callTool` 的描述性元数据, 并同步更新文档和测试以匹配更精简的 discovery contract.
+
 ## [1.0.141] - 2026-03-28
 
 ### English

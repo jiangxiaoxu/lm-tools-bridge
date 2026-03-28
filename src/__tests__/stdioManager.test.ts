@@ -288,7 +288,8 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     ok?: boolean;
     target?: { workspaceFolders?: string[]; workspaceFile?: string | null };
     discovery?: {
-      bridgedTools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>;
+      callTool?: { name?: unknown; description?: unknown; inputSchema?: unknown };
+      bridgedTools?: Array<{ name?: unknown; inputSchema?: unknown }>;
     };
   } | undefined;
   assert.equal(handshakePayload?.ok, true);
@@ -297,9 +298,17 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.deepEqual(handshakePayload?.discovery?.bridgedTools, [
     {
       name: ECHO_TOOL_NAME,
-      description: 'Echo back the provided value.',
     },
   ]);
+  assert.equal(handshakePayload?.discovery?.callTool?.name, DIRECT_TOOL_CALL_NAME);
+  assert.match(
+    String(handshakePayload?.discovery?.callTool?.description ?? ''),
+    /^Directly call an exposed tool by name after workspace handshake\./u,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(handshakePayload?.discovery?.bridgedTools?.[0] ?? {}, 'description'),
+    false,
+  );
   assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload ?? {}, 'mcpSessionId'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload?.target ?? {}, 'sessionId'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload?.target ?? {}, 'host'), false);

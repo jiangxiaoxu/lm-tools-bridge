@@ -28,7 +28,7 @@ test('handshake payload omits redundant online and health fields', () => {
         },
       },
       bridgedTools: [
-        { name: 'lm_findFiles', description: 'Find files in the workspace.' },
+        { name: 'lm_findFiles' },
       ],
       resourceTemplates: [
         { name: 'Tool URI template', uriTemplate: 'lm-tools://tool/{name}' },
@@ -57,7 +57,15 @@ test('handshake payload omits redundant online and health fields', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'port'), false);
   assert.equal(payload.discovery.resourceTemplates.length, 1);
   assert.equal(
+    Object.prototype.hasOwnProperty.call(payload.discovery.callTool, 'description'),
+    true,
+  );
+  assert.equal(
     Object.prototype.hasOwnProperty.call(payload.discovery.bridgedTools[0] ?? {}, 'inputSchema'),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(payload.discovery.bridgedTools[0] ?? {}, 'description'),
     false,
   );
 });
@@ -73,8 +81,8 @@ test('handshake summary keeps useful fields and omits online line', () => {
     discovery: {
       partial: false,
       bridgedTools: [
-        { name: 'lm_findFiles', description: 'Find files in the workspace.' },
-        { name: 'lm_getDiagnostics', description: 'Get diagnostics.' },
+        { name: 'lm_findFiles' },
+        { name: 'lm_getDiagnostics' },
       ],
       issues: [],
     },

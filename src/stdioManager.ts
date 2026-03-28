@@ -522,7 +522,6 @@ function findToolDefinitionByName(name: string): WorkspaceToolDefinition | undef
 function buildToolInfoPayload(tool: WorkspaceToolDefinition): Record<string, unknown> {
   return {
     ...tool,
-    toolUri: `lm-tools://tool/${tool.name}`,
   };
 }
 

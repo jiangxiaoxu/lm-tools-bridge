@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.141] - 2026-03-28
+
+### English
+
+#### Changed
+- Removed `toolUri` and `usageHint` from `lm-tools://tool/{name}` payloads on both direct workspace-server and stdio-manager paths.
+- Simplified tool-definition text output and tests so `name`, `description`, `tags`, and `inputSchema` remain the canonical fields.
+
+### 中文
+
+#### Changed
+- 删除直连 workspace server 和 stdio manager 路径下 `lm-tools://tool/{name}` payload 中的 `toolUri` 和 `usageHint`.
+- 精简 tool definition 文本输出和测试,将 `name`,`description`,`tags`,`inputSchema` 保持为 canonical fields.
+
 ## [1.0.140] - 2026-03-28
 
 ### English

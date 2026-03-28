@@ -323,7 +323,10 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const toolDefinition = await manager.client.readResource({
     uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
   });
+  const toolDefinitionPayload = JSON.parse(getResourceText(toolDefinition)) as Record<string, unknown>;
   assert.match(getResourceText(toolDefinition), /"value"/u);
+  assert.equal(Object.prototype.hasOwnProperty.call(toolDefinitionPayload, 'toolUri'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(toolDefinitionPayload, 'usageHint'), false);
 
   const directCall = await manager.client.callTool({
     name: ECHO_TOOL_NAME,

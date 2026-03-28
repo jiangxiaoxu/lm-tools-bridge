@@ -1809,7 +1809,7 @@ function normalizeConfigString(value: string | undefined): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
-function formatToolInfoText(payload: Record<string, unknown>): string {
+export function formatToolInfoText(payload: Record<string, unknown>): string {
   const lines: string[] = [];
   const name = typeof payload.name === 'string' ? payload.name : '';
   if (name) {
@@ -1831,14 +1831,6 @@ function formatToolInfoText(payload: Record<string, unknown>): string {
   if (payload.inputSchema !== undefined) {
     lines.push('inputSchema:');
     lines.push(indentLines(formatSchema(payload.inputSchema as object | undefined), 2));
-  }
-  const toolUri = typeof payload.toolUri === 'string' ? payload.toolUri : '';
-  if (toolUri) {
-    lines.push(`toolUri: ${toolUri}`);
-  }
-  if (payload.usageHint !== undefined) {
-    lines.push('usageHint:');
-    lines.push(indentLines(safePrettyStringify(payload.usageHint), 2));
   }
   return lines.join('\n');
 }
@@ -1890,8 +1882,6 @@ export function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
     description: tool.description,
     tags: tool.tags,
     inputSchema,
-    toolUri: getToolUri(tool.name),
-    usageHint: getToolUsageHint(tool),
   };
 }
 
@@ -3519,78 +3509,8 @@ function unescapeNewlines(text: string): string {
   return text.replace(/\\r\\n/g, '\r\n').replace(/\\n/g, '\n');
 }
 
-function getToolUri(name: string): string {
-  return `lm-tools://tool/${name}`;
-}
-
-function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
-  const combined = `${tool.name} ${(tool.description ?? '')}`.toLowerCase();
-  if (combined.includes('do not use') || combined.includes('placeholder')) {
-    return {
-      mode: 'do-not-use',
-      reason: 'Heuristic: description indicates do-not-use/placeholder.',
-    };
-  }
-
-  if (tool.tags.some((tag) => tag.includes('codesearch'))) {
-    return {
-      mode: 'direct',
-      reason: 'Heuristic: codesearch tag; call the tool directly.',
-    };
-  }
-
-  return {
-    mode: 'direct',
-    reason: 'Heuristic: default to calling the tool directly.',
-    requiresObjectInput: schemaRequiresObjectInput(tool.inputSchema) || undefined,
-  };
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function schemaRequiresObjectInput(schema: unknown): boolean {
-  if (!schema || typeof schema !== 'object') {
-    return false;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if (record.type === 'object' || typeof record.properties === 'object') {
-    return true;
-  }
-  const properties = record.properties && typeof record.properties === 'object'
-    ? Object.values(record.properties as Record<string, unknown>)
-    : [];
-  for (const propSchema of properties) {
-    if (schemaHasObject(propSchema)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function schemaHasObject(schema: unknown): boolean {
-  if (!schema || typeof schema !== 'object') {
-    return false;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if (record.type === 'object' || typeof record.properties === 'object') {
-    return true;
-  }
-  if (record.type === 'array' && record.items) {
-    return schemaHasObject(record.items);
-  }
-  if (Array.isArray(record.anyOf) && record.anyOf.some(schemaHasObject)) {
-    return true;
-  }
-  if (Array.isArray(record.oneOf) && record.oneOf.some(schemaHasObject)) {
-    return true;
-  }
-
-  return false;
 }
 
 function formatLogPayload(value: unknown): string {

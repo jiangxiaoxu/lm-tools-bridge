@@ -80,7 +80,6 @@ const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge://handshake';
 const CALL_TOOL_RESOURCE_URI = 'lm-tools-bridge://callTool';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://names';
 const TOOL_URI_TEMPLATE = 'lm-tools://tool/{name}';
-const TOOL_SCHEMA_URI_TEMPLATE = 'lm-tools://schema/{name}';
 const HEALTH_TIMEOUT_MS = 1200;
 const INSTANCE_POLL_INTERVAL_MS = 500;
 const DISCOVERY_POLL_INTERVAL_MS = 500;
@@ -130,8 +129,8 @@ function appendNextStep(message: string, nextStep: string): string {
   return `${trimmed}${suffix} Next step: ${nextStep}`;
 }
 
-function getSchemaReadHint(): string {
-  return `read ${TOOL_SCHEMA_URI_TEMPLATE} before the first tool call and build arguments that match inputSchema.`;
+function getToolReadHint(): string {
+  return `read ${TOOL_URI_TEMPLATE} before the first tool call and build arguments that match its inputSchema.`;
 }
 
 function getDiscoveryRefreshHint(): string {
@@ -194,7 +193,7 @@ function getDirectCallNameParamMessage(): string {
 function getDirectCallArgumentsParamMessage(): string {
   return appendNextStep(
     'Invalid params: expected arguments.arguments (object).',
-    `pass arguments.arguments as an object that matches ${TOOL_SCHEMA_URI_TEMPLATE} for the target tool.`,
+    `pass arguments.arguments as an object that matches the target tool inputSchema from ${TOOL_URI_TEMPLATE}.`,
   );
 }
 
@@ -445,16 +444,12 @@ function buildHandshakeUriTemplates(): HandshakeDiscoveryResourceTemplate[] {
       name: 'Tool URI template',
       uriTemplate: TOOL_URI_TEMPLATE,
     },
-    {
-      name: 'Schema URI template',
-      uriTemplate: TOOL_SCHEMA_URI_TEMPLATE,
-    },
   ];
 }
 
 function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): HandshakeGuidance {
   const nextSteps = [
-    `For each bridged tool, ${getSchemaReadHint()}`,
+    `For each bridged tool, ${getToolReadHint()}`,
     getPathScopeSpecReadHint(),
   ];
   if (discovery.partial || discovery.issues.length > 0) {
@@ -528,20 +523,19 @@ function buildToolInfoPayload(tool: WorkspaceToolDefinition): Record<string, unk
   return {
     ...tool,
     toolUri: `lm-tools://tool/${tool.name}`,
-    schemaUri: `lm-tools://schema/${tool.name}`,
   };
 }
 
-async function readToolSchemaFromResource(
+async function readToolInputSchemaFromResource(
   target: ManagerMatch,
   toolName: string,
 ): Promise<Record<string, unknown> | undefined> {
   const response = await requestTargetJson(target, {
     jsonrpc: '2.0',
-    id: `mgr-schema-${toolName}-${Date.now()}`,
+    id: `mgr-tool-${toolName}-${Date.now()}`,
     method: 'resources/read',
     params: {
-      uri: `lm-tools://schema/${toolName}`,
+      uri: `lm-tools://tool/${toolName}`,
     },
   });
   if (!response.ok) {
@@ -579,8 +573,8 @@ async function resolveToolInputSchema(tool: WorkspaceToolDefinition): Promise<Re
   if (!isBoundTool || !session.currentTarget) {
     return tool.inputSchema ?? null;
   }
-  // Avoid schema fan-out during handshake and fetch the latest schema only when a resource is actually read.
-  return await readToolSchemaFromResource(session.currentTarget, tool.name) ?? tool.inputSchema ?? null;
+  // Avoid tool-definition fan-out during handshake and fetch the latest inputSchema only when a resource is actually read.
+  return await readToolInputSchemaFromResource(session.currentTarget, tool.name) ?? tool.inputSchema ?? null;
 }
 
 function resourceJson(uri: string, payload: unknown, mimeType = 'application/json') {
@@ -637,15 +631,6 @@ function getToolTemplate() {
     name: 'Tool URI template',
     uriTemplate: TOOL_URI_TEMPLATE,
     description: 'Read a bridged tool definition by name.',
-    mimeType: 'application/json',
-  };
-}
-
-function getSchemaTemplate() {
-  return {
-    name: 'Schema URI template',
-    uriTemplate: TOOL_SCHEMA_URI_TEMPLATE,
-    description: 'Read a bridged tool input schema by name.',
     mimeType: 'application/json',
   };
 }
@@ -1155,9 +1140,9 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
     `On workspace failures or MCP call failures, ${getRebindRetryHint()}`,
     'A successful handshake response includes discovery data (callTool/bridgedTools).',
     `After handshake, ${getDiscoveryRefreshHint()}`,
-    `Before first tool call, ${getSchemaReadHint()}`,
+    `Before first tool call, ${getToolReadHint()}`,
     getPathScopeSpecReadHint(),
-    `Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and schema read.`,
+    `Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and tool-definition read.`,
     '',
     'Status snapshot:',
     JSON.stringify(statusPayload, null, 2),
@@ -1166,10 +1151,10 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
 
 function getCallToolResourceText(): string {
   return [
-    'Direct tool call bridge (handshake + schema required).',
+    'Direct tool call bridge (handshake + tool definition required).',
     `Tool name: ${DIRECT_TOOL_CALL_NAME}`,
     'Input: { name: string, arguments?: object }',
-    `Before first call, ${getSchemaReadHint()}`,
+    `Before first call, ${getToolReadHint()}`,
     `When discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
     `If workspace errors appear, ${getRebindRetryHint()}`,
     'Example:',
@@ -1268,7 +1253,6 @@ function createServer(): Server {
     return {
       resourceTemplates: [
         getToolTemplate(),
-        getSchemaTemplate(),
       ],
     };
   });
@@ -1295,17 +1279,6 @@ function createServer(): Server {
       }
       return resourceJson(uri, {
         ...buildToolInfoPayload(tool),
-        inputSchema: await resolveToolInputSchema(tool),
-      });
-    }
-    const schemaName = getToolNameFromUri(uri, 'lm-tools://schema/');
-    if (schemaName) {
-      const tool = findToolDefinitionByName(schemaName);
-      if (!tool) {
-        throw new McpError(ErrorCode.InvalidParams, `Tool not found or unavailable: ${schemaName}`);
-      }
-      return resourceJson(uri, {
-        name: tool.name,
         inputSchema: await resolveToolInputSchema(tool),
       });
     }

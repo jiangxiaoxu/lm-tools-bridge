@@ -1836,10 +1836,6 @@ function formatToolInfoText(payload: Record<string, unknown>): string {
   if (toolUri) {
     lines.push(`toolUri: ${toolUri}`);
   }
-  const schemaUri = typeof payload.schemaUri === 'string' ? payload.schemaUri : '';
-  if (schemaUri) {
-    lines.push(`schemaUri: ${schemaUri}`);
-  }
   if (payload.usageHint !== undefined) {
     lines.push('usageHint:');
     lines.push(indentLines(safePrettyStringify(payload.usageHint), 2));
@@ -1895,7 +1891,6 @@ export function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
     tags: tool.tags,
     inputSchema,
     toolUri: getToolUri(tool.name),
-    schemaUri: getSchemaUri(tool.name),
     usageHint: getToolUsageHint(tool),
   };
 }
@@ -3528,10 +3523,6 @@ function getToolUri(name: string): string {
   return `lm-tools://tool/${name}`;
 }
 
-function getSchemaUri(name: string): string {
-  return `lm-tools://schema/${name}`;
-}
-
 function getToolUsageHint(tool: ExposedTool): Record<string, unknown> {
   const combined = `${tool.name} ${(tool.description ?? '')}`.toLowerCase();
   if (combined.includes('do not use') || combined.includes('placeholder')) {
@@ -3793,7 +3784,7 @@ export function prioritizeTool(
 
 export function registerExposedTools(server: import('@modelcontextprotocol/sdk/server/mcp.js').McpServer): void {
   const toolInputSchema: z.ZodTypeAny = z.object({}).passthrough()
-    .describe('Tool input object. Use lm-tools://schema/{name} for the expected shape.');
+    .describe('Tool input object. Use lm-tools://tool/{name} for the expected shape.');
   const tools = getEnabledExposedToolsSnapshot();
   for (const tool of tools) {
     if (isToolBackedBySourceName(tool, GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME)) {
@@ -3900,7 +3891,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     const input = args ?? {};
     if (!isPlainObject(input)) {
       return toolErrorResultPayload({
-        error: 'Tool input must be an object. Use lm-tools://schema/{name} for the expected shape.',
+        error: 'Tool input must be an object. Use lm-tools://tool/{name} for the expected shape.',
         name: tool.name,
         inputSchema: tool.inputSchema ?? null,
       });

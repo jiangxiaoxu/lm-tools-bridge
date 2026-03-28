@@ -631,39 +631,6 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
-  const schemaTemplate = new ResourceTemplate('lm-tools://schema/{name}', {
-    list: () => {
-      logDebugDetail('Resource list: lm-tools://schema/{name}');
-      return { resources: [] };
-    },
-    complete: {
-      name: (value) => {
-        logDebugDetail(`Resource complete: lm-tools://schema/{name} value=${value}`);
-        return getEnabledExposedToolsSnapshot()
-          .map((tool) => tool.name)
-          .filter((name) => name.startsWith(value));
-      },
-    },
-  });
-
-  server.registerResource(
-    'lmToolsSchema',
-    schemaTemplate,
-    { description: 'Read tool input schema by name. Call it before invoking the tool to satisfy the validator.' },
-    async (uri, variables) => {
-      const name = readTemplateVariable(variables, 'name');
-      logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
-      if (!name) {
-        throw new McpError(ErrorCode.InvalidParams, 'Tool name is required.');
-      }
-      const tool = getEnabledExposedToolsSnapshot().find((candidate) => candidate.name === name);
-      if (!tool) {
-        throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${name}`);
-      }
-      return resourceJson(uri.toString(), { name: tool.name, inputSchema: buildToolInputSchema(tool) });
-    },
-  );
-
   return server;
 }
 

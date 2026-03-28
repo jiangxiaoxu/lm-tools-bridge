@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.140] - 2026-03-28
+
+### English
+
+#### Changed
+- Removed `lm-tools://schema/{name}` and made `lm-tools://tool/{name}` the only resource for bridged tool definitions and `inputSchema`.
+- Removed `schemaUri` from tool metadata and updated handshake guidance, docs, and skills to read tool definitions before the first bridged call.
+
+### 中文
+
+#### Changed
+- 删除 `lm-tools://schema/{name}`,将 `lm-tools://tool/{name}` 收敛为桥接 tool definition 和 `inputSchema` 的唯一 resource.
+- 移除 tool metadata 里的 `schemaUri`,并同步更新 handshake guidance、文档与 skill 指引,统一为首次桥接调用前读取 tool definition.
+
 ## [1.0.139] - 2026-03-25
 
 ### English

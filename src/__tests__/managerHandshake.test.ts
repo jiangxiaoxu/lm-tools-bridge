@@ -38,7 +38,7 @@ test('handshake payload omits redundant online and health fields', () => {
     },
     guidance: {
       nextSteps: [
-        'read lm-tools://schema/{name} before the first tool call.',
+        'read lm-tools://tool/{name} before the first tool call and build arguments that match its inputSchema.',
         'Before using any tool argument named pathScope, you must read lm-tools://spec/pathScope first.',
       ],
     },
@@ -80,7 +80,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
     },
     guidance: {
       nextSteps: [
-        'read lm-tools://schema/{name} before the first tool call.',
+        'read lm-tools://tool/{name} before the first tool call and build arguments that match its inputSchema.',
         'Before using any tool argument named pathScope, you must read lm-tools://spec/pathScope first.',
       ],
     },

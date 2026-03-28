@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.138`.
+- Version baseline: `1.0.140`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -94,9 +94,9 @@
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online`, `health`, and `mcpSessionId`; liveness is implied by handshake success and later offline/rebind errors.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payload `target` is workspace-identity only (`workspaceFolders`, `workspaceFile`) and does not expose workspace session or transport fields.
 - Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is summary-only (`name`/`description`); tool schemas are read through `lm-tools://schema/{name}` or `lm-tools://tool/{name}` resources when needed.
+- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is summary-only (`name`/`description`); bridged tool definitions and `inputSchema` are read on demand through `lm-tools://tool/{name}` when needed.
 - `lm-tools-bridge://handshake` status snapshot also limits `target` to `workspaceFolders` and `workspaceFile`; internal session and transport details stay private.
-- The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://schema/{name}`, `lm-tools://spec/pathScope`), and handshake guidance tells clients they must read the shared `pathScope` spec before using any argument named `pathScope`.
+- The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://spec/pathScope`), and handshake guidance tells clients they must read each bridged tool definition before the first call and read the shared `pathScope` spec before using any argument named `pathScope`.
 - After handshake, `tools/list` dynamically merges bridged workspace tools into the stdio manager inventory and emits list-changed notifications when the binding changes.
 - If the bound workspace instance goes offline after handshake, the stdio manager clears the binding and returns offline/rebind errors; it does not auto-restart VS Code outside handshake.
 - Stdio manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.

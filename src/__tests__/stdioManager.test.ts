@@ -104,17 +104,18 @@ async function startFakeWorkspaceServer(args: {
       });
       return;
     }
-    if (message?.method === 'resources/read' && message.params?.uri === `lm-tools://schema/${ECHO_TOOL_NAME}`) {
+    if (message?.method === 'resources/read' && message.params?.uri === `lm-tools://tool/${ECHO_TOOL_NAME}`) {
       respondJson(res, {
         jsonrpc: '2.0',
         id,
         result: {
           contents: [
             {
-              uri: `lm-tools://schema/${ECHO_TOOL_NAME}`,
+              uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
               mimeType: 'application/json',
               text: JSON.stringify({
                 name: ECHO_TOOL_NAME,
+                description: 'Echo back the provided value.',
                 inputSchema: TOOL_INPUT_SCHEMA,
               }),
             },
@@ -271,6 +272,11 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     uri: 'lm-tools://spec/pathScope',
   });
   assert.match(getResourceText(pathScopeSpec), /^Shared pathScope syntax/mu);
+  const resourceTemplates = await manager.client.listResourceTemplates();
+  assert.deepEqual(
+    resourceTemplates.resourceTemplates.map((entry) => entry.uriTemplate),
+    ['lm-tools://tool/{name}'],
+  );
 
   const handshake = await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
@@ -314,10 +320,10 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const afterTools = await manager.client.listTools();
   assert.deepEqual(getToolNames(afterTools), [ECHO_TOOL_NAME, DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD]);
 
-  const schema = await manager.client.readResource({
-    uri: `lm-tools://schema/${ECHO_TOOL_NAME}`,
+  const toolDefinition = await manager.client.readResource({
+    uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
   });
-  assert.match(getResourceText(schema), /"value"/u);
+  assert.match(getResourceText(toolDefinition), /"value"/u);
 
   const directCall = await manager.client.callTool({
     name: ECHO_TOOL_NAME,
@@ -447,7 +453,7 @@ const server = http.createServer(async (req, res) => {
     }));
     return;
   }
-  if (message.method === 'resources/read' && message.params?.uri === 'lm-tools://schema/' + toolName) {
+  if (message.method === 'resources/read' && message.params?.uri === 'lm-tools://tool/' + toolName) {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
@@ -456,9 +462,13 @@ const server = http.createServer(async (req, res) => {
       result: {
         contents: [
           {
-            uri: 'lm-tools://schema/' + toolName,
+            uri: 'lm-tools://tool/' + toolName,
             mimeType: 'application/json',
-            text: JSON.stringify({ name: toolName, inputSchema: toolInputSchema }),
+            text: JSON.stringify({
+              name: toolName,
+              description: 'Echo back the provided value.',
+              inputSchema: toolInputSchema,
+            }),
           },
         ],
       },

@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.146`.
+- Version baseline: `1.0.147`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -88,7 +88,7 @@
 - `lmToolsBridge.bindWorkspace` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
 - `lmToolsBridge.bindWorkspace` first probes live named-pipe discovery targets derived from the resolved `cwd`; if no healthy target answers on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
 - `lmToolsBridge.bindWorkspace` is the session-binding entrypoint; its tool description should make clear that agents must read `lm-tools-bridge://guide` first, pass an absolute workspace path, and only rebind when the workspace target changes.
-- `lmToolsBridge.bindWorkspace` description also acts as the first trigger hint: when the task looks like legacy `vscode-tools` work such as workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly says `vscode-tools` or `use vscode`, agents should start the bridge flow from this tool.
+- `lmToolsBridge.bindWorkspace` description also acts as the first trigger hint: when the task looks like legacy `vscode-tools` work such as workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`, agents should start the bridge flow from this tool.
 - `lmToolsBridge.bindWorkspace` tool metadata now keeps medium-detail first-use constraints in the tool description, while the detailed bind/routing/fallback guide lives in `lm-tools-bridge://guide`.
 - Runtime metadata now follows a delayed-loading contract instead of embedding a separate skill: tool descriptions keep key first-use constraints and prerequisites, point agents to `lm-tools-bridge://guide`, `lm-tools://tool/{name}`, and `lm-tools://spec/pathScope`, and the detailed workflow stays in those resource bodies.
 - `lm-tools-bridge://guide` now serves as the detailed operator guide for the bridge flow: bind timing, validated scope, tool-definition reads, pathScope reads, routing preferences, and fallback rules live in the resource body next to the status snapshot.

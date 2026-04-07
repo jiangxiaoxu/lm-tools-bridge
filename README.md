@@ -55,7 +55,7 @@ The PowerShell wrapper is recommended because many MCP clients do not expand env
 
 Notes:
 - Handshake is required before using bridged workspace tools.
-- `lmToolsBridge.bindWorkspace` is the entrypoint when the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly says `vscode-tools` or `use vscode`.
+- `lmToolsBridge.bindWorkspace` is the entrypoint when the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`.
 - Read `lm-tools-bridge://guide` for the detailed workflow, routing, and fallback guide.
 - VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - Handshake `discovery.bridgedTools` returns tool names only. Read `lm-tools://tool/{name}` for the tool description and `inputSchema`.

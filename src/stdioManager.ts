@@ -208,7 +208,7 @@ function getHandshakeResourceDescription(): string {
 }
 
 function getRequestWorkspaceToolDescription(): string {
-  return 'If the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly says `vscode-tools` or `use vscode`, start here. Read lm-tools-bridge://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Input: { cwd: string }.';
+  return 'If the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`, start here. Read lm-tools-bridge://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Input: { cwd: string }.';
 }
 
 function getDirectToolCallDescription(): string {
@@ -1136,7 +1136,7 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
   return [
     'Workspace bridge guide',
     '',
-    'This MCP manager requires an explicit workspace handshake before workspace tools can be used.',
+    'This MCP manager requires an explicit workspace binding before workspace tools can be used.',
     '',
     'When to bind:',
     `- Call ${REQUEST_WORKSPACE_METHOD} with params.cwd once per client session.`,
@@ -1167,7 +1167,7 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
     '- discovery.bridgedTools returns names only; read lm-tools://tool/{name} for per-tool description and inputSchema.',
     '',
     'Direct tool call after handshake:',
-    `- ${DIRECT_TOOL_CALL_NAME} is used after a successful workspace handshake.`,
+    `- ${DIRECT_TOOL_CALL_NAME} is used after a successful workspace binding.`,
     `- Before the first direct call, ${getToolReadHint()}`,
     '- Build arguments from the tool inputSchema you just read.',
     `- If any argument is named pathScope, ${getPathScopeSpecReadHint()}`,

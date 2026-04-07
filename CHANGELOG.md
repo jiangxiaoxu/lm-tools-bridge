@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.147] - 2026-04-07
+
+### English
+
+#### Changed
+- Refined the workspace bridge guide wording to describe the required pre-tool step as an explicit workspace binding and aligned related trigger wording in the guide docs.
+
+### 中文
+
+#### Changed
+- 优化 workspace bridge guide 的文案,将使用 workspace tools 前的必要前置步骤表述为更清晰的 explicit workspace binding,并同步相关 guide 触发说明的措辞.
+
 ## [1.0.146] - 2026-04-07
 
 ### English

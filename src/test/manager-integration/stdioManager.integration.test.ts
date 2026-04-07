@@ -18,8 +18,8 @@ import {
   removeDirectoryWithRetries,
 } from '../integration/vscodeTestUtils';
 
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const QGREP_STATUS_TOOL_NAME = 'lm_qgrepGetStatus';
 const QGREP_TEXT_TOOL_NAME = 'lm_qgrepSearchText';
 const QGREP_FILES_TOOL_NAME = 'lm_qgrepSearchFiles';

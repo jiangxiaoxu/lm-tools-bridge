@@ -43,22 +43,24 @@ enabled = true
 
 The PowerShell wrapper is recommended because many MCP clients do not expand environment variables inside raw `args`.
 
-Optional for Codex app: the `vscode-tools` skill works well with this extension.
-
 ### Basic Usage Flow
 1. Start one stdio manager for the client session.
-2. Call `lmToolsBridge.requestWorkspaceMCPServer`.
-3. Set `cwd` to either:
+2. Read `lm-tools-bridge://guide` once.
+3. Call `lmToolsBridge.bindWorkspace`.
+4. Set `cwd` to an absolute path for either:
    - the project path
    - the `.code-workspace` path
-4. After handshake succeeds, use bridged workspace tools from `tools/list`, or call `lmToolsBridge.callTool`.
+   - relative paths are invalid
+5. After bind succeeds, use bridged workspace tools from `tools/list`, or call `lmToolsBridge.callBridgedTool`.
 
 Notes:
 - Handshake is required before using bridged workspace tools.
+- Read `lm-tools-bridge://guide` for the detailed workflow, routing, and fallback guide.
 - VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - Handshake `discovery.bridgedTools` returns tool names only. Read `lm-tools://tool/{name}` for the tool description and `inputSchema`.
 - Read `lm-tools://tool/{name}` before the first bridged tool call, then build arguments from its `inputSchema`.
-- If a tool argument uses `pathScope`, read `lm-tools://spec/pathScope` after handshake.
+- The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools-bridge://guide`; the names-only discovery resource is `lm-tools://tool-names`.
+- If a tool argument uses `pathScope`, read `lm-tools://spec/pathScope` after bind.
 
 ### Troubleshooting
 - `node` is missing: install Node.js, restart VS Code, and retry.
@@ -102,22 +104,25 @@ enabled = true
 
 推荐包一层 PowerShell,因为很多 MCP 客户端不会自动展开原始 `args` 里的环境变量.
 
-可选: 如果你在用 Codex app,`vscode-tools` skill 和这个扩展配合会更顺手.
 
 ### 基本使用流程
 1. 为当前客户端会话启动一个 stdio manager.
-2. 调用 `lmToolsBridge.requestWorkspaceMCPServer`.
-3. `cwd` 可以传:
+2. 先读取一次 `lm-tools-bridge://guide`.
+3. 调用 `lmToolsBridge.bindWorkspace`.
+4. `cwd` 需要传绝对路径,可以是:
    - 项目路径
    - `.code-workspace` 路径
-4. 握手成功后,通过 `tools/list` 使用桥接后的 workspace tools,或继续调用 `lmToolsBridge.callTool`.
+   - 相对路径无效
+5. 绑定成功后,通过 `tools/list` 使用桥接后的 workspace tools,或继续调用 `lmToolsBridge.callBridgedTool`.
 
 说明:
 - 使用桥接 workspace tools 之前,必须先完成握手.
+- 读取 `lm-tools-bridge://guide`,里面包含更详细的 workflow、routing 和 fallback 指南.
 - 来自 VS Code 的 workspace tool 对外统一带 `lm_` 前缀. 例如 `copilot_searchCodebase` 会暴露为 `lm_copilot_searchCodebase`.
 - 握手里的 `discovery.bridgedTools` 只返回 tool name. 需要 tool description 和 `inputSchema` 时,请读取 `lm-tools://tool/{name}`.
 - 首次调用桥接 tool 之前,先读取 `lm-tools://tool/{name}`,再根据其中的 `inputSchema` 组装参数.
-- 如果某个工具参数使用了 `pathScope`,请在握手后读取 `lm-tools://spec/pathScope`.
+- `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools-bridge://guide`; names-only discovery resource 是 `lm-tools://tool-names`.
+- 如果某个工具参数使用了 `pathScope`,请在绑定后读取 `lm-tools://spec/pathScope`.
 
 ### 故障排查
 - 缺少 `node`: 安装 Node.js,重启 VS Code 后再试.

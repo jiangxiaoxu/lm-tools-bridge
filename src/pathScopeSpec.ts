@@ -3,7 +3,7 @@ export const PATH_SCOPE_SHARED_SYNTAX_ID = 'lm-tools-bridge/pathScope/v1';
 const PATH_SCOPE_SHARED_SYNTAX_KIND = 'workspace-path-or-glob-scope';
 
 export function getPathScopeFieldDescription(): string {
-  return `Optional workspace path or glob scope. Supports <glob>, WorkspaceName/<glob>, brace workspace selectors, and absolute patterns inside current workspaces. Read ${PATH_SCOPE_SPEC_URI} for examples and invalid forms.`;
+  return `Optional workspace path or glob scope. Read ${PATH_SCOPE_SPEC_URI} before using this field.`;
 }
 
 export function getPathScopeToolDescriptionSentence(): string {
@@ -11,7 +11,7 @@ export function getPathScopeToolDescriptionSentence(): string {
 }
 
 export function getPathScopeSpecResourceDescription(): string {
-  return 'Read the shared pathScope syntax used by workspace search and diagnostics tools.';
+  return 'Read the shared pathScope syntax before using any tool argument named pathScope. Applies to workspace search and diagnostics tools.';
 }
 
 export function getPathScopeSpecReadHint(): string {

@@ -292,11 +292,11 @@ export async function run(): Promise<void> {
           await client.connect(transport);
           const tools = await client.listTools();
           const toolNames = tools.tools.map((tool) => tool.name);
-          if (!toolNames.includes('lmToolsBridge.requestWorkspaceMCPServer')) {
+          if (!toolNames.includes('lmToolsBridge.bindWorkspace')) {
             throw new Error(`Expected requestWorkspace tool in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
           }
-          if (!toolNames.includes('lmToolsBridge.callTool')) {
-            throw new Error(`Expected callTool helper in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
+          if (!toolNames.includes('lmToolsBridge.callBridgedTool')) {
+            throw new Error(`Expected callBridgedTool helper in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
           }
         } catch (error) {
           const message = error instanceof Error ? error.stack ?? error.message : String(error);

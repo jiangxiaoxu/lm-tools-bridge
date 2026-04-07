@@ -74,11 +74,10 @@ interface SessionState {
 }
 
 const HEALTH_PATH = '/mcp/health';
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.requestWorkspaceMCPServer';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callTool';
-const HANDSHAKE_RESOURCE_URI = 'lm-tools-bridge://handshake';
-const CALL_TOOL_RESOURCE_URI = 'lm-tools-bridge://callTool';
-const TOOL_NAMES_RESOURCE_URI = 'lm-tools://names';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const GUIDE_RESOURCE_URI = 'lm-tools-bridge://guide';
+const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const TOOL_URI_TEMPLATE = 'lm-tools://tool/{name}';
 const HEALTH_TIMEOUT_MS = 1200;
 const INSTANCE_POLL_INTERVAL_MS = 500;
@@ -205,15 +204,15 @@ function getDirectCallForbiddenToolNameMessage(): string {
 }
 
 function getHandshakeResourceDescription(): string {
-  return `Handshake required: call ${REQUEST_WORKSPACE_METHOD} with params.cwd; success includes discovery (callTool/bridgedTools).`;
+  return `Detailed bridge usage guide: bind once per session with ${REQUEST_WORKSPACE_METHOD}, then follow the bridged-tool, pathScope, routing, and fallback guidance in this resource.`;
 }
 
 function getRequestWorkspaceToolDescription(): string {
-  return 'Resolve and bind a workspace MCP server. Input: { cwd: string }.';
+  return 'Read lm-tools-bridge://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Input: { cwd: string }.';
 }
 
 function getDirectToolCallDescription(): string {
-  return 'Directly call an exposed tool by name after workspace handshake. Input: { name: string, arguments?: object }.';
+  return 'Read lm-tools-bridge://guide before first use. Then call a bridged workspace tool after bind, read lm-tools://tool/{name} before the first call, pass arguments that match the target tool inputSchema, and read lm-tools://spec/pathScope before any pathScope argument. Input: { name: string, arguments?: object }.';
 }
 
 function toOfflineDurationSec(startedAt?: number): number | null {
@@ -483,7 +482,7 @@ function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        cwd: { type: 'string', description: 'Workspace path to resolve.' },
+        cwd: { type: 'string', description: 'Absolute workspace path to resolve. Use the absolute project root path or the absolute .code-workspace path. Relative paths are invalid.' },
       },
       required: ['cwd'],
     },
@@ -497,8 +496,14 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Tool name to call.' },
-        arguments: { type: 'object', description: 'Tool arguments.' },
+        name: {
+          type: 'string',
+          description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, lm-tools://tool-names, or lm-tools://tool/{name}.',
+        },
+        arguments: {
+          type: 'object',
+          description: 'Optional arguments object for the bridged tool call. Must match the target tool inputSchema.',
+        },
       },
       required: ['name'],
     },
@@ -595,18 +600,9 @@ function resourceJson(uri: string, payload: unknown, mimeType = 'application/jso
 
 function getHandshakeResource() {
   return {
-    uri: HANDSHAKE_RESOURCE_URI,
-    name: 'MCP manager handshake',
+    uri: GUIDE_RESOURCE_URI,
+    name: 'Bridge usage guide',
     description: getHandshakeResourceDescription(),
-    mimeType: 'text/plain',
-  };
-}
-
-function getCallToolResource() {
-  return {
-    uri: CALL_TOOL_RESOURCE_URI,
-    name: 'MCP manager direct tool call',
-    description: getDirectToolCallDescription(),
     mimeType: 'text/plain',
   };
 }
@@ -615,7 +611,7 @@ function getNamesResource() {
   return {
     uri: TOOL_NAMES_RESOURCE_URI,
     name: 'Bridged tool names',
-    description: 'Read bridged workspace tool names after handshake.',
+    description: 'Read bridged tool names after bind. This is names-only discovery; read lm-tools://tool/{name} on demand for the full definition.',
     mimeType: 'application/json',
   };
 }
@@ -633,7 +629,7 @@ function getToolTemplate() {
   return {
     name: 'Tool URI template',
     uriTemplate: TOOL_URI_TEMPLATE,
-    description: 'Read a bridged tool definition by name.',
+    description: 'Read a bridged tool definition by name before the first call, then build arguments from its inputSchema.',
     mimeType: 'application/json',
   };
 }
@@ -1138,29 +1134,51 @@ async function invokeBoundTool(
 
 function getHandshakeResourceText(statusPayload: Record<string, unknown>): string {
   return [
-    'This MCP manager requires an explicit workspace handshake.',
-    `Call ${REQUEST_WORKSPACE_METHOD} with params.cwd before workspace tools.`,
-    `On workspace failures or MCP call failures, ${getRebindRetryHint()}`,
-    'A successful handshake response includes discovery data (callTool/bridgedTools).',
-    `After handshake, ${getDiscoveryRefreshHint()}`,
-    `Before first tool call, ${getToolReadHint()}`,
-    getPathScopeSpecReadHint(),
-    `Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and tool-definition read.`,
+    'Workspace bridge guide',
     '',
-    'Status snapshot:',
-    JSON.stringify(statusPayload, null, 2),
-  ].join('\n');
-}
-
-function getCallToolResourceText(): string {
-  return [
-    'Direct tool call bridge (handshake + tool definition required).',
-    `Tool name: ${DIRECT_TOOL_CALL_NAME}`,
-    'Input: { name: string, arguments?: object }',
-    `Before first call, ${getToolReadHint()}`,
-    `When discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
-    `If workspace errors appear, ${getRebindRetryHint()}`,
-    'Example:',
+    'This MCP manager requires an explicit workspace handshake before workspace tools can be used.',
+    '',
+    'When to bind:',
+    `- Call ${REQUEST_WORKSPACE_METHOD} with params.cwd once per client session.`,
+    '- Reuse the current bind across calls; do not handshake again before every tool call.',
+    '- Re-run handshake only when the workspace target changes or the bound workspace goes offline.',
+    '',
+    'Core flow:',
+    `1. Call ${REQUEST_WORKSPACE_METHOD} with params.cwd set to the project path or .code-workspace path.`,
+    '2. Treat the resolved workspace roots as the validated lmToolsBridge scope.',
+    `3. Follow guidance.nextSteps from the handshake response.`,
+    `4. Use discovery.bridgedTools as names-only discovery and read lm-tools://tool/{name} only for the tools needed by the current task.`,
+    `5. Before the first bridged tool call, ${getToolReadHint()}`,
+    `6. ${getPathScopeSpecReadHint()}`,
+    `7. Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and tool-definition read, or call the bridged tools returned by tools/list after handshake.`,
+    '',
+    'Routing and fallback:',
+    '- Prefer lmToolsBridge tools for workspace file search, text search, multi-file inspection, and VS Code IDE actions inside validated workspace roots.',
+    '- Prefer qgrep search tools for repeated workspace text search when they are available.',
+    '- In multi-root workspaces, use WorkspaceName/... only when narrowing to one root; otherwise keep cross-root scope.',
+    '- Do not use lmToolsBridge tools for paths outside validated workspace roots.',
+    '- Never perform silent fallback. Report the failing tool and reason before any non-lmToolsBridge fallback.',
+    '- If discovery is partial or has issues, refresh tool visibility before assuming a tool is unavailable.',
+    `- On workspace failures or MCP call failures, ${getRebindRetryHint()}`,
+    `- After handshake, ${getDiscoveryRefreshHint()}`,
+    '',
+    'Handshake result:',
+    '- A successful handshake response includes discovery data (callTool, bridgedTools, resourceTemplates).',
+    '- discovery.bridgedTools returns names only; read lm-tools://tool/{name} for per-tool description and inputSchema.',
+    '',
+    'Direct tool call after handshake:',
+    `- ${DIRECT_TOOL_CALL_NAME} is used after a successful workspace handshake.`,
+    `- Before the first direct call, ${getToolReadHint()}`,
+    '- Build arguments from the tool inputSchema you just read.',
+    `- If any argument is named pathScope, ${getPathScopeSpecReadHint()}`,
+    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object.`,
+    '- Prefer bridged workspace tools for validated workspace requests.',
+    '- Prefer qgrep search tools for repeated workspace text search when they are available.',
+    '- Do not use lmToolsBridge tools for paths outside validated workspace roots.',
+    '- Never perform silent fallback. Report the failing tool and reason before any non-lmToolsBridge fallback.',
+    `- When discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
+    `- If workspace errors appear, ${getRebindRetryHint()}`,
+    '- Example:',
     JSON.stringify(
       {
         name: 'lm_findFiles',
@@ -1169,6 +1187,9 @@ function getCallToolResourceText(): string {
       null,
       2,
     ),
+    '',
+    'Status snapshot:',
+    JSON.stringify(statusPayload, null, 2),
   ].join('\n');
 }
 
@@ -1245,7 +1266,6 @@ function createServer(): Server {
     return {
       resources: [
         getHandshakeResource(),
-        getCallToolResource(),
         getPathScopeSpecResource(),
         getNamesResource(),
       ],
@@ -1262,11 +1282,8 @@ function createServer(): Server {
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
-    if (uri === HANDSHAKE_RESOURCE_URI) {
+    if (uri === GUIDE_RESOURCE_URI) {
       return resourceJson(uri, getHandshakeResourceText(await buildStatusPayload()), 'text/plain');
-    }
-    if (uri === CALL_TOOL_RESOURCE_URI) {
-      return resourceJson(uri, getCallToolResourceText(), 'text/plain');
     }
     if (uri === TOOL_NAMES_RESOURCE_URI) {
       return resourceJson(uri, { tools: getBoundToolNames() });

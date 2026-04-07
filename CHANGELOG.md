@@ -6,6 +6,26 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.143] - 2026-04-07
+
+### English
+
+#### Changed
+- Polished the bridge public surface around `lmToolsBridge.bindWorkspace`, `lmToolsBridge.callBridgedTool`, `lm-tools-bridge://guide`, and `lm-tools://tool-names` so names and descriptions follow one delayed-loading contract.
+- Tightened tool descriptions to keep medium-detail first-use constraints, while keeping detailed workflow, routing, fallback, and `pathScope` guidance inside `lm-tools-bridge://guide` and related resources.
+
+#### Removed
+- Removed the deprecated packaged `skills/vscode-tools` bundle because the runtime tool and resource descriptions now carry the bridge usage guidance directly.
+
+### 中文
+
+#### Changed
+- 围绕 `lmToolsBridge.bindWorkspace`、`lmToolsBridge.callBridgedTool`、`lm-tools-bridge://guide` 和 `lm-tools://tool-names` 统一收口 bridge public surface,使名称与描述遵循同一套 delayed-loading contract.
+- 收紧工具描述,仅保留中等粒度的首用约束; 更详细的 workflow、routing、fallback 与 `pathScope` 指南统一留在 `lm-tools-bridge://guide` 及相关 resource 中.
+
+#### Removed
+- 删除已弃用的打包 `skills/vscode-tools` bundle,因为 bridge 使用指引现在已经直接由运行时 tool 与 resource 描述承载.
+
 ## [1.0.142] - 2026-03-28
 
 ### English

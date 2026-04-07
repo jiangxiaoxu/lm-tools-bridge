@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.141`.
+- Version baseline: `1.0.143`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -85,21 +85,26 @@
 - The Node.js install shortcut launches an external PowerShell window that runs `winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements`; if `winget` is unavailable, only the download link path is offered.
 - Node.js dependency prompt failures are self-contained: warning UI, browser launch, and follow-up error-message failures are logged and swallowed so activation does not leak unhandled async errors.
 - Node.js dependency coverage is unit-only: tests inject `probeCommand`, `launchDetachedCommand`, `showWarningMessage`, `showErrorMessage`, and `openExternal` so automated runs never spawn the real installer or browser.
-- `lmToolsBridge.requestWorkspaceMCPServer` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
-- `lmToolsBridge.requestWorkspaceMCPServer` first probes live named-pipe discovery targets derived from the resolved `cwd`; if no healthy target answers on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
+- `lmToolsBridge.bindWorkspace` on Windows accepts only normal absolute paths and `\\?\` + normal absolute paths with case-insensitive prefix matching; non-normal NT namespace forms are rejected.
+- `lmToolsBridge.bindWorkspace` first probes live named-pipe discovery targets derived from the resolved `cwd`; if no healthy target answers on Windows, it may auto-start VS Code during handshake only, probing `code.cmd` and then `code` on `PATH`, always with `--new-window`.
+- `lmToolsBridge.bindWorkspace` is the session-binding entrypoint; its tool description should make clear that agents must read `lm-tools-bridge://guide` first, pass an absolute workspace path, and only rebind when the workspace target changes.
+- `lmToolsBridge.bindWorkspace` tool metadata now keeps medium-detail first-use constraints in the tool description, while the detailed bind/routing/fallback guide lives in `lm-tools-bridge://guide`.
+- Runtime metadata now follows a delayed-loading contract instead of embedding a separate skill: tool descriptions keep key first-use constraints and prerequisites, point agents to `lm-tools-bridge://guide`, `lm-tools://tool/{name}`, and `lm-tools://spec/pathScope`, and the detailed workflow stays in those resource bodies.
+- `lm-tools-bridge://guide` now serves as the detailed operator guide for the bridge flow: bind timing, validated scope, tool-definition reads, pathScope reads, routing preferences, and fallback rules live in the resource body next to the status snapshot.
+- `lm-tools-bridge://guide` now also carries the detailed direct-invocation guide for `lmToolsBridge.callBridgedTool`: tool-definition read order, pathScope pre-read, routing preferences, fallback rules, and an example live in the guide resource body instead of a separate bridged-call resource.
 - Stdio manager handshake auto-start uses default waits of `30s` total (`LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS`) and `15s` per discovery wait window (`LM_TOOLS_BRIDGE_DISCOVERY_WAIT_TIMEOUT_MS`) unless overridden by environment variables.
 - Handshake launch-target resolution order is: direct `.code-workspace` input first; otherwise walk upward level by level, checking `.code-workspace`, then `.vscode`, then `.git` at each level, and fall back to the current directory (or parent directory for file input) only when every level misses.
 - Discovery candidate order is upward and exact, with `.code-workspace` candidates checked before folder candidates at the same level; no global `\\.\pipe\` enumeration is used in the mainline.
 - Unsaved untitled multi-root workspaces are not published for manager discovery; users must save them as a real `.code-workspace` file first.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads omit redundant top-level `online`, `health`, and `mcpSessionId`; liveness is implied by handshake success and later offline/rebind errors.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payload `target` is workspace-identity only (`workspaceFolders`, `workspaceFile`) and does not expose workspace session or transport fields.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
-- Successful `lmToolsBridge.requestWorkspaceMCPServer` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is names-only (`name`); bridged tool definitions and `inputSchema` are read on demand through `lm-tools://tool/{name}` when needed, and tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
-- `lm-tools-bridge://handshake` status snapshot also limits `target` to `workspaceFolders` and `workspaceFile`; internal session and transport details stay private.
-- The stdio manager always exposes local bridge tools (`lmToolsBridge.requestWorkspaceMCPServer`, `lmToolsBridge.callTool`) plus discovery resources (`lm-tools://names`, `lm-tools://tool/{name}`, `lm-tools://spec/pathScope`), and handshake guidance tells clients they must read each bridged tool definition before the first call and read the shared `pathScope` spec before using any argument named `pathScope`.
+- Successful `lmToolsBridge.bindWorkspace` payloads omit redundant top-level `online`, `health`, and `mcpSessionId`; liveness is implied by handshake success and later offline/rebind errors.
+- Successful `lmToolsBridge.bindWorkspace` payload `target` is workspace-identity only (`workspaceFolders`, `workspaceFile`) and does not expose workspace session or transport fields.
+- Successful `lmToolsBridge.bindWorkspace` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
+- Successful `lmToolsBridge.bindWorkspace` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is names-only (`name`); bridged tool definitions and `inputSchema` are read on demand through `lm-tools://tool/{name}` when needed, and tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
+- `lm-tools-bridge://guide` status snapshot also limits `target` to `workspaceFolders` and `workspaceFile`; internal session and transport details stay private.
+- The stdio manager always exposes local bridge tools (`lmToolsBridge.bindWorkspace`, `lmToolsBridge.callBridgedTool`) plus discovery resources (`lm-tools://tool-names`, `lm-tools://tool/{name}`, `lm-tools://spec/pathScope`), and the runtime guide tells clients they must read each bridged tool definition before the first call and read the shared `pathScope` spec before using any argument named `pathScope`.
 - After handshake, `tools/list` dynamically merges bridged workspace tools into the stdio manager inventory and emits list-changed notifications when the binding changes.
 - If the bound workspace instance goes offline after handshake, the stdio manager clears the binding and returns offline/rebind errors; it does not auto-restart VS Code outside handshake.
-- Stdio manager handshake/callTool descriptions remain concise; fallback and recovery guidance is primarily delivered via handshake return `guidance` and actionable JSON-RPC `error.message` text.
+- Stdio manager bind/call/resource descriptions remain concise but still include key prerequisites, while the detailed operator guidance lives in the guide/pathScope resource bodies plus bind `guidance.nextSteps`; fallback and recovery guidance is still primarily delivered via actionable JSON-RPC `error.message` text.
 - Stdio manager JSON-RPC error messages for workspace mismatch/offline-unreachable/direct-call input errors include explicit `Next step:` guidance in `error.message` (no `error.data` change).
 - No manager status/log HTTP pages are part of the current runtime mainline.
 - Built-in `lm_*` path fields in `structuredContent` use absolute paths when structured payloads are returned; qgrep tools now return text-only absolute-path output.
@@ -180,8 +185,8 @@
 - Startup dependency check: verify unit tests cover the missing-`node`, missing-`winget`, warning-once, installer-launch-failure, and browser-open-failure paths through injected doubles so automated tests never launch the real installer.
 - Stable manager publication: verify activation writes `%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js` plus `metadata.json`, the synced manager responds to MCP `initialize` + `tools/list`, and workspace discovery advertises a live auto-started MCP server after activation.
 - Legacy cleanup: verify activation removes `%LOCALAPPDATA%\\lm-tools-bridge\\instances` when present, and logs without failing activation when cleanup cannot complete.
-- Happy-path: verify one handshake + one dynamic `tools/list` refresh + one bridged tool call + one `lmToolsBridge.callTool` call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
-- Handshake-path: on Windows verify `lmToolsBridge.requestWorkspaceMCPServer` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no healthy discovery pipe answers.
+- Happy-path: verify one handshake + one dynamic `tools/list` refresh + one bridged tool call + one `lmToolsBridge.callBridgedTool` call + one diagnostics call + one qgrep status call + one qgrep search call + one qgrep files call.
+- Handshake-path: on Windows verify `lmToolsBridge.bindWorkspace` succeeds for both normal and prefixed-normal `cwd` forms against the same workspace, rejects non-normal NT namespace formats, and auto-starts a matching workspace instance only during handshake when no healthy discovery pipe answers.
 - Failure-path: verify one expected failure (`Tool not found or disabled` or post-handshake offline workspace).
 - Stdio-manager-errors: verify `workspace not set/matched`, `Workspace MCP server is unreachable`, `Resolved MCP server is offline`, and direct-call invalid params all include actionable `Next step:` text.
 - Concurrency: verify multiple stdio manager processes can bind the same workspace and different workspaces without leaking bound tool state across sessions.

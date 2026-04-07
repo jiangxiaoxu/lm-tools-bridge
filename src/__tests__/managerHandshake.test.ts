@@ -17,8 +17,8 @@ test('handshake payload omits redundant online and health fields', () => {
     },
     discovery: {
       callTool: {
-        name: 'lmToolsBridge.callTool',
-        description: 'Directly call an exposed tool by name after workspace handshake.',
+        name: 'lmToolsBridge.callBridgedTool',
+        description: 'Read lm-tools-bridge://guide before first use. Then call a bridged workspace tool after bind, read lm-tools://tool/{name} before the first call, pass arguments that match the target tool inputSchema, and read lm-tools://spec/pathScope before any pathScope argument. Input: { name: string, arguments?: object }.',
         inputSchema: {
           type: 'object',
           properties: {

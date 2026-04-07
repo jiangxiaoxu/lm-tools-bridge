@@ -584,11 +584,11 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
 
   server.registerResource(
     'lmToolsNames',
-    'lm-tools://names',
-    { description: 'List exposed tool names.' },
+    'lm-tools://tool-names',
+    { description: 'Read bridged workspace tool names. This is names-only discovery; read lm-tools://tool/{name} only for the tools needed by the current task, usually before the first call.' },
     async () => {
-      logDebugDetail('Resource read: lm-tools://names');
-      return resourceJson('lm-tools://names', listToolsPayload(getEnabledExposedToolsSnapshot(), 'names'));
+      logDebugDetail('Resource read: lm-tools://tool-names');
+      return resourceJson('lm-tools://tool-names', listToolsPayload(getEnabledExposedToolsSnapshot(), 'names'));
     },
   );
 
@@ -616,7 +616,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerResource(
     'lmToolsTool',
     toolTemplate,
-    { description: 'Read a tool definition by name.' },
+    { description: 'Read a tool definition by name before the first call, then build arguments from its inputSchema.' },
     async (uri, variables) => {
       const name = readTemplateVariable(variables, 'name');
       logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);

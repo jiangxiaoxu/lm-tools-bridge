@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.144] - 2026-04-07
+
+### English
+
+#### Changed
+- Added an explicit trigger hint to `lmToolsBridge.bindWorkspace` so agents can recognize vscode-tools-like workspace search, code navigation, diagnostics, and VS Code IDE tasks as bridge-entry work.
+- Synced tests and docs with the new `bindWorkspace` entrypoint wording.
+
+### 中文
+
+#### Changed
+- 为 `lmToolsBridge.bindWorkspace` 增加显式 trigger hint,让 agent 能将类似 vscode-tools 的 workspace search、code navigation、diagnostics 与 VS Code IDE tasks 识别为 bridge 入口任务.
+- 同步更新测试和文档,使其与新的 `bindWorkspace` 入口文案保持一致.
+
 ## [1.0.143] - 2026-04-07
 
 ### English

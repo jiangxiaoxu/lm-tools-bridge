@@ -269,6 +269,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.deepEqual(getToolNames(beforeTools), [REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME].sort((left, right) => left.localeCompare(right)));
   const requestWorkspaceTool = beforeTools.tools.find((tool) => tool.name === REQUEST_WORKSPACE_METHOD);
   const directCallTool = beforeTools.tools.find((tool) => tool.name === DIRECT_TOOL_CALL_NAME);
+  assert.match(String(requestWorkspaceTool?.description ?? ''), /vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions/u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /Read lm-tools-bridge:\/\/guide before first use\./u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /rebind only when the workspace target changes/u);
   assert.equal(

@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.146] - 2026-04-07
+
+### English
+
+#### Changed
+- Refined the `pathScope` example wording to use a more abstract placeholder workspace name while keeping `UE5` examples where helpful, reducing the chance that users mistake documentation examples for real bound workspace prefixes.
+
+### 中文
+
+#### Changed
+- 优化 `pathScope` 示例文案,将容易被误解为真实业务 workspace 的名称改为更抽象的占位符,同时保留必要的 `UE5` 示例,降低把文档示例误当作实际绑定前缀的风险.
+
 ## [1.0.145] - 2026-04-07
 
 ### English

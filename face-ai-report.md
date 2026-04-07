@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.144`.
+- Version baseline: `1.0.146`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -15,7 +15,7 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
-- Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and is referenced by `lm_findTextInFiles.pathScope`, `lm_qgrepSearchText.pathScope`, and `lm_getDiagnostics.pathScope`; accepted forms include workspace-relative patterns, `WorkspaceName/...`, `{WorkspaceA,WorkspaceB}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
+- Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and is referenced by `lm_findTextInFiles.pathScope`, `lm_qgrepSearchText.pathScope`, and `lm_getDiagnostics.pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
 - `lm_getDiagnostics.pathScope` uses the shared syntax above, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.

@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.145] - 2026-04-07
+
+### English
+
+#### Changed
+- Expanded the `lmToolsBridge.bindWorkspace` trigger wording to explicitly recognize requests that say `vscode-tools` or `use vscode` while preserving the existing vscode-tools-like auto-start behavior.
+- Synced README and AI preload guidance with the new trigger keywords.
+
+### 中文
+
+#### Changed
+- 扩展 `lmToolsBridge.bindWorkspace` 的 trigger wording,显式识别包含 `vscode-tools` 或 `use vscode` 的请求,同时保留原有类似 vscode-tools 的自启动行为.
+- 同步 README 与 AI preload guidance,使其与新的 trigger keywords 保持一致.
+
 ## [1.0.144] - 2026-04-07
 
 ### English

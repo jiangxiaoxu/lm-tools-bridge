@@ -208,7 +208,7 @@ function getHandshakeResourceDescription(): string {
 }
 
 function getRequestWorkspaceToolDescription(): string {
-  return 'If the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, start here. Read lm-tools-bridge://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Input: { cwd: string }.';
+  return 'If the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly says `vscode-tools` or `use vscode`, start here. Read lm-tools-bridge://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Input: { cwd: string }.';
 }
 
 function getDirectToolCallDescription(): string {

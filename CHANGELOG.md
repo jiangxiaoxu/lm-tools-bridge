@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.149] - 2026-04-08
+
+### English
+
+#### Changed
+- Renamed the public workspace bridge guide resource from `lm-tools-bridge://guide` to `lm-tools://guide` and aligned bridge descriptions, tests, and docs to the new URI.
+
+### 中文
+
+#### Changed
+- 将公开的 workspace bridge guide resource 从 `lm-tools-bridge://guide` 重命名为 `lm-tools://guide`,并同步更新 bridge 描述、测试和文档中的相关引用.
+
 ## [1.0.148] - 2026-04-08
 
 ### English

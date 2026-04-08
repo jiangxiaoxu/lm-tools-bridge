@@ -45,7 +45,7 @@ The PowerShell wrapper is recommended because many MCP clients do not expand env
 
 ### Basic Usage Flow
 1. Start one stdio manager for the client session.
-2. Read `lm-tools-bridge://guide` once.
+2. Read `lm-tools://guide` once.
 3. Call `lmToolsBridge.bindWorkspace`.
 4. Set `cwd` to an absolute path for either:
    - the project path
@@ -56,11 +56,11 @@ The PowerShell wrapper is recommended because many MCP clients do not expand env
 Notes:
 - Handshake is required before using bridged workspace tools.
 - `lmToolsBridge.bindWorkspace` is the entrypoint when the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`.
-- Read `lm-tools-bridge://guide` for the detailed workflow, routing, and fallback guide.
+- Read `lm-tools://guide` for the detailed workflow, routing, and fallback guide.
 - VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - Handshake `discovery.bridgedTools` returns tool names only. Read `lm-tools://tool/{name}` for the tool description and `inputSchema`.
 - Read `lm-tools://tool/{name}` before the first bridged tool call, then build arguments from its `inputSchema`.
-- The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools-bridge://guide`; the names-only discovery resource is `lm-tools://tool-names`.
+- The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools://guide`; the names-only discovery resource is `lm-tools://tool-names`.
 - If a tool argument uses `pathScope`, read `lm-tools://spec/pathScope` after bind.
 
 ### Troubleshooting
@@ -108,7 +108,7 @@ enabled = true
 
 ### 基本使用流程
 1. 为当前客户端会话启动一个 stdio manager.
-2. 先读取一次 `lm-tools-bridge://guide`.
+2. 先读取一次 `lm-tools://guide`.
 3. 调用 `lmToolsBridge.bindWorkspace`.
 4. `cwd` 需要传绝对路径,可以是:
    - 项目路径
@@ -119,11 +119,11 @@ enabled = true
 说明:
 - 使用桥接 workspace tools 之前,必须先完成握手.
 - 当任务需要类似 vscode-tools 的 workspace search、code navigation、diagnostics 或 VS Code IDE actions,或明确说出 `vscode-tools` 或 `use vscode` 时,应从 `lmToolsBridge.bindWorkspace` 开始.
-- 读取 `lm-tools-bridge://guide`,里面包含更详细的 workflow、routing 和 fallback 指南.
+- 读取 `lm-tools://guide`,里面包含更详细的 workflow、routing 和 fallback 指南.
 - 来自 VS Code 的 workspace tool 对外统一带 `lm_` 前缀. 例如 `copilot_searchCodebase` 会暴露为 `lm_copilot_searchCodebase`.
 - 握手里的 `discovery.bridgedTools` 只返回 tool name. 需要 tool description 和 `inputSchema` 时,请读取 `lm-tools://tool/{name}`.
 - 首次调用桥接 tool 之前,先读取 `lm-tools://tool/{name}`,再根据其中的 `inputSchema` 组装参数.
-- `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools-bridge://guide`; names-only discovery resource 是 `lm-tools://tool-names`.
+- `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools://guide`; names-only discovery resource 是 `lm-tools://tool-names`.
 - 如果某个工具参数使用了 `pathScope`,请在绑定后读取 `lm-tools://spec/pathScope`.
 
 ### 故障排查

@@ -270,7 +270,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const requestWorkspaceTool = beforeTools.tools.find((tool) => tool.name === REQUEST_WORKSPACE_METHOD);
   const directCallTool = beforeTools.tools.find((tool) => tool.name === DIRECT_TOOL_CALL_NAME);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions/u);
-  assert.match(String(requestWorkspaceTool?.description ?? ''), /Read lm-tools-bridge:\/\/guide before first use\./u);
+  assert.match(String(requestWorkspaceTool?.description ?? ''), /Read lm-tools:\/\/guide before first use\./u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /rebind only when the workspace target changes/u);
   assert.equal(
     (requestWorkspaceTool?.inputSchema as { properties?: { cwd?: { description?: unknown } } } | undefined)
@@ -336,7 +336,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal(handshakePayload?.discovery?.callTool?.name, DIRECT_TOOL_CALL_NAME);
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /^Read lm-tools-bridge:\/\/guide before first use\./u,
+    /^Read lm-tools:\/\/guide before first use\./u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
@@ -356,7 +356,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal(Object.prototype.hasOwnProperty.call(handshakePayload?.target ?? {}, 'port'), false);
 
   const handshakeResource = await manager.client.readResource({
-    uri: 'lm-tools-bridge://guide',
+    uri: 'lm-tools://guide',
   });
   assert.match(getResourceText(handshakeResource), /Workspace bridge guide/u);
   assert.match(getResourceText(handshakeResource), /When to bind:/u);

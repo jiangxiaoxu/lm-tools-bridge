@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.149`.
+- Version baseline: `1.0.150`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -91,8 +91,8 @@
 - `lmToolsBridge.bindWorkspace` description also acts as the first trigger hint: when the task looks like legacy `vscode-tools` work such as workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`, agents should start the bridge flow from this tool.
 - `lmToolsBridge.bindWorkspace` tool metadata now keeps medium-detail first-use constraints in the tool description, while the detailed bind/routing/fallback guide lives in `lm-tools://guide`.
 - Runtime metadata now follows a delayed-loading contract instead of embedding a separate skill: tool descriptions keep key first-use constraints and prerequisites, point agents to `lm-tools://guide`, `lm-tools://tool/{name}`, and `lm-tools://spec/pathScope`, and the detailed workflow stays in those resource bodies.
-- `lm-tools://guide` now serves as the detailed operator guide for the bridge flow: bind timing, validated scope, tool-definition reads, pathScope reads, routing preferences, and fallback rules live in the resource body next to the status snapshot.
-- `lm-tools://guide` now also carries the detailed direct-invocation guide for `lmToolsBridge.callBridgedTool`: tool-definition read order, pathScope pre-read, routing preferences, fallback rules, and an example live in the guide resource body instead of a separate bridged-call resource.
+- `lm-tools://guide` now serves as the detailed operator guide for the bridge flow: bind timing, validated scope, tool-definition reads, pathScope reads, routing preferences, and fallback rules live in the resource body without embedding runtime status.
+- `lm-tools://guide` now also carries the detailed direct-invocation guide for `lmToolsBridge.callBridgedTool`: tool-definition read order, pathScope pre-read, routing preferences, and fallback rules live in the guide resource body instead of a separate bridged-call resource.
 - Stdio manager handshake auto-start uses default waits of `30s` total (`LM_TOOLS_BRIDGE_HANDSHAKE_WAIT_TIMEOUT_MS`) and `15s` per discovery wait window (`LM_TOOLS_BRIDGE_DISCOVERY_WAIT_TIMEOUT_MS`) unless overridden by environment variables.
 - Handshake launch-target resolution order is: direct `.code-workspace` input first; otherwise walk upward level by level, checking `.code-workspace`, then `.vscode`, then `.git` at each level, and fall back to the current directory (or parent directory for file input) only when every level misses.
 - Discovery candidate order is upward and exact, with `.code-workspace` candidates checked before folder candidates at the same level; no global `\\.\pipe\` enumeration is used in the mainline.
@@ -101,7 +101,6 @@
 - Successful `lmToolsBridge.bindWorkspace` payload `target` is workspace-identity only (`workspaceFolders`, `workspaceFile`) and does not expose workspace session or transport fields.
 - Successful `lmToolsBridge.bindWorkspace` payloads include `guidance.nextSteps`; failure recovery guidance is delivered through actionable JSON-RPC `error.message` text instead of a separate handshake recovery field.
 - Successful `lmToolsBridge.bindWorkspace` payloads keep `discovery.callTool.inputSchema`, but `discovery.bridgedTools` is names-only (`name`); bridged tool definitions and `inputSchema` are read on demand through `lm-tools://tool/{name}` when needed, and tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
-- `lm-tools://guide` status snapshot also limits `target` to `workspaceFolders` and `workspaceFile`; internal session and transport details stay private.
 - The stdio manager always exposes local bridge tools (`lmToolsBridge.bindWorkspace`, `lmToolsBridge.callBridgedTool`) plus discovery resources (`lm-tools://tool-names`, `lm-tools://tool/{name}`, `lm-tools://spec/pathScope`), and the runtime guide tells clients they must read each bridged tool definition before the first call and read the shared `pathScope` spec before using any argument named `pathScope`.
 - After handshake, `tools/list` dynamically merges bridged workspace tools into the stdio manager inventory and emits list-changed notifications when the binding changes.
 - If the bound workspace instance goes offline after handshake, the stdio manager clears the binding and returns offline/rebind errors; it does not auto-restart VS Code outside handshake.

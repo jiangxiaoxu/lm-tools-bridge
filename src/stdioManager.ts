@@ -634,26 +634,6 @@ function getToolTemplate() {
   };
 }
 
-async function buildStatusPayload(): Promise<Record<string, unknown>> {
-  const target = session.currentTarget;
-  const health = target ? await checkTargetHealth(target) : undefined;
-  const online = isHealthOk(health);
-  return {
-    ready: session.workspaceMatched && Boolean(target) && online,
-    online,
-    workspaceSetExplicitly: session.workspaceSetExplicitly,
-    cwd: session.resolveCwd,
-    offlineDurationSec: toOfflineDurationSec(session.offlineSince),
-    target: target
-      ? {
-        workspaceFolders: target.workspaceFolders,
-        workspaceFile: target.workspaceFile ?? null,
-      }
-      : null,
-    health,
-  };
-}
-
 async function clearBindingIfNeeded(server: Server): Promise<void> {
   if (!session.workspaceMatched && !session.currentTarget && session.boundTools.length === 0) {
     return;
@@ -1132,7 +1112,7 @@ async function invokeBoundTool(
   return parsed.result as Record<string, unknown>;
 }
 
-function getHandshakeResourceText(statusPayload: Record<string, unknown>): string {
+function getHandshakeResourceText(): string {
   return [
     'Workspace bridge guide',
     '',
@@ -1178,18 +1158,6 @@ function getHandshakeResourceText(statusPayload: Record<string, unknown>): strin
     '- Never perform silent fallback. Report the failing tool and reason before any non-lmToolsBridge fallback.',
     `- When discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
     `- If workspace errors appear, ${getRebindRetryHint()}`,
-    '- Example:',
-    JSON.stringify(
-      {
-        name: 'lm_findFiles',
-        arguments: { query: 'src/**/*.ts', maxResults: 20 },
-      },
-      null,
-      2,
-    ),
-    '',
-    'Status snapshot:',
-    JSON.stringify(statusPayload, null, 2),
   ].join('\n');
 }
 
@@ -1283,7 +1251,7 @@ function createServer(): Server {
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
     if (uri === GUIDE_RESOURCE_URI) {
-      return resourceJson(uri, getHandshakeResourceText(await buildStatusPayload()), 'text/plain');
+      return resourceJson(uri, getHandshakeResourceText(), 'text/plain');
     }
     if (uri === TOOL_NAMES_RESOURCE_URI) {
       return resourceJson(uri, { tools: getBoundToolNames() });

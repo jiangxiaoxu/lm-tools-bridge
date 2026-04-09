@@ -225,13 +225,6 @@ function getResourceText(result: Awaited<ReturnType<Client['readResource']>>): s
   return typeof first?.text === 'string' ? first.text : '';
 }
 
-function getHandshakeStatusPayload(text: string): Record<string, unknown> {
-  const marker = 'Status snapshot:\n';
-  const index = text.indexOf(marker);
-  assert.notEqual(index, -1, `Expected handshake resource text to include "${marker.trim()}".`);
-  return JSON.parse(text.slice(index + marker.length)) as Record<string, unknown>;
-}
-
 async function waitForFile(filePath: string, timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -363,15 +356,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /Routing and fallback:/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Direct tool call after handshake:/u);
-  assert.match(getResourceText(handshakeResource), /"name": "lm_findFiles"/u);
   assert.match(getResourceText(handshakeResource), /lm-tools:\/\/spec\/pathScope/u);
-  const handshakeStatus = getHandshakeStatusPayload(getResourceText(handshakeResource));
-  const statusTarget = handshakeStatus.target as Record<string, unknown> | null;
-  assert.deepEqual(statusTarget?.workspaceFolders, [workspaceRoot]);
-  assert.equal(statusTarget?.workspaceFile ?? null, null);
-  assert.equal(Object.prototype.hasOwnProperty.call(statusTarget ?? {}, 'sessionId'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(statusTarget ?? {}, 'host'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(statusTarget ?? {}, 'port'), false);
 
   const afterTools = await manager.client.listTools();
   assert.deepEqual(

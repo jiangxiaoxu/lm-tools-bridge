@@ -56,7 +56,7 @@ The PowerShell wrapper is recommended because many MCP clients do not expand env
 Notes:
 - Handshake is required before using bridged workspace tools.
 - `lmToolsBridge.bindWorkspace` is the entrypoint when the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`.
-- Read `lm-tools://guide` for the detailed workflow, routing, and fallback guide.
+- Read `lm-tools://guide` for the detailed workflow, routing, and fallback guide. It is guide-only and does not embed live status snapshots or example payloads.
 - VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - Handshake `discovery.bridgedTools` returns tool names only. Read `lm-tools://tool/{name}` for the tool description and `inputSchema`.
 - Read `lm-tools://tool/{name}` before the first bridged tool call, then build arguments from its `inputSchema`.
@@ -119,7 +119,7 @@ enabled = true
 说明:
 - 使用桥接 workspace tools 之前,必须先完成握手.
 - 当任务需要类似 vscode-tools 的 workspace search、code navigation、diagnostics 或 VS Code IDE actions,或明确说出 `vscode-tools` 或 `use vscode` 时,应从 `lmToolsBridge.bindWorkspace` 开始.
-- 读取 `lm-tools://guide`,里面包含更详细的 workflow、routing 和 fallback 指南.
+- 读取 `lm-tools://guide`,里面包含更详细的 workflow、routing 和 fallback 指南,不会内嵌 live status snapshot 或 example payload.
 - 来自 VS Code 的 workspace tool 对外统一带 `lm_` 前缀. 例如 `copilot_searchCodebase` 会暴露为 `lm_copilot_searchCodebase`.
 - 握手里的 `discovery.bridgedTools` 只返回 tool name. 需要 tool description 和 `inputSchema` 时,请读取 `lm-tools://tool/{name}`.
 - 首次调用桥接 tool 之前,先读取 `lm-tools://tool/{name}`,再根据其中的 `inputSchema` 组装参数.

@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.150] - 2026-04-09
+
+### English
+
+#### Changed
+- Simplified `lm-tools://guide` to return guide-only content and removed the embedded runtime status snapshot and example payload block.
+
+### 中文
+
+#### Changed
+- 精简 `lm-tools://guide`,使其仅返回 guide 正文,并移除内嵌的运行时状态快照和示例 payload 区块.
+
 ## [1.0.149] - 2026-04-08
 
 ### English

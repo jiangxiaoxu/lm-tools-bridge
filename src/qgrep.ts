@@ -28,14 +28,28 @@ import {
   parseOptionalContextLineCount,
   type ParsedOptionalContextLineCount,
 } from './qgrepOutput';
+import {
+  advanceQgrepRecoveryAfterRecoverableUpdateFailure,
+  beginQgrepExplicitRecovery,
+  createEmptyQgrepRecoveryState,
+  finalizeSuccessfulQgrepIndexProgress,
+  hasQueuedQgrepAutoUpdate,
+  isQgrepRecoveryActive,
+  isQgrepWorkspaceReadyForToolSearch,
+  markQgrepRecoveryDegraded,
+  type QgrepRecoveryPhase,
+  resetQgrepRecoveryState,
+  restoreQgrepAutoUpdateQueueAfterFailure,
+} from './qgrepIndexingState';
 
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
 const WATCH_RESTART_DELAY_MS = 1000;
 const AUTO_UPDATE_DEBOUNCE_MS = 2000;
 const SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS = 500;
-const TOOL_SEARCH_READY_TIMEOUT_MS = 150_000;
+const TOOL_SEARCH_READY_TIMEOUT_MS = 110_000;
 const TOOL_SEARCH_READY_POLL_INTERVAL_MS = 200;
+const QGREP_RECOVERY_WARNING_PREFIX = 'Qgrep automatic recovery exhausted';
 const DEFAULT_MAX_RESULTS = 300;
 const MIN_MAX_RESULTS = 1;
 const QGREP_TEXT_MAX_RESULTS_LIMIT = 2000;
@@ -92,12 +106,18 @@ export interface QgrepWorkspaceStatus {
   workspaceName: string;
   initialized: boolean;
   watching: boolean;
+  ready: boolean;
   indexedFiles?: number;
   totalFiles?: number;
   remainingFiles?: number;
   progressPercent?: number;
   progressKnown: boolean;
   indexing: boolean;
+  recoveryPhase?: QgrepRecoveryPhase;
+  recoveryAttemptCount?: number;
+  fallbackRebuildPending?: boolean;
+  degraded?: boolean;
+  lastRecoverableError?: string;
 }
 
 export interface QgrepStatusSummary {
@@ -132,6 +152,12 @@ interface WorkspaceQgrepState {
   activeIndexCommandCancelledProcess?: ChildProcessWithoutNullStreams;
   startupRefreshPending: boolean;
   startupAutoRepairAttempted: boolean;
+  recoveryPhase: QgrepRecoveryPhase;
+  recoveryAttemptCount: number;
+  lastRecoverableError?: string;
+  warningShownForCurrentFailure: boolean;
+  watchWasRunningBeforeRebuild: boolean;
+  allowExplicitRecovery: boolean;
 }
 
 interface WorkspaceIndexProgress {
@@ -227,6 +253,23 @@ interface FilesQueryPlan {
 interface MaxResultsPayload {
   maxResultsApplied: number;
   maxResultsRequested?: number;
+}
+
+export class QgrepUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QgrepUnavailableError';
+  }
+}
+
+export function isQgrepUnavailableError(error: unknown): error is QgrepUnavailableError {
+  return error instanceof QgrepUnavailableError
+    || (
+      typeof error === 'object'
+      && error !== null
+      && 'name' in error
+      && (error as { name?: unknown }).name === 'QgrepUnavailableError'
+    );
 }
 
 class QgrepService implements vscode.Disposable {
@@ -365,6 +408,7 @@ class QgrepService implements vscode.Disposable {
         this.cancelWorkspaceIndexCommandForClear(state);
         await fs.promises.rm(state.qgrepDirPath, { recursive: true, force: true });
         this.resetWorkspaceProgress(state);
+        this.resetWorkspaceRecovery(state);
         this.setWorkspaceIndexing(state, false);
         processed += 1;
       } catch (error) {
@@ -546,6 +590,7 @@ class QgrepService implements vscode.Disposable {
       const progress = initialized
         ? state.progress
         : this.createEmptyProgress();
+      const ready = this.isWorkspaceReadyForToolSearch(state);
       if (initialized) {
         initializedWorkspaces += 1;
       }
@@ -556,12 +601,20 @@ class QgrepService implements vscode.Disposable {
         workspaceName: state.folder.name,
         initialized,
         watching,
+        ready,
         indexedFiles: progress.indexedFiles,
         totalFiles: progress.totalFiles,
         remainingFiles: progress.remainingFiles,
         progressPercent: progress.progressPercent,
         progressKnown: progress.progressKnown,
         indexing: progress.indexing,
+        ...(isQgrepRecoveryActive(state) ? {
+          recoveryPhase: state.recoveryPhase,
+          recoveryAttemptCount: state.recoveryAttemptCount,
+          fallbackRebuildPending: state.recoveryPhase === 'fallback-rebuild',
+          degraded: state.recoveryPhase === 'degraded',
+          ...(state.lastRecoverableError ? { lastRecoverableError: state.lastRecoverableError } : {}),
+        } : {}),
       });
     }
 
@@ -608,6 +661,104 @@ class QgrepService implements vscode.Disposable {
     this.notifyStatusChanged();
   }
 
+  private resetWorkspaceRecovery(state: WorkspaceQgrepState): void {
+    const nextState = resetQgrepRecoveryState(state);
+    state.recoveryPhase = nextState.recoveryPhase;
+    state.recoveryAttemptCount = nextState.recoveryAttemptCount;
+    state.lastRecoverableError = nextState.lastRecoverableError;
+    state.warningShownForCurrentFailure = nextState.warningShownForCurrentFailure;
+    state.watchWasRunningBeforeRebuild = nextState.watchWasRunningBeforeRebuild;
+    state.allowExplicitRecovery = nextState.allowExplicitRecovery;
+  }
+
+  private isWorkspaceAbnormal(state: WorkspaceQgrepState): boolean {
+    return !this.isWorkspaceReadyForToolSearch(state);
+  }
+
+  private isWorkspaceRecoveryDegraded(state: WorkspaceQgrepState): boolean {
+    return state.recoveryPhase === 'degraded';
+  }
+
+  private applyWorkspaceDegradedState(
+    state: WorkspaceQgrepState,
+    errorSummary: string,
+    allowExplicitRecovery: boolean,
+  ): void {
+    const nextState = markQgrepRecoveryDegraded(state, errorSummary, allowExplicitRecovery);
+    state.recoveryPhase = nextState.recoveryPhase;
+    state.recoveryAttemptCount = nextState.recoveryAttemptCount;
+    state.lastRecoverableError = nextState.lastRecoverableError;
+    state.warningShownForCurrentFailure = nextState.warningShownForCurrentFailure;
+    state.watchWasRunningBeforeRebuild = nextState.watchWasRunningBeforeRebuild;
+    state.allowExplicitRecovery = nextState.allowExplicitRecovery;
+    this.notifyStatusChanged();
+    this.maybeShowRecoveryWarning(state);
+  }
+
+  private maybeShowRecoveryWarning(state: WorkspaceQgrepState): void {
+    if (state.warningShownForCurrentFailure || !state.lastRecoverableError) {
+      return;
+    }
+    state.warningShownForCurrentFailure = true;
+    const message =
+      `${QGREP_RECOVERY_WARNING_PREFIX} for workspace '${state.folder.name}'. `
+      + `${state.lastRecoverableError} Run "LM Tools Bridge: Qgrep Rebuild Indexes" if the issue persists.`;
+    qgrepLogger.warn(`[qgrep.recovery:${state.folder.name}] ${message}`);
+    void vscode.window.showWarningMessage(message);
+  }
+
+  private classifyRecoveryFailure(error: unknown, phase: 'update' | 'rebuild' | 'init-update'): 'recoverable' | 'nonrecoverable' {
+    const message = String(error).toLowerCase();
+    if (
+      message.includes('disposed')
+      || message.includes('no longer available')
+      || message.includes('qgrep binary is not available')
+      || message.includes('failed to read qgrep config')
+      || message.includes('failed to write qgrep config')
+      || message.includes('init failed for workspace')
+    ) {
+      return 'nonrecoverable';
+    }
+    if (phase === 'rebuild') {
+      return 'recoverable';
+    }
+    return 'recoverable';
+  }
+
+  private beginRecoverableUpdateRetry(state: WorkspaceQgrepState, errorSummary: string): number {
+    const decision = advanceQgrepRecoveryAfterRecoverableUpdateFailure(state, errorSummary);
+    state.recoveryPhase = decision.nextState.recoveryPhase;
+    state.recoveryAttemptCount = decision.nextState.recoveryAttemptCount;
+    state.lastRecoverableError = decision.nextState.lastRecoverableError;
+    state.warningShownForCurrentFailure = decision.nextState.warningShownForCurrentFailure;
+    state.watchWasRunningBeforeRebuild = decision.nextState.watchWasRunningBeforeRebuild;
+    state.allowExplicitRecovery = decision.nextState.allowExplicitRecovery;
+    this.notifyStatusChanged();
+    return decision.delayMs;
+  }
+
+  private restartDegradedWorkspaceRecovery(state: WorkspaceQgrepState): void {
+    const nextState = beginQgrepExplicitRecovery(state);
+    state.recoveryPhase = nextState.recoveryPhase;
+    state.recoveryAttemptCount = nextState.recoveryAttemptCount;
+    state.lastRecoverableError = nextState.lastRecoverableError;
+    state.warningShownForCurrentFailure = nextState.warningShownForCurrentFailure;
+    state.watchWasRunningBeforeRebuild = nextState.watchWasRunningBeforeRebuild;
+    state.allowExplicitRecovery = nextState.allowExplicitRecovery;
+    state.autoUpdateDirty = true;
+    qgrepLogger.info(`[qgrep.recovery:${state.folder.name}] restarting degraded recovery on explicit trigger`);
+    this.notifyStatusChanged();
+  }
+
+  private buildRecoveryErrorMessage(state: WorkspaceQgrepState): string {
+    const detail = state.lastRecoverableError ?? 'Qgrep recovery is blocked by a non-recoverable error.';
+    return `workspace '${state.folder.name}' is degraded after recovery failed. ${detail}`;
+  }
+
+  private buildQgrepUnavailableError(state: WorkspaceQgrepState): QgrepUnavailableError {
+    return new QgrepUnavailableError(this.buildRecoveryErrorMessage(state));
+  }
+
   private queueStartupRefreshForInitializedWorkspaces(): void {
     const initializedStates = [...this.states.values()].filter((state) => this.isWorkspaceInitialized(state));
     if (initializedStates.length === 0) {
@@ -631,6 +782,15 @@ class QgrepService implements vscode.Disposable {
     state.autoUpdateDirty = true;
     qgrepLogger.info(`[qgrep.startup-update:${state.folder.name}] queued startup refresh`);
     this.scheduleWorkspaceAutoUpdate(state, 0);
+  }
+
+  private hasQueuedWorkspaceAutoUpdate(state: WorkspaceQgrepState): boolean {
+    return hasQueuedQgrepAutoUpdate({
+      startupRefreshPending: state.startupRefreshPending,
+      autoUpdateDirty: state.autoUpdateDirty,
+      managedSearchExcludeDirty: state.managedSearchExcludeDirty,
+      pendingCreateDeleteCount: state.pendingCreateDeleteCount,
+    });
   }
 
   private markWorkspaceIndexingFailed(state: WorkspaceQgrepState): void {
@@ -1020,9 +1180,32 @@ class QgrepService implements vscode.Disposable {
       if (this.states.get(state.key) !== state) {
         throw new Error(`Workspace '${state.folder.name}' is no longer available.`);
       }
+      if (this.isWorkspaceRecoveryDegraded(state)) {
+        throw this.buildQgrepUnavailableError(state);
+      }
 
       if (!this.isWorkspaceInitialized(state)) {
-        await this.initWorkspace(state);
+        try {
+          await this.initWorkspace(state);
+        } catch (error) {
+          if (this.isWorkspaceRecoveryDegraded(state) || isQgrepUnavailableError(error)) {
+            throw this.buildQgrepUnavailableError(state);
+          }
+          if (this.hasQueuedWorkspaceAutoUpdate(state) || isQgrepRecoveryActive(state)) {
+            qgrepLogger.warn(`[qgrep.ready:${state.folder.name}] init failed but recovery is queued: ${String(error)}`);
+            continue;
+          }
+          throw error;
+        }
+        continue;
+      }
+      if (
+        (this.hasQueuedWorkspaceAutoUpdate(state) || isQgrepRecoveryActive(state))
+        && !state.autoUpdateInFlight
+        && !state.progress.indexing
+        && state.pendingIndexOperationCount === 0
+      ) {
+        await this.runQueuedWorkspaceAutoUpdate(state);
         continue;
       }
       if (this.isWorkspaceReadyForToolSearch(state)) {
@@ -1034,23 +1217,22 @@ class QgrepService implements vscode.Disposable {
   }
 
   private isWorkspaceReadyForToolSearch(state: WorkspaceQgrepState): boolean {
-    if (!this.isWorkspaceInitialized(state)) {
-      return false;
-    }
-    if (state.pendingIndexOperationCount > 0) {
-      return false;
-    }
-    if (state.autoUpdateInFlight) {
-      return false;
-    }
-    if (state.progress.indexing) {
-      return false;
-    }
-    if (state.progress.progressKnown) {
-      const percent = state.progress.progressPercent ?? 0;
-      return percent >= 100;
-    }
-    return true;
+    return isQgrepWorkspaceReadyForToolSearch({
+      initialized: this.isWorkspaceInitialized(state),
+      pendingIndexOperationCount: state.pendingIndexOperationCount,
+      autoUpdateInFlight: state.autoUpdateInFlight,
+      startupRefreshPending: state.startupRefreshPending,
+      autoUpdateDirty: state.autoUpdateDirty,
+      managedSearchExcludeDirty: state.managedSearchExcludeDirty,
+      pendingCreateDeleteCount: state.pendingCreateDeleteCount,
+      recoveryPhase: state.recoveryPhase,
+      recoveryAttemptCount: state.recoveryAttemptCount,
+      lastRecoverableError: state.lastRecoverableError,
+      warningShownForCurrentFailure: state.warningShownForCurrentFailure,
+      watchWasRunningBeforeRebuild: state.watchWasRunningBeforeRebuild,
+      allowExplicitRecovery: state.allowExplicitRecovery,
+      progress: state.progress,
+    });
   }
 
   private async waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -1073,14 +1255,18 @@ class QgrepService implements vscode.Disposable {
 
   private buildToolSearchReadyTimeoutError(): Error {
     const waitingStates = [...this.states.values()].filter((state) => !this.isWorkspaceReadyForToolSearch(state));
-    const details = waitingStates.length > 0
-      ? waitingStates
-        .map((state) => `${state.folder.name}(${this.describeWorkspaceToolReadiness(state)})`)
-        .join('; ')
-      : 'unknown workspace state';
+    const details = waitingStates.length === 1
+      ? this.describeWorkspaceToolReadiness(waitingStates[0])
+      : waitingStates
+        .map((state) => state.folder.name)
+        .join(', ');
+    if (waitingStates.length === 1) {
+      return new Error(
+        `timed out after ${String(Math.floor(TOOL_SEARCH_READY_TIMEOUT_MS / 1000))}s while waiting for workspace '${waitingStates[0]!.folder.name}' to finish indexing (${details}).`,
+      );
+    }
     return new Error(
-      `Timed out after ${String(Math.floor(TOOL_SEARCH_READY_TIMEOUT_MS / 1000))}s waiting for qgrep indexing to become ready. `
-      + `Use lm_qgrepGetStatus to inspect progress. Pending: ${details}.`,
+      `timed out after ${String(Math.floor(TOOL_SEARCH_READY_TIMEOUT_MS / 1000))}s while waiting for workspaces to finish indexing (${details || 'unknown workspace state'}).`,
     );
   }
 
@@ -1089,6 +1275,11 @@ class QgrepService implements vscode.Disposable {
     parts.push(`initialized=${String(this.isWorkspaceInitialized(state))}`);
     parts.push(`pendingOps=${String(state.pendingIndexOperationCount)}`);
     parts.push(`autoUpdateInFlight=${String(state.autoUpdateInFlight)}`);
+    parts.push(`queuedAutoUpdate=${String(this.hasQueuedWorkspaceAutoUpdate(state))}`);
+    if (isQgrepRecoveryActive(state)) {
+      parts.push(`recoveryPhase=${state.recoveryPhase}`);
+      parts.push(`recoveryAttemptCount=${String(state.recoveryAttemptCount)}`);
+    }
     parts.push(`indexing=${String(state.progress.indexing)}`);
     parts.push(`progressKnown=${String(state.progress.progressKnown)}`);
     if (state.progress.progressPercent !== undefined) {
@@ -1659,6 +1850,7 @@ class QgrepService implements vscode.Disposable {
       restartOnExit: false,
       startupRefreshPending: false,
       startupAutoRepairAttempted: false,
+      ...createEmptyQgrepRecoveryState(),
     };
   }
 
@@ -1969,7 +2161,7 @@ class QgrepService implements vscode.Disposable {
     if (this.disposed || this.states.get(state.key) !== state) {
       return;
     }
-    if (!state.autoUpdateDirty && !state.managedSearchExcludeDirty) {
+    if (!state.autoUpdateDirty && !state.managedSearchExcludeDirty && !isQgrepRecoveryActive(state)) {
       return;
     }
     if (state.autoUpdateInFlight) {
@@ -1989,6 +2181,7 @@ class QgrepService implements vscode.Disposable {
     const queuedCount = state.pendingCreateDeleteCount;
     const shouldSyncManagedSearchExclude = state.managedSearchExcludeDirty;
     const isStartupRefreshRun = state.startupRefreshPending;
+    const recoveryPhase = state.recoveryPhase;
     state.startupRefreshPending = false;
     state.pendingCreateDeleteCount = 0;
     state.autoUpdateDirty = false;
@@ -2000,21 +2193,59 @@ class QgrepService implements vscode.Disposable {
     );
 
     try {
-      const outcome = await this.autoUpdateWorkspace(state, shouldSyncManagedSearchExclude);
-      if (outcome === 'done') {
-        qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update done`);
+      if (state.recoveryPhase === 'fallback-rebuild') {
+        qgrepLogger.warn(`[qgrep.recovery:${state.folder.name}] switching to fallback rebuild`);
+        state.watchWasRunningBeforeRebuild = state.watchProcess !== undefined;
+        await this.rebuildWorkspace(state);
+        this.resetWorkspaceRecovery(state);
+        qgrepLogger.info(`[qgrep.recovery:${state.folder.name}] fallback rebuild done`);
+      } else {
+        const outcome = await this.autoUpdateWorkspace(state, shouldSyncManagedSearchExclude);
+        if (outcome === 'done') {
+          this.resetWorkspaceRecovery(state);
+          qgrepLogger.info(`[qgrep.autoupdate:${state.folder.name}] update done`);
+        }
       }
     } catch (error) {
-      qgrepLogger.warn(`[qgrep.autoupdate:${state.folder.name}] update failed: ${String(error)}`);
-      if (isStartupRefreshRun) {
+      const errorSummary = String(error);
+      qgrepLogger.warn(`[qgrep.autoupdate:${state.folder.name}] update failed: ${errorSummary}`);
+      if (recoveryPhase === 'fallback-rebuild') {
+        const recoveryClass = this.classifyRecoveryFailure(error, 'rebuild');
+        this.applyWorkspaceDegradedState(state, errorSummary, recoveryClass === 'recoverable');
+        if (state.watchWasRunningBeforeRebuild && !this.disposed && this.isWorkspaceInitialized(state)) {
+          this.startWatch(state);
+        }
+        this.ensureAutoUpdateWatcher(state);
+      } else {
+        const restoredQueueState = restoreQgrepAutoUpdateQueueAfterFailure(
+          {
+            startupRefreshPending: state.startupRefreshPending,
+            autoUpdateDirty: state.autoUpdateDirty,
+            managedSearchExcludeDirty: state.managedSearchExcludeDirty,
+            pendingCreateDeleteCount: state.pendingCreateDeleteCount,
+          },
+          queuedCount,
+          shouldSyncManagedSearchExclude,
+          isStartupRefreshRun,
+        );
+        state.startupRefreshPending = restoredQueueState.startupRefreshPending;
+        state.autoUpdateDirty = restoredQueueState.autoUpdateDirty;
+        state.managedSearchExcludeDirty = restoredQueueState.managedSearchExcludeDirty;
+        state.pendingCreateDeleteCount = restoredQueueState.pendingCreateDeleteCount;
+        if (this.classifyRecoveryFailure(error, 'update') === 'recoverable') {
+          const delayMs = this.beginRecoverableUpdateRetry(state, errorSummary);
+          if (!this.disposed) {
+            this.scheduleWorkspaceAutoUpdate(state, delayMs);
+          }
+        } else {
+          this.applyWorkspaceDegradedState(state, errorSummary, false);
+        }
+      }
+      if (isStartupRefreshRun && recoveryPhase !== 'fallback-rebuild') {
         await this.tryStartupAutoRepair(state, error);
       }
     } finally {
       state.autoUpdateInFlight = false;
-    }
-
-    if ((state.autoUpdateDirty || state.managedSearchExcludeDirty) && !this.disposed) {
-      this.scheduleWorkspaceAutoUpdate(state, 0);
     }
   }
 
@@ -2052,6 +2283,7 @@ class QgrepService implements vscode.Disposable {
         if (updateError) {
           throw new Error(updateError);
         }
+        this.finalizeWorkspaceProgressAfterSuccessfulIndexCommand(state);
       } finally {
         this.setWorkspaceIndexing(state, false);
         if (!this.disposed && this.isWorkspaceInitialized(state)) {
@@ -2327,11 +2559,23 @@ class QgrepService implements vscode.Disposable {
       if (updateError) {
         throw new Error(updateError);
       }
+      this.finalizeWorkspaceProgressAfterSuccessfulIndexCommand(state);
+      this.resetWorkspaceRecovery(state);
 
       this.stopWatch(state);
       this.startWatch(state);
       this.ensureAutoUpdateWatcher(state);
     } catch (error) {
+      const recoveryClass = this.classifyRecoveryFailure(error, 'init-update');
+      if (this.isWorkspaceInitialized(state) && recoveryClass === 'recoverable') {
+        state.autoUpdateDirty = true;
+        const delayMs = this.beginRecoverableUpdateRetry(state, String(error));
+        if (!this.disposed) {
+          this.scheduleWorkspaceAutoUpdate(state, delayMs);
+        }
+      } else {
+        this.applyWorkspaceDegradedState(state, String(error), false);
+      }
       this.markWorkspaceIndexingFailed(state);
       throw error;
     } finally {
@@ -2348,6 +2592,7 @@ class QgrepService implements vscode.Disposable {
   private async rebuildWorkspaceInternal(state: WorkspaceQgrepState): Promise<void> {
     this.requireBinaryPath();
     await fs.promises.mkdir(state.qgrepDirPath, { recursive: true });
+    state.watchWasRunningBeforeRebuild = state.watchProcess !== undefined;
     this.stopWatch(state);
     this.setWorkspaceIndexing(state, true);
 
@@ -2387,10 +2632,15 @@ class QgrepService implements vscode.Disposable {
       if (buildError) {
         throw new Error(buildError);
       }
+      this.finalizeWorkspaceProgressAfterSuccessfulIndexCommand(state);
+      this.resetWorkspaceRecovery(state);
 
       this.startWatch(state);
       this.ensureAutoUpdateWatcher(state);
     } catch (error) {
+      if (state.watchWasRunningBeforeRebuild && !this.disposed && this.isWorkspaceInitialized(state)) {
+        this.startWatch(state);
+      }
       this.markWorkspaceIndexingFailed(state);
       throw error;
     } finally {
@@ -2398,9 +2648,18 @@ class QgrepService implements vscode.Disposable {
     }
   }
 
+  private finalizeWorkspaceProgressAfterSuccessfulIndexCommand(state: WorkspaceQgrepState): void {
+    const nextProgress = finalizeSuccessfulQgrepIndexProgress(state.progress);
+    if (nextProgress === state.progress) {
+      return;
+    }
+    state.progress = nextProgress;
+    this.notifyStatusChanged();
+  }
+
   private requireBinaryPath(): string {
     if (!fs.existsSync(this.binaryPath)) {
-      throw new Error(`qgrep binary is not available at ${this.binaryPath}.`);
+      throw new QgrepUnavailableError(`binary is missing at ${this.binaryPath}.`);
     }
     return this.binaryPath;
   }
@@ -2595,6 +2854,7 @@ export function getQgrepStatusSummary(): QgrepStatusSummary {
         workspaceName: folder.name,
         initialized: false,
         watching: false,
+        ready: false,
         progressKnown: false,
         indexing: false,
       };

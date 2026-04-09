@@ -23,6 +23,7 @@ import {
   executeQgrepFilesSearch,
   executeQgrepSearch,
   getQgrepStatusSummary,
+  isQgrepUnavailableError,
   type QgrepStatusSummary,
 } from './qgrep';
 import {
@@ -70,6 +71,34 @@ type ToolingLogger = {
   error: (message: string) => void;
 };
 
+const QGREP_QUERY_TOOL_NAMES = new Set<string>([
+  'lm_qgrepSearchText',
+  'lm_qgrepSearchFiles',
+]);
+
+const QGREP_INVALID_PARAMS_PATTERNS: readonly RegExp[] = [
+  /\bquery must\b/u,
+  /\bpathScope\b/u,
+  /\bmaxResults must\b/u,
+  /\bquerySyntax\b/u,
+  /\bsearchPath is no longer supported\b/u,
+  /\bincludeIgnoredFiles\b/u,
+  /\bisRegexp is no longer supported\b/u,
+  /\bmode is no longer supported\b/u,
+  /\bgenerated qgrep regex is not supported\b/u,
+  /\bInvalid pathScope glob pattern\b/u,
+  /\bworkspaceFolder\b/u,
+];
+
+const QGREP_UNAVAILABLE_PREFIX_PATTERNS: readonly RegExp[] = [
+  /^Qgrep unavailable:\s*/iu,
+  /^Qgrep is unavailable(?: because)?\s*/iu,
+];
+
+const QGREP_TIMEOUT_PREFIX_PATTERNS: readonly RegExp[] = [
+  /^Qgrep indexing timeout:\s*/iu,
+];
+
 let toolingLogger: ToolingLogger = {
   info: (message: string) => console.info(message),
   warn: (message: string) => console.warn(message),
@@ -78,6 +107,74 @@ let toolingLogger: ToolingLogger = {
 
 export function setToolingLogger(logger: ToolingLogger): void {
   toolingLogger = logger;
+}
+
+function isQgrepQueryToolName(toolName: string): boolean {
+  return QGREP_QUERY_TOOL_NAMES.has(toolName);
+}
+
+function isQgrepInvalidParamsError(error: unknown): boolean {
+  const message = getQgrepToolErrorMessage(error);
+  return QGREP_INVALID_PARAMS_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function isQgrepTimeoutError(error: unknown): boolean {
+  return /\btimed out after\b/iu.test(getQgrepToolErrorMessage(error));
+}
+
+function getQgrepToolErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function stripLeadingPatterns(text: string, patterns: readonly RegExp[]): string {
+  let normalized = text.trim();
+  for (const pattern of patterns) {
+    normalized = normalized.replace(pattern, '');
+  }
+  return normalized.trim();
+}
+
+function normalizeQgrepInvalidParamsReason(error: unknown): string {
+  return getQgrepToolErrorMessage(error).trim();
+}
+
+function normalizeQgrepUnavailableReason(error: unknown): string {
+  return stripLeadingPatterns(getQgrepToolErrorMessage(error), QGREP_UNAVAILABLE_PREFIX_PATTERNS);
+}
+
+function normalizeQgrepTimeoutReason(error: unknown): string {
+  return stripLeadingPatterns(getQgrepToolErrorMessage(error), QGREP_TIMEOUT_PREFIX_PATTERNS);
+}
+
+function formatQgrepInvalidParamsMessage(error: unknown): string {
+  return `Invalid qgrep query: ${normalizeQgrepInvalidParamsReason(error)}`;
+}
+
+function formatQgrepUnavailableMessage(error: unknown): string {
+  return `Qgrep unavailable: ${normalizeQgrepUnavailableReason(error)}`;
+}
+
+function formatQgrepTimeoutMessage(error: unknown): string {
+  return `Qgrep indexing timeout: ${normalizeQgrepTimeoutReason(error)}`;
+}
+
+export function mapQgrepToolErrorToMcpError(toolName: string, error: unknown): McpError | undefined {
+  if (!isQgrepQueryToolName(toolName)) {
+    return undefined;
+  }
+  if (isQgrepUnavailableError(error)) {
+    return new McpError(ErrorCode.InternalError, formatQgrepUnavailableMessage(error));
+  }
+  if (isQgrepTimeoutError(error)) {
+    return new McpError(ErrorCode.InternalError, formatQgrepTimeoutMessage(error));
+  }
+  if (isQgrepInvalidParamsError(error)) {
+    return new McpError(ErrorCode.InvalidParams, formatQgrepInvalidParamsMessage(error));
+  }
+  return undefined;
 }
 
 const CONFIG_ENABLED_TOOLS = 'tools.enabledDelta';
@@ -2560,7 +2657,16 @@ async function runDebugStartTool(input: Record<string, unknown>): Promise<vscode
 }
 
 async function runQgrepSearchTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
-  const payload = await executeQgrepSearch(input);
+  let payload: Record<string, unknown>;
+  try {
+    payload = await executeQgrepSearch(input);
+  } catch (error) {
+    const mappedError = mapQgrepToolErrorToMcpError('lm_qgrepSearchText', error);
+    if (mappedError) {
+      throw mappedError;
+    }
+    throw error;
+  }
   const textOutput = await formatQgrepSearchSummary(payload);
   return buildCustomTextToolResult(textOutput);
 }
@@ -2572,7 +2678,16 @@ async function runQgrepGetStatusTool(_input: Record<string, unknown>): Promise<v
 }
 
 async function runQgrepFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
-  const payload = await executeQgrepFilesSearch(input);
+  let payload: Record<string, unknown>;
+  try {
+    payload = await executeQgrepFilesSearch(input);
+  } catch (error) {
+    const mappedError = mapQgrepToolErrorToMcpError('lm_qgrepSearchFiles', error);
+    if (mappedError) {
+      throw mappedError;
+    }
+    throw error;
+  }
   return buildCustomTextToolResult(formatQgrepFilesSummary(payload));
 }
 
@@ -3248,7 +3363,7 @@ function buildQgrepGetStatusPayload(status: QgrepStatusSummary): Record<string, 
   };
 }
 
-function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
+export function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
   const binaryAvailable = payload.binaryAvailable === true;
   const binaryPath = typeof payload.binaryPath === 'string' && payload.binaryPath.length > 0
     ? payload.binaryPath
@@ -3308,29 +3423,73 @@ function formatQgrepGetStatusSummary(payload: Record<string, unknown>): string {
     }
     const record = entry as Record<string, unknown>;
     const workspaceName = typeof record.workspaceName === 'string' ? record.workspaceName : '<unknown>';
+    const ready = record.ready === true;
     const initialized = record.initialized === true;
     const watching = record.watching === true;
     const indexing = record.indexing === true;
     const progressKnown = record.progressKnown === true;
     const indexedFiles = typeof record.indexedFiles === 'number' ? record.indexedFiles : undefined;
     const totalFiles = typeof record.totalFiles === 'number' ? record.totalFiles : undefined;
+    const recoveryPhase = typeof record.recoveryPhase === 'string' ? record.recoveryPhase : undefined;
+    const recoveryAttemptCount = typeof record.recoveryAttemptCount === 'number'
+      ? record.recoveryAttemptCount
+      : undefined;
+    const fallbackRebuildPending = record.fallbackRebuildPending === true;
+    const degraded = record.degraded === true;
+    const lastRecoverableError = typeof record.lastRecoverableError === 'string'
+      ? record.lastRecoverableError
+      : undefined;
     const percent = typeof record.progressPercent === 'number' ? record.progressPercent : undefined;
     lines.push('---');
+    let summary = `${workspaceName}: `;
     if (!initialized) {
-      lines.push(`${workspaceName}: not initialized`);
+      summary += 'not initialized';
+    } else if (ready) {
+      summary += `ready, watching=${watching}`;
+    } else if (recoveryPhase === 'fallback-rebuild') {
+      summary += `fallback rebuild pending, watching=${watching}`;
+    } else if (recoveryPhase === 'retry-update') {
+      summary += `retrying update, watching=${watching}`;
+    } else if (degraded) {
+      summary += `degraded, watching=${watching}`;
+    } else if (indexing) {
+      if (progressKnown && indexedFiles !== undefined && totalFiles !== undefined) {
+        summary += `indexing ${indexedFiles}/${totalFiles} (${percent ?? 0}%), watching=${watching}`;
+      } else if (percent !== undefined) {
+        summary += `indexing --/-- (${percent}%), watching=${watching}`;
+      } else {
+        summary += `indexing, watching=${watching}`;
+      }
+    } else {
+      summary += `pending, watching=${watching}`;
+    }
+    lines.push(summary);
+
+    if (ready) {
       continue;
     }
-    if (progressKnown && indexedFiles !== undefined && totalFiles !== undefined) {
+
+    if (!initialized) {
+      lines.push('detail: progress=not initialized');
+    } else {
+      if (progressKnown && indexedFiles !== undefined && totalFiles !== undefined) {
+        lines.push(`detail: progress=${indexedFiles}/${totalFiles} (${percent ?? 0}%)`);
+      } else if (percent !== undefined) {
+        lines.push(`detail: progress=--/-- (${percent}%)`);
+      } else {
+        lines.push('detail: progress=--/-- (--%)');
+      }
+    }
+
+    if (recoveryPhase) {
+      const retryBudgetText = recoveryAttemptCount !== undefined ? `${recoveryAttemptCount}/2` : '--/2';
       lines.push(
-        `${workspaceName}: ${indexedFiles}/${totalFiles} (${percent ?? 0}%), watching=${watching}, indexing=${indexing}`,
+        `detail: recoveryPhase=${recoveryPhase}, attempts=${retryBudgetText}, fallbackRebuildPending=${fallbackRebuildPending}, degraded=${degraded}`,
       );
-      continue;
     }
-    if (percent !== undefined) {
-      lines.push(`${workspaceName}: --/-- (${percent}%), watching=${watching}, indexing=${indexing}`);
-      continue;
+    if (lastRecoverableError) {
+      lines.push(`detail: error=${lastRecoverableError}`);
     }
-    lines.push(`${workspaceName}: --/-- (--%), watching=${watching}, indexing=${indexing}`);
   }
   return lines.join('\n');
 }
@@ -4122,6 +4281,12 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     }
     const input = args ?? {};
     if (!isPlainObject(input)) {
+      if (isQgrepQueryToolName(tool.name)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          formatQgrepInvalidParamsMessage('tool input must be an object. Use lm-tools://tool/{name} for the expected shape.'),
+        );
+      }
       return toolErrorResultPayload({
         error: 'Tool input must be an object. Use lm-tools://tool/{name} for the expected shape.',
         name: tool.name,

@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.153] - 2026-04-09
+
+### English
+
+#### Changed
+- Hardened qgrep indexing recovery with bounded retries, fallback rebuilds, and degraded-state handling so query tools either wait through recoverable indexing states or fail fast when qgrep is unavailable.
+- Normalized qgrep query failures to MCP errors with fixed message templates for invalid input, unavailable states, and indexing timeouts.
+- Reduced qgrep query readiness timeout from `150s` to `110s`.
+
+### 中文
+
+#### 变更
+- 加强了 qgrep 索引恢复链路,增加有界重试、fallback rebuild 与 degraded 状态处理,使查询工具在可恢复索引阶段继续等待,在 qgrep 明确不可用时快速失败.
+- 将 qgrep 查询失败统一为 MCP 错误,并为参数错误、不可用状态和索引超时使用固定消息模板.
+- 将 qgrep 查询就绪等待超时从 `150s` 缩短为 `110s`.
+
 ## [1.0.152] - 2026-04-09
 
 ### English

@@ -140,3 +140,136 @@ test('lm_formatFiles is exposed with required shared pathScope schema', async ()
   assert.match(schema.properties?.pathScope?.description ?? '', /lm-tools:\/\/spec\/pathScope/u);
   assert.equal(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax']?.uri, 'lm-tools://spec/pathScope');
 });
+
+test('mapQgrepToolErrorToMcpError maps qgrep invalid input errors to InvalidParams', async () => {
+  const { mapQgrepToolErrorToMcpError } = await loadToolingModule();
+  const error = mapQgrepToolErrorToMcpError('lm_qgrepSearchText', new Error('query must be a non-empty string.'));
+
+  assert.ok(error);
+  assert.equal(error?.code, -32602);
+  assert.equal(error?.message, 'MCP error -32602: Invalid qgrep query: query must be a non-empty string.');
+});
+
+test('mapQgrepToolErrorToMcpError maps unavailable qgrep errors to InternalError', async () => {
+  const { mapQgrepToolErrorToMcpError } = await loadToolingModule();
+  const unavailable = new Error('Qgrep is unavailable because the binary is missing at C:/bin/qgrep.exe.');
+  Object.defineProperty(unavailable, 'name', {
+    value: 'QgrepUnavailableError',
+  });
+  const error = mapQgrepToolErrorToMcpError('lm_qgrepSearchFiles', unavailable);
+
+  assert.ok(error);
+  assert.equal(error?.code, -32603);
+  assert.equal(error?.message, 'MCP error -32603: Qgrep unavailable: the binary is missing at C:/bin/qgrep.exe.');
+});
+
+test('mapQgrepToolErrorToMcpError maps qgrep indexing timeouts to InternalError', async () => {
+  const { mapQgrepToolErrorToMcpError } = await loadToolingModule();
+  const timeout = new Error("timed out after 110s while waiting for workspace 'Foo' to finish indexing (indexing; progress 87%).");
+  const error = mapQgrepToolErrorToMcpError('lm_qgrepSearchText', timeout);
+
+  assert.ok(error);
+  assert.equal(error?.code, -32603);
+  assert.equal(
+    error?.message,
+    "MCP error -32603: Qgrep indexing timeout: timed out after 110s while waiting for workspace 'Foo' to finish indexing (indexing; progress 87%).",
+  );
+});
+
+test('mapQgrepToolErrorToMcpError ignores non-qgrep tools', async () => {
+  const { mapQgrepToolErrorToMcpError } = await loadToolingModule();
+  const error = mapQgrepToolErrorToMcpError('lm_getDiagnostics', new Error('query must be a non-empty string.'));
+
+  assert.equal(error, undefined);
+});
+
+test('formatQgrepGetStatusSummary keeps ready workspaces concise', async () => {
+  const { formatQgrepGetStatusSummary } = await loadToolingModule();
+  const text = formatQgrepGetStatusSummary({
+    binaryAvailable: true,
+    binaryPath: 'C:/bin/qgrep.exe',
+    totalWorkspaces: 1,
+    initializedWorkspaces: 1,
+    watchingWorkspaces: 1,
+    aggregate: {
+      filesKnown: true,
+      indexedFiles: 10,
+      totalFiles: 10,
+      remainingFiles: 0,
+      percent: 100,
+    },
+    autoInitialization: {
+      hintActive: false,
+    },
+    workspaceStatuses: [
+      {
+        workspaceName: 'WorkspaceA',
+        initialized: true,
+        watching: true,
+        ready: true,
+        progressKnown: true,
+        indexing: false,
+        indexedFiles: 10,
+        totalFiles: 10,
+        progressPercent: 100,
+      },
+    ],
+  });
+
+  assert.match(text, /WorkspaceA: ready, watching=true/u);
+  assert.doesNotMatch(text, /detail: recoveryPhase=/u);
+  assert.doesNotMatch(text, /detail: error=/u);
+});
+
+test('formatQgrepGetStatusSummary expands non-ready workspaces with recovery details only', async () => {
+  const { formatQgrepGetStatusSummary } = await loadToolingModule();
+  const text = formatQgrepGetStatusSummary({
+    binaryAvailable: true,
+    binaryPath: 'C:/bin/qgrep.exe',
+    totalWorkspaces: 2,
+    initializedWorkspaces: 2,
+    watchingWorkspaces: 1,
+    aggregate: {
+      filesKnown: false,
+      percent: 88,
+    },
+    autoInitialization: {
+      hintActive: false,
+    },
+    workspaceStatuses: [
+      {
+        workspaceName: 'Healthy',
+        initialized: true,
+        watching: true,
+        ready: true,
+        progressKnown: true,
+        indexing: false,
+        indexedFiles: 10,
+        totalFiles: 10,
+        progressPercent: 100,
+      },
+      {
+        workspaceName: 'Recovering',
+        initialized: true,
+        watching: false,
+        ready: false,
+        progressKnown: true,
+        indexing: false,
+        indexedFiles: 8,
+        totalFiles: 10,
+        progressPercent: 80,
+        recoveryPhase: 'retry-update',
+        recoveryAttemptCount: 1,
+        fallbackRebuildPending: false,
+        degraded: false,
+        lastRecoverableError: 'Update failed for workspace',
+      },
+    ],
+  });
+
+  assert.match(text, /Healthy: ready, watching=true/u);
+  assert.match(text, /Recovering: retrying update, watching=false/u);
+  assert.match(text, /detail: progress=8\/10 \(80%\)/u);
+  assert.match(text, /detail: recoveryPhase=retry-update, attempts=1\/2, fallbackRebuildPending=false, degraded=false/u);
+  assert.match(text, /detail: error=Update failed for workspace/u);
+});

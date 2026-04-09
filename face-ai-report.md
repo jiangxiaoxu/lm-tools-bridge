@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.150`.
+- Version baseline: `1.0.151`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -15,8 +15,9 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
-- Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and is referenced by `lm_findTextInFiles.pathScope`, `lm_qgrepSearchText.pathScope`, and `lm_getDiagnostics.pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
+- Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and is referenced by `lm_findTextInFiles.pathScope`, `lm_qgrepSearchText.pathScope`, `lm_getDiagnostics.pathScope`, and `lm_formatFiles.pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
 - `lm_getDiagnostics.pathScope` uses the shared syntax above, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
+- `lm_formatFiles` is default exposed but not default enabled, requires `pathScope`, formats matched workspace files with `vscode.executeFormatDocumentProvider`, applies edits headlessly, saves changed files, returns summary counts plus `failures` and `skippedEntries`, and treats zero returned edits as `unchanged`.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
 - `lm_findFiles.query` always uses glob semantics and rejects bare `|` alternation with guidance to use brace globs such as `{A,B}`.
@@ -176,6 +177,7 @@
 - qgrep index lifecycle/commands/search backend/status snapshot -> `src/qgrep.ts`, `src/extension.ts`.
 - Handshake/session routing -> `src/stdioManager.ts`, `src/workspaceDiscovery.ts`, `src/managerHandshake.ts`.
 - Diagnostics contract -> `src/tooling.ts`, `src/diagnosticsPathScope.ts`.
+- Format tool contract/pathScope enumeration -> `src/tooling.ts`, `src/pathScope.ts`, `src/pathScopeSpec.ts`.
 - Server/qgrep status bar behavior -> `src/extension.ts`.
 - Version bump only -> `CHANGELOG.md`.
 
@@ -194,6 +196,7 @@
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
 - qgrep-status-ui: verify server status and qgrep status render as separate status bar items, and qgrep tooltip shows per-workspace `A/B` lines.
 - qgrep-failure: verify `lm_qgrepSearchText` outside-workspace `pathScope` returns expected error, literal text queries support top-level `|`, exact whitespace-preserving branches, whitespace-only intermediate branch dropping, whole-branch outer double quotes, malformed-quote ordinary-character handling, unquoted `\|`, and empty-branch raw-literal fallback, explicit `querySyntax='glob'` for text search is rejected, `lm_findFiles.query` rejects bare `|` alternation, legacy `searchPath`/`includeIgnoredFiles` on text search are ignored, `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp` while ignoring `includeIgnoredFiles`, no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately, and file-search summaries keep `count/totalAvailable/capped/hardLimitHit/maxResultsApplied` self-consistent.
+- format-files: verify `lm_formatFiles` requires `pathScope`, rejects outside-workspace scopes, respects workspace `files.exclude` plus `search.exclude`, formats and saves changed files headlessly, returns `matched/formatted/unchanged/skipped/failed`, and keeps `content.text` readable without double-serialized newlines.
 - qgrep-startup-repair: verify startup auto-update assertion signature (`Assertion failed` + `filter.cpp`/`entries.entries`) triggers one rebuild attempt per workspace per startup, and non-signature update failures do not trigger rebuild.
 - Docs: verify update triggers against `AGENTS.md`.
 

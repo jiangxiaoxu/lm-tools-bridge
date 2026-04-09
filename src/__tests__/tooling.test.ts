@@ -126,3 +126,17 @@ test('formatToolInfoText omits toolUri and usageHint lines', async () => {
   assert.doesNotMatch(text, /^toolUri:/mu);
   assert.doesNotMatch(text, /^usageHint:/mu);
 });
+
+test('lm_formatFiles is exposed with required shared pathScope schema', async () => {
+  const { getExposedToolsSnapshot } = await loadToolingModule();
+  const tool = getExposedToolsSnapshot().find((entry) => entry.name === 'lm_formatFiles');
+
+  assert.ok(tool);
+  const schema = tool.inputSchema as {
+    required?: unknown;
+    properties?: { pathScope?: { description?: string; ['x-lm-tools-bridge-sharedSyntax']?: { uri?: string } } };
+  };
+  assert.deepEqual(schema.required, ['pathScope']);
+  assert.match(schema.properties?.pathScope?.description ?? '', /lm-tools:\/\/spec\/pathScope/u);
+  assert.equal(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax']?.uri, 'lm-tools://spec/pathScope');
+});

@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.151] - 2026-04-09
+
+### English
+
+#### Added
+- Added `lm_formatFiles`, a pathScope-driven workspace formatting tool that applies document formatter edits headlessly, saves changed files, and reports summary, skipped, and failed file counts.
+
+#### Changed
+- Extended the shared `lm-tools://spec/pathScope` contract and docs to cover formatting targets alongside search and diagnostics.
+
+### 中文
+
+#### Added
+- 新增 `lm_formatFiles`,支持通过 `pathScope` 选择 workspace 文件并在后台执行 format、保存变更,同时返回汇总、跳过和失败文件统计.
+
+#### Changed
+- 扩展共享 `lm-tools://spec/pathScope` 契约及文档,使其除 search 和 diagnostics 外也适用于 formatting 目标选择.
+
 ## [1.0.150] - 2026-04-09
 
 ### English

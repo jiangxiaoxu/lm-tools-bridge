@@ -9,6 +9,12 @@ import {
   resolveDiagnosticsWorkspaceFile,
   type DiagnosticsWorkspaceFolder,
 } from './diagnosticsPathScope';
+import {
+  createPathScopeSearchPlan,
+  resolvePathScopeWorkspaceFile,
+  type PathScopeWorkspaceFile,
+  type PathScopeWorkspaceFolder,
+} from './pathScope';
 import { executeFindFilesSearch, executeFindTextInFilesSearch } from './searchTools';
 import { resolveStructuredPath } from './workspacePath';
 import { buildGroupedToolSections, type CompiledToolGroupingRule } from './toolGrouping';
@@ -41,6 +47,11 @@ import {
   buildPathScopeSchema,
   getPathScopeToolDescriptionSentence,
 } from './pathScopeSpec';
+import {
+  compileGlobToRegexSource,
+  getErrorMessage,
+  normalizeWorkspaceSearchGlobPattern,
+} from './qgrepGlob';
 import { parseOptionalPathScope } from './searchInput';
 import {
   buildLegacyToNormalizedToolNameMap,
@@ -83,6 +94,7 @@ const COPILOT_SEARCH_CODEBASE_TOOL_NAME = toNormalizedVsCodeToolName(COPILOT_SEA
 const COPILOT_SEARCH_CODEBASE_PLACEHOLDER_RESPONSE = 'Here are the full contents of the text files in my workspace:';
 const GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME = 'getVSCodeWorkspace';
 const LM_GET_DIAGNOSTICS_TOOL_NAME = 'lm_getDiagnostics';
+const LM_FORMAT_FILES_TOOL_NAME = 'lm_formatFiles';
 const LM_TASKS_RUN_BUILD_TOOL_NAME = 'lm_tasks_runBuild';
 const LM_TASKS_RUN_TEST_TOOL_NAME = 'lm_tasks_runTest';
 const LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME = 'lm_debug_listLaunchConfigs';
@@ -112,6 +124,7 @@ const DEFAULT_EXPOSED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_TOOL_NAMES,
   FIND_FILES_TOOL_NAME,
   FIND_TEXT_IN_FILES_TOOL_NAME,
+  LM_FORMAT_FILES_TOOL_NAME,
   LM_TASKS_RUN_BUILD_TOOL_NAME,
   LM_TASKS_RUN_TEST_TOOL_NAME,
   LM_DEBUG_LIST_LAUNCH_CONFIGS_TOOL_NAME,
@@ -296,6 +309,25 @@ const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
       minimum: LM_GET_DIAGNOSTICS_MIN_MAX_RESULTS,
     },
   },
+};
+
+const LM_FORMAT_FILES_DESCRIPTION = [
+  'Format workspace files selected by pathScope using the active VS Code document formatter.',
+  'This tool applies formatting edits and saves changed files.',
+  getPathScopeToolDescriptionSentence(),
+  'Selection uses workspace path and glob matching only; no separate include or exclude fields are supported.',
+  'Results include summary counts plus skipped and failed file details.',
+].join(' ');
+
+const LM_FORMAT_FILES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    pathScope: buildPathScopeSchema({
+      minLength: 1,
+      pattern: '\\S',
+    }),
+  },
+  required: ['pathScope'],
 };
 
 const LM_TASKS_RUN_BUILD_DESCRIPTION = [
@@ -515,6 +547,22 @@ interface LmGetDiagnosticsPayload {
   capped: boolean;
   totalDiagnostics: number;
   files: LmGetDiagnosticsFileResult[];
+}
+
+interface LmFormatFilesIssue {
+  path: string;
+  reason: string;
+}
+
+interface LmFormatFilesPayload {
+  pathScope: string;
+  matched: number;
+  formatted: number;
+  unchanged: number;
+  skipped: number;
+  failed: number;
+  failures: LmFormatFilesIssue[];
+  skippedEntries: LmFormatFilesIssue[];
 }
 
 type TaskToolKind = 'build' | 'test';
@@ -2068,6 +2116,17 @@ function buildGetDiagnosticsToolDefinition(): CustomToolDefinition {
   };
 }
 
+function buildFormatFilesToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_FORMAT_FILES_TOOL_NAME,
+    description: LM_FORMAT_FILES_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_FORMAT_FILES_SCHEMA,
+    isCustom: true,
+    invoke: runFormatFilesTool,
+  };
+}
+
 function buildTasksRunBuildToolDefinition(): CustomToolDefinition {
   return {
     name: LM_TASKS_RUN_BUILD_TOOL_NAME,
@@ -2210,8 +2269,229 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
   return buildCustomToolResult(summaryText, payload);
 }
 
+async function runFormatFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const pathScope = parseRequiredPathScope(input, LM_FORMAT_FILES_TOOL_NAME);
+  const targetFiles = await collectLmFormatFiles(pathScope);
+  const failures: LmFormatFilesIssue[] = [];
+  const skippedEntries: LmFormatFilesIssue[] = [];
+  let formatted = 0;
+  let unchanged = 0;
+
+  for (const absolutePath of targetFiles) {
+    const displayPath = toSummaryPathPreferWorkspace(absolutePath);
+    try {
+      const result = await formatSingleWorkspaceFile(absolutePath);
+      if (result.kind === 'formatted') {
+        formatted += 1;
+        continue;
+      }
+      if (result.kind === 'unchanged') {
+        unchanged += 1;
+        continue;
+      }
+      skippedEntries.push({
+        path: displayPath,
+        reason: result.reason,
+      });
+    } catch (error) {
+      failures.push({
+        path: displayPath,
+        reason: getErrorMessage(error),
+      });
+    }
+  }
+
+  const payload: LmFormatFilesPayload = {
+    pathScope,
+    matched: targetFiles.length,
+    formatted,
+    unchanged,
+    skipped: skippedEntries.length,
+    failed: failures.length,
+    failures,
+    skippedEntries,
+  };
+  return buildCustomToolResult(formatLmFormatFilesSummary(payload), payload);
+}
+
 async function runTasksRunBuildTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   return runTaskTool('build', input);
+}
+
+function parseRequiredPathScope(input: Record<string, unknown>, toolName: string): string {
+  const pathScope = parseOptionalPathScope(input);
+  if (typeof pathScope === 'string') {
+    return pathScope;
+  }
+  throw new Error(`${toolName} requires pathScope.`);
+}
+
+type LmFormatSingleFileResult =
+  | { kind: 'formatted' }
+  | { kind: 'unchanged' }
+  | { kind: 'skipped'; reason: string };
+
+async function formatSingleWorkspaceFile(absolutePath: string): Promise<LmFormatSingleFileResult> {
+  const uri = vscode.Uri.file(absolutePath);
+  let document: vscode.TextDocument;
+  try {
+    document = await vscode.workspace.openTextDocument(uri);
+  } catch (error) {
+    return {
+      kind: 'skipped',
+      reason: `Could not open text document: ${getErrorMessage(error)}`,
+    };
+  }
+
+  const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+    'vscode.executeFormatDocumentProvider',
+    document.uri,
+    buildDocumentFormattingOptions(document),
+  );
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return { kind: 'unchanged' };
+  }
+
+  const workspaceEdit = new vscode.WorkspaceEdit();
+  for (const edit of edits) {
+    workspaceEdit.replace(document.uri, edit.range, edit.newText);
+  }
+  const applied = await vscode.workspace.applyEdit(workspaceEdit);
+  if (!applied) {
+    throw new Error('VS Code refused to apply formatting edits.');
+  }
+  const saved = await document.save();
+  if (!saved) {
+    throw new Error('VS Code refused to save the formatted file.');
+  }
+  return { kind: 'formatted' };
+}
+
+function buildDocumentFormattingOptions(document: vscode.TextDocument): vscode.FormattingOptions {
+  const editorConfig = vscode.workspace.getConfiguration('editor', document.uri);
+  const configuredTabSize = editorConfig.get<unknown>('tabSize', 4);
+  const tabSize = typeof configuredTabSize === 'number' && Number.isFinite(configuredTabSize)
+    ? configuredTabSize
+    : 4;
+  const configuredInsertSpaces = editorConfig.get<boolean>('insertSpaces', true);
+  return {
+    tabSize,
+    insertSpaces: configuredInsertSpaces,
+  };
+}
+
+async function collectLmFormatFiles(pathScope: string): Promise<string[]> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const workspaceFolders: PathScopeWorkspaceFolder[] = folders.map((folder) => ({
+    name: folder.name,
+    rootPath: folder.uri.fsPath,
+  }));
+  const plan = createPathScopeSearchPlan(pathScope, workspaceFolders);
+  const folderByKey = new Map(
+    folders.map((folder) => [getWorkspaceNameKey(folder.name), folder]),
+  );
+  const excludeMatchers = buildLmFormatExcludeMatchers(folders);
+  const files = new Set<string>();
+
+  for (const target of plan.targets) {
+    const folder = folderByKey.get(getWorkspaceNameKey(target.workspaceName));
+    if (!folder) {
+      continue;
+    }
+    const includePattern = target.relativePattern && target.relativePattern.length > 0
+      ? target.relativePattern
+      : '**/*';
+    const matches = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, includePattern));
+    for (const match of matches) {
+      const absolutePath = path.resolve(match.fsPath);
+      const workspaceFile = resolvePathScopeWorkspaceFile(absolutePath, workspaceFolders);
+      if (!workspaceFile || !plan.matcher.matches(workspaceFile)) {
+        continue;
+      }
+      if (isExcludedFromLmFormat(workspaceFile, excludeMatchers)) {
+        continue;
+      }
+      files.add(absolutePath);
+    }
+  }
+
+  return [...files].sort((left, right) => left.localeCompare(right));
+}
+
+function getWorkspaceNameKey(name: string): string {
+  return process.platform === 'win32' ? name.toLowerCase() : name;
+}
+
+function buildLmFormatExcludeMatchers(
+  folders: readonly vscode.WorkspaceFolder[],
+): Map<string, RegExp[]> {
+  const result = new Map<string, RegExp[]>();
+  for (const folder of folders) {
+    const patterns = [
+      ...collectEnabledExcludeGlobs(getLmFormatExcludeConfig('files', folder)),
+      ...collectEnabledExcludeGlobs(getLmFormatExcludeConfig('search', folder)),
+    ];
+    const regexes = compileLmFormatExcludeRegexes(patterns);
+    if (regexes.length > 0) {
+      result.set(getWorkspaceNameKey(folder.name), regexes);
+    }
+  }
+  return result;
+}
+
+function getLmFormatExcludeConfig(
+  section: 'search' | 'files',
+  folder: vscode.WorkspaceFolder,
+): Record<string, unknown> {
+  const workspaceConfig = vscode.workspace.getConfiguration(section);
+  const workspaceExclude = workspaceConfig.get<Record<string, unknown>>('exclude', {});
+  const folderConfig = vscode.workspace.getConfiguration(section, folder.uri);
+  const folderExclude = folderConfig.get<Record<string, unknown>>('exclude', {});
+  return { ...workspaceExclude, ...folderExclude };
+}
+
+function collectEnabledExcludeGlobs(values: Record<string, unknown>): string[] {
+  return Object.entries(values)
+    .filter(([, value]) => value === true || (typeof value === 'object' && value !== null))
+    .map(([pattern]) => pattern);
+}
+
+function compileLmFormatExcludeRegexes(patterns: readonly string[]): RegExp[] {
+  const regexes: RegExp[] = [];
+  const expandedPatterns = new Set<string>();
+  for (const pattern of patterns) {
+    const normalized = normalizeWorkspaceSearchGlobPattern(pattern);
+    if (!normalized) {
+      continue;
+    }
+    expandedPatterns.add(normalized);
+    if (!/\/\*\*(?:\/\*)?$/u.test(normalized)) {
+      expandedPatterns.add(normalized.endsWith('/') ? `${normalized}**` : `${normalized}/**`);
+    }
+  }
+
+  const flags = process.platform === 'win32' ? 'iu' : 'u';
+  for (const pattern of expandedPatterns) {
+    try {
+      regexes.push(new RegExp(`^${compileGlobToRegexSource(pattern, 'exclude glob pattern')}$`, flags));
+    } catch (error) {
+      toolingLogger.warn(
+        `lm_formatFiles ignored invalid exclude glob "${pattern}": ${getErrorMessage(error)}`,
+      );
+    }
+  }
+  return regexes;
+}
+
+function isExcludedFromLmFormat(
+  file: PathScopeWorkspaceFile,
+  matchers: ReadonlyMap<string, readonly RegExp[]>,
+): boolean {
+  const regexes = matchers.get(getWorkspaceNameKey(file.workspaceName));
+  if (!regexes || regexes.length === 0) {
+    return false;
+  }
+  return regexes.some((regex) => regex.test(file.relativePath));
 }
 
 async function runTasksRunTestTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
@@ -2682,6 +2962,37 @@ function formatFindFilesSummary(payload: Record<string, unknown>): string {
     if (typeof file === 'string') {
       lines.push('---');
       lines.push(toSummaryPathPreferWorkspace(file));
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatLmFormatFilesSummary(payload: LmFormatFilesPayload): string {
+  const lines: string[] = [
+    'Format files',
+    `pathScope: ${payload.pathScope}`,
+    `matched: ${payload.matched}`,
+    `formatted: ${payload.formatted}`,
+    `unchanged: ${payload.unchanged}`,
+    `skipped: ${payload.skipped}`,
+    `failed: ${payload.failed}`,
+  ];
+  if (payload.matched === 0) {
+    lines.push('No files matched pathScope.');
+    return lines.join('\n');
+  }
+  if (payload.skippedEntries.length > 0) {
+    lines.push('---');
+    lines.push('Skipped files');
+    for (const entry of payload.skippedEntries) {
+      lines.push(`- ${entry.path}: ${entry.reason}`);
+    }
+  }
+  if (payload.failures.length > 0) {
+    lines.push('---');
+    lines.push('Failed files');
+    for (const entry of payload.failures) {
+      lines.push(`- ${entry.path}: ${entry.reason}`);
     }
   }
   return lines.join('\n');
@@ -3640,6 +3951,7 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
     buildFindFilesToolDefinition(),
     buildFindTextInFilesToolDefinition(),
     buildGetDiagnosticsToolDefinition(),
+    buildFormatFilesToolDefinition(),
     buildTasksRunBuildToolDefinition(),
     buildTasksRunTestToolDefinition(),
     buildDebugListLaunchConfigsToolDefinition(),

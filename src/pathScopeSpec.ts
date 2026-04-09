@@ -11,7 +11,7 @@ export function getPathScopeToolDescriptionSentence(): string {
 }
 
 export function getPathScopeSpecResourceDescription(): string {
-  return 'Read the shared pathScope syntax before using any tool argument named pathScope. Applies to workspace search and diagnostics tools.';
+  return 'Read the shared pathScope syntax before using any tool argument named pathScope. Applies to workspace search, diagnostics, and format tools.';
 }
 
 export function getPathScopeSpecReadHint(): string {
@@ -39,6 +39,7 @@ export function getPathScopeSpecText(): string {
     '- lm_findTextInFiles.pathScope',
     '- lm_qgrepSearchText.pathScope',
     '- lm_getDiagnostics.pathScope',
+    '- lm_formatFiles.pathScope',
     '',
     'What it is:',
     '- Limit workspace file paths before text search or diagnostics filtering is applied.',
@@ -73,5 +74,6 @@ export function getPathScopeSpecText(): string {
     '',
     'Scope note:',
     '- This spec applies only to `pathScope`, not file-search `query` fields.',
+    '- Format tools use the same pathScope syntax to select files before formatting.',
   ].join('\n');
 }

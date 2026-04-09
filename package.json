@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.150",
+  "version": "1.0.151",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",

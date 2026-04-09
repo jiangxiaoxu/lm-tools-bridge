@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.152] - 2026-04-09
+
+### English
+
+#### Changed
+- Bumped the extension package version to `1.0.152` for the next release build.
+
+### 中文
+
+#### 变更
+- 将扩展包版本提升到 `1.0.152`,用于下一次发布构建.
+
 ## [1.0.151] - 2026-04-09
 
 ### English

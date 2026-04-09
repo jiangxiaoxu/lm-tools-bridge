@@ -43,6 +43,7 @@ import {
   setQgrepLogger,
   type QgrepStatusSummary,
 } from './qgrep';
+import { buildQgrepClearFailureWarningMessage } from './qgrepClear';
 import {
   resolveWorkspaceDiscoveryTargetFromWindow,
   WorkspaceDiscoveryPublisher,
@@ -1137,7 +1138,7 @@ async function runQgrepStopAndClearIndexesCommand(): Promise<void> {
       logStatusWarn(`[qgrep.stop-clear] ${failure}`);
     }
     if (summary.failed > 0) {
-      void vscode.window.showWarningMessage(summary.message);
+      void vscode.window.showWarningMessage(buildQgrepClearFailureWarningMessage(summary.message, summary.failures));
       await refreshStatusBar();
       return;
     }

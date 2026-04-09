@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.154] - 2026-04-09
+
+### English
+
+#### Changed
+- Improved qgrep clear reliability by waiting for active watch/index child processes to exit before deleting `.vscode/qgrep` and retrying removal on Windows lock-style filesystem errors.
+- Expanded qgrep clear failure warnings to include failed workspace names and error summaries directly in the toast, and added stronger watch stop/close logging for clear-time diagnosis.
+
+### 中文
+
+#### 变更
+- 提升了 qgrep clear 的可靠性,在删除 `.vscode/qgrep` 之前等待 active watch/index 子进程退出,并在 Windows 风格锁文件错误上执行重试删除.
+- 扩展了 qgrep clear 失败提示,直接在 toast 中附带失败的 workspace 名称与错误摘要,同时补强了 watch 停止/关闭日志以便 clear 场景排查.
+
 ## [1.0.153] - 2026-04-09
 
 ### English

@@ -9,6 +9,7 @@ import {
   normalizeFilesQueryGlobErrorMessage,
   normalizeWorkspaceSearchGlobPattern,
 } from './qgrepGlob';
+import { retryQgrepClearRemoval } from './qgrepClear';
 import {
   buildFilesQueryDraft,
   ensureFilesLegacyParamsUnsupported,
@@ -45,6 +46,7 @@ import {
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
 const WATCH_RESTART_DELAY_MS = 1000;
+const CLEAR_PROCESS_EXIT_TIMEOUT_MS = 5000;
 const AUTO_UPDATE_DEBOUNCE_MS = 2000;
 const SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS = 500;
 const TOOL_SEARCH_READY_TIMEOUT_MS = 110_000;
@@ -403,10 +405,17 @@ class QgrepService implements vscode.Disposable {
         continue;
       }
       try {
+        const watchProcess = state.watchProcess;
+        const activeIndexProcess = state.activeIndexCommandProcess;
+        const activeIndexKind = state.activeIndexCommandKind ?? 'index';
         this.stopWatch(state);
         this.stopAutoUpdateWatcher(state);
         this.cancelWorkspaceIndexCommandForClear(state);
-        await fs.promises.rm(state.qgrepDirPath, { recursive: true, force: true });
+        await Promise.all([
+          this.waitForChildProcessExitForClear(state, watchProcess, 'watch'),
+          this.waitForChildProcessExitForClear(state, activeIndexProcess, activeIndexKind),
+        ]);
+        await this.removeWorkspaceIndexDirectoryForClear(state);
         this.resetWorkspaceProgress(state);
         this.resetWorkspaceRecovery(state);
         this.setWorkspaceIndexing(state, false);
@@ -1924,6 +1933,63 @@ class QgrepService implements vscode.Disposable {
     }
   }
 
+  private async waitForChildProcessExitForClear(
+    state: WorkspaceQgrepState,
+    child: ChildProcessWithoutNullStreams | undefined,
+    processLabel: string,
+  ): Promise<void> {
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      return;
+    }
+    qgrepLogger.info(`[qgrep.clear:${state.folder.name}] waiting for ${processLabel} process to exit before clearing indexes`);
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutHandle);
+        child.off('close', handleClose);
+        child.off('error', handleError);
+        resolve();
+      };
+      const handleClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+        qgrepLogger.info(
+          `[qgrep.clear:${state.folder.name}] ${processLabel} process exited before clear (code=${String(code)}, signal=${String(signal)})`,
+        );
+        finish();
+      };
+      const handleError = (error: Error): void => {
+        qgrepLogger.warn(`[qgrep.clear:${state.folder.name}] ${processLabel} process exit wait saw error: ${String(error)}`);
+        finish();
+      };
+      const timeoutHandle = setTimeout(() => {
+        qgrepLogger.warn(
+          `[qgrep.clear:${state.folder.name}] ${processLabel} process did not exit within ${String(CLEAR_PROCESS_EXIT_TIMEOUT_MS)}ms before clearing indexes`,
+        );
+        finish();
+      }, CLEAR_PROCESS_EXIT_TIMEOUT_MS);
+      child.once('close', handleClose);
+      child.once('error', handleError);
+    });
+  }
+
+  private async removeWorkspaceIndexDirectoryForClear(state: WorkspaceQgrepState): Promise<void> {
+    await retryQgrepClearRemoval(
+      async () => {
+        await fs.promises.rm(state.qgrepDirPath, { recursive: true, force: true });
+      },
+      {
+        onRetry: async ({ attempt, delayMs, error }) => {
+          qgrepLogger.warn(
+            `[qgrep.clear:${state.folder.name}] retrying qgrep directory removal after ${String(error)} (attempt ${String(attempt)}, next delay ${String(delayMs)}ms)`,
+          );
+        },
+      },
+    );
+  }
+
   private startAutoUpdateWatchersForInitializedWorkspaces(): void {
     for (const state of this.states.values()) {
       if (!this.isWorkspaceInitialized(state)) {
@@ -1986,7 +2052,7 @@ class QgrepService implements vscode.Disposable {
     child.on('error', (error) => {
       qgrepLogger.error(`[qgrep.watch:${state.folder.name}] process error: ${String(error)}`);
     });
-    child.on('close', () => {
+    child.on('close', (code, signal) => {
       this.flushProgressStream(state, stdoutProgress);
       if (stdoutLogLines.pendingText.trim().length > 0) {
         qgrepLogger.info(`[qgrep.watch:${state.folder.name}] ${stdoutLogLines.pendingText.trim()}`);
@@ -1994,6 +2060,9 @@ class QgrepService implements vscode.Disposable {
       if (stderrLines.pendingText.trim().length > 0) {
         this.logWatchLine(state, stderrLines.pendingText.trim());
       }
+      qgrepLogger.info(
+        `[qgrep.watch:${state.folder.name}] process closed (code=${String(code)}, signal=${String(signal)}, restartOnExit=${String(state.restartOnExit)})`,
+      );
       if (state.watchProcess !== child) {
         return;
       }
@@ -2024,6 +2093,7 @@ class QgrepService implements vscode.Disposable {
     }
     state.watchProcess = undefined;
     this.notifyStatusChanged();
+    qgrepLogger.info(`[qgrep.watch:${state.folder.name}] stopping watch process`);
     try {
       watch.kill();
     } catch {

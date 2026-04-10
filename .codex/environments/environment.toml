@@ -8,3 +8,15 @@ script = ""
 [[actions]]
 name = "Git Pull"
 command = "git pull --rebase"
+
+[[actions]]
+name = "Push To Master"
+command = "git push origin HEAD:refs/heads/master"
+
+[[actions]]
+name = "Push To Master And Release"
+command = "git push origin HEAD:refs/heads/master && git push origin HEAD:refs/heads/release"
+
+[[actions]]
+name = "Push To Master And Pre-Release"
+command = "git push origin HEAD:refs/heads/master && git push origin HEAD:refs/heads/pre-release"

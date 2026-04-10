@@ -141,6 +141,13 @@ test('lm_formatFiles is exposed with required shared pathScope schema', async ()
   assert.equal(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax']?.uri, 'lm-tools://spec/pathScope');
 });
 
+test('lm_formatFiles is enabled by default', async () => {
+  const { getEnabledExposedToolsSnapshot } = await loadToolingModule();
+  const tool = getEnabledExposedToolsSnapshot().find((entry) => entry.name === 'lm_formatFiles');
+
+  assert.ok(tool);
+});
+
 test('mapQgrepToolErrorToMcpError maps qgrep invalid input errors to InvalidParams', async () => {
   const { mapQgrepToolErrorToMcpError } = await loadToolingModule();
   const error = mapQgrepToolErrorToMcpError('lm_qgrepSearchText', new Error('query must be a non-empty string.'));

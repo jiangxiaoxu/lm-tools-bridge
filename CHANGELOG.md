@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.155] - 2026-04-10
+
+### English
+
+#### Fixed
+- Fixed workspace config panel writes for single-folder workspaces by contributing extension-managed `lmToolsBridge.*` settings with `resource` scope, allowing changes to persist to `.vscode/settings.json`.
+- Added scope-aware error reporting for exposure and enabled tool panel writes so config update failures no longer fail silently.
+
+### 中文
+
+#### 修复
+- 修复了单文件夹 workspace 下配置面板写入失效的问题,为扩展自管的 `lmToolsBridge.*` 设置显式声明 `resource` scope,使改动可以写入 `.vscode/settings.json`.
+- 为工具暴露和启用配置面板补充了带 scope 信息的写入错误提示,避免配置更新失败时静默无效.
+
 ## [1.0.154] - 2026-04-09
 
 ### English

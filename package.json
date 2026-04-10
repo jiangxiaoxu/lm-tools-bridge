@@ -2,7 +2,7 @@
   "name": "lm-tools-bridge",
   "displayName": "lm-tools-bridge",
   "publisher": "jiangxiaoxu",
-  "version": "1.0.154",
+  "version": "1.0.155",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -54,6 +54,7 @@
       "title": "LM Tools Bridge",
       "properties": {
         "lmToolsBridge.server.port": {
+          "scope": "resource",
           "type": "number",
           "default": 48123,
           "minimum": 1,
@@ -61,11 +62,13 @@
           "description": "Port for the MCP server."
         },
         "lmToolsBridge.useWorkspaceSettings": {
+          "scope": "resource",
           "type": "boolean",
           "default": false,
           "description": "Only honored when set in workspace settings. User/global settings are ignored. When enabled, lmToolsBridge settings are read/written at the workspace scope and override user settings."
         },
         "lmToolsBridge.tools.enabledDelta": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "items": {
@@ -74,6 +77,7 @@
           "description": "Additional exposed LM tool names to enable relative to the default enabled list. VS Code-sourced tools are exposed with an lm_ prefix (for example, lm_copilot_searchCodebase)."
         },
         "lmToolsBridge.tools.disabledDelta": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "items": {
@@ -82,6 +86,7 @@
           "description": "Additional exposed LM tool names to disable relative to the default enabled list. This takes precedence over tools.enabledDelta. VS Code-sourced tools are exposed with an lm_ prefix."
         },
         "lmToolsBridge.tools.exposedDelta": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "items": {
@@ -90,6 +95,7 @@
           "description": "Additional LM tool names to expose relative to the default exposed list. VS Code-sourced tools are exposed with an lm_ prefix."
         },
         "lmToolsBridge.tools.unexposedDelta": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "items": {
@@ -98,6 +104,7 @@
           "description": "Additional LM tool names to unexpose relative to the default exposed list. This takes precedence over tools.exposedDelta. Tools in the built-in default-enabled list remain exposed. VS Code-sourced tools are exposed with an lm_ prefix."
         },
         "lmToolsBridge.tools.groupingRules": {
+          "scope": "resource",
           "type": "array",
           "default": [
             {
@@ -136,6 +143,7 @@
           "description": "Regex-based tool grouping rules. Matching priority is built-in disabled > custom rules > built-in groups. Rules are applied in list order and first match wins."
         },
         "lmToolsBridge.tools.schemaDefaults": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "items": {
@@ -144,6 +152,7 @@
           "description": "Input defaults in \"toolName.paramName=value\" format. If a schema defines the param and the caller omits it, this default is injected. Invalid entries are ignored. Supported values: quoted strings (double quotes), true/false, numbers, or arrays \"{a,b,c}\" (elements can be quoted strings, numbers, or booleans; whitespace and empty elements allowed). Unquoted strings and JSON are not accepted. VS Code-sourced tools are exposed with an lm_ prefix. Examples are entry values, not JSON string literals. ';' is only a separator in this description and is not required at the end of actual entries. Examples: lm_findTextInFiles.maxResults=500; lm_copilot_searchCodebase.maxResults=25; tool.param=true; tool.param={6,4}."
         },
         "lmToolsBridge.debug": {
+          "scope": "resource",
           "type": "string",
           "default": "off",
           "enum": [

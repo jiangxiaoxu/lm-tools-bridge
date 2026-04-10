@@ -64,6 +64,12 @@ Notes:
 - The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools://guide`; the names-only discovery resource is `lm-tools://tool-names`.
 - If a tool argument uses `pathScope`, read `lm-tools://spec/pathScope` after bind.
 
+### Workspace Settings
+- When `lmToolsBridge.useWorkspaceSettings=true`, the extension writes its own config through the current workspace scope.
+- In a saved `.code-workspace`, settings are written to the workspace file.
+- In a single-folder workspace, settings are written to `.vscode/settings.json`.
+- Reads keep the existing fallback behavior: single-folder workspaces prefer `WorkspaceFolder` values and fall back to `Workspace` values when needed.
+
 ### Troubleshooting
 - `node` is missing: install Node.js, restart VS Code, and retry.
 - `Untitled multi-root workspace is not supported`: save it as a real `.code-workspace` file first.
@@ -127,6 +133,12 @@ enabled = true
 - 首次调用桥接 tool 之前,先读取 `lm-tools://tool/{name}`,再根据其中的 `inputSchema` 组装参数.
 - `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools://guide`; names-only discovery resource 是 `lm-tools://tool-names`.
 - 如果某个工具参数使用了 `pathScope`,请在绑定后读取 `lm-tools://spec/pathScope`.
+
+### 工作区设置
+- 当 `lmToolsBridge.useWorkspaceSettings=true` 时,扩展会按当前 workspace scope 写入自己的配置.
+- 在已保存的 `.code-workspace` 中,配置写入 workspace 文件本身.
+- 在单文件夹 workspace 中,配置写入 `.vscode/settings.json`.
+- 读取时保留现有 fallback: 单文件夹 workspace 优先读取 `WorkspaceFolder`,缺失时回退到 `Workspace`.
 
 ### 故障排查
 - 缺少 `node`: 安装 Node.js,重启 VS Code 后再试.

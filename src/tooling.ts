@@ -28,6 +28,7 @@ import {
 } from './qgrep';
 import {
   CONFIG_SECTION,
+  getConfigScopeDescription,
   getConfigValue,
   getConfigurationResource,
   resolveToolsConfigTarget,
@@ -107,6 +108,25 @@ let toolingLogger: ToolingLogger = {
 
 export function setToolingLogger(logger: ToolingLogger): void {
   toolingLogger = logger;
+}
+
+async function updateToolConfigValue(
+  config: vscode.WorkspaceConfiguration,
+  resource: vscode.Uri | undefined,
+  key: string,
+  value: unknown,
+  target: vscode.ConfigurationTarget,
+): Promise<void> {
+  try {
+    await config.update(key, value, target);
+  } catch (error) {
+    const scopeDescription = getConfigScopeDescription(resource, target);
+    const reason = getErrorMessage(error);
+    const message = `Failed to update ${scopeDescription} for ${CONFIG_SECTION}.${key}: ${reason}`;
+    toolingLogger.error(message);
+    void vscode.window.showErrorMessage(message);
+    throw error;
+  }
 }
 
 function isQgrepQueryToolName(toolName: string): boolean {
@@ -1108,8 +1128,8 @@ async function setExposedTools(exposed: string[]): Promise<void> {
     .filter((name) => !disabledSet.has(name))
     .filter((name) => !exposedSet.has(name))
     .filter((name) => !requiredSet.has(name));
-  await config.update(CONFIG_EXPOSED_TOOLS, toUniqueSortedToolNames(exposedDelta), target);
-  await config.update(CONFIG_UNEXPOSED_TOOLS, toUniqueSortedToolNames(unexposedDelta), target);
+  await updateToolConfigValue(config, resource, CONFIG_EXPOSED_TOOLS, toUniqueSortedToolNames(exposedDelta), target);
+  await updateToolConfigValue(config, resource, CONFIG_UNEXPOSED_TOOLS, toUniqueSortedToolNames(unexposedDelta), target);
   await pruneEnabledDeltasByExposed(exposedSet);
 }
 
@@ -1123,16 +1143,16 @@ async function setEnabledTools(enabled: string[]): Promise<void> {
   const defaultSet = new Set(DEFAULT_ENABLED_TOOL_NAMES.filter((name) => exposedSet.has(name)));
   const enabledDelta = [...enabledSet].filter((name) => !defaultSet.has(name));
   const disabledDelta = [...defaultSet].filter((name) => !enabledSet.has(name));
-  await config.update(CONFIG_ENABLED_TOOLS, toUniqueSortedToolNames(enabledDelta), target);
-  await config.update(CONFIG_DISABLED_TOOLS, toUniqueSortedToolNames(disabledDelta), target);
+  await updateToolConfigValue(config, resource, CONFIG_ENABLED_TOOLS, toUniqueSortedToolNames(enabledDelta), target);
+  await updateToolConfigValue(config, resource, CONFIG_DISABLED_TOOLS, toUniqueSortedToolNames(disabledDelta), target);
 }
 
 async function resetExposedTools(): Promise<void> {
   const resource = getConfigurationResource();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
   const target = await resolveToolsConfigTarget(resource);
-  await config.update(CONFIG_EXPOSED_TOOLS, [], target);
-  await config.update(CONFIG_UNEXPOSED_TOOLS, [], target);
+  await updateToolConfigValue(config, resource, CONFIG_EXPOSED_TOOLS, [], target);
+  await updateToolConfigValue(config, resource, CONFIG_UNEXPOSED_TOOLS, [], target);
   await normalizeToolSelectionState();
 }
 
@@ -1140,8 +1160,8 @@ async function resetEnabledTools(): Promise<void> {
   const resource = getConfigurationResource();
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION, resource);
   const target = await resolveToolsConfigTarget(resource);
-  await config.update(CONFIG_ENABLED_TOOLS, [], target);
-  await config.update(CONFIG_DISABLED_TOOLS, [], target);
+  await updateToolConfigValue(config, resource, CONFIG_ENABLED_TOOLS, [], target);
+  await updateToolConfigValue(config, resource, CONFIG_DISABLED_TOOLS, [], target);
 }
 
 function formatTags(tags: readonly string[]): string {

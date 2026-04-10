@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.157`.
+- Version baseline: `1.0.158`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -18,7 +18,7 @@
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
 - Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and applies to any tool argument named `pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
 - `lm_getDiagnostics.pathScope` uses the shared syntax above, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
-- `lm_formatFiles` is default exposed but not default enabled, requires `pathScope`, formats matched workspace files with `vscode.executeFormatDocumentProvider`, applies edits headlessly, saves changed files, returns summary counts plus `failures` and `skippedEntries`, and treats zero returned edits as `unchanged`.
+- `lm_formatFiles` is default exposed but not default enabled, requires `pathScope`, formats matched workspace files through `editor.action.formatDocument` so VS Code can honor the active language-scoped formatter selection (including `editor.defaultFormatter`), best-effort restores the previously active editor after each file, saves only changed files, returns summary counts plus `failures` and `skippedEntries`, and treats unchanged document text as `unchanged`.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
 - `lm_findFiles.query` always uses glob semantics and rejects bare `|` alternation with guidance to use brace globs such as `{A,B}`.
@@ -200,7 +200,7 @@
 - qgrep-config-sync: verify `search.exclude` (true entries) change rewrites managed `workspace.cfg` block and triggers qgrep `update`; confirm fixed excludes (`.git`, `Intermediate`, `DerivedDataCache`, `Saved`, `.vs`, `.vscode`) are always present.
 - qgrep-status-ui: verify server status and qgrep status render as separate status bar items, and qgrep tooltip shows per-workspace `A/B` lines.
 - qgrep-failure: verify `lm_qgrepSearchText` outside-workspace `pathScope` returns expected error, literal text queries support top-level `|`, exact whitespace-preserving branches, whitespace-only intermediate branch dropping, whole-branch outer double quotes, malformed-quote ordinary-character handling, unquoted `\|`, and empty-branch raw-literal fallback, explicit `querySyntax='glob'` for text search is rejected, `lm_findFiles.query` rejects bare `|` alternation, legacy `searchPath`/`includeIgnoredFiles` on text search are ignored, `lm_qgrepSearchFiles` rejects bare `|` alternation in glob mode plus legacy `mode`/`searchPath`/`isRegexp` while ignoring `includeIgnoredFiles`, no-init qgrep search/files auto-initialize then wait for readiness instead of failing immediately, successful `update`/`build` completion without a trailing `100%` frame still marks progress ready, failed non-corruption auto-updates stay dirty for a later explicit retry instead of timing out on stale partial progress, and file-search summaries keep `count/totalAvailable/capped/hardLimitHit/maxResultsApplied` self-consistent.
-- format-files: verify `lm_formatFiles` requires `pathScope`, rejects outside-workspace scopes, respects workspace `files.exclude` plus `search.exclude`, formats and saves changed files headlessly, returns `matched/formatted/unchanged/skipped/failed`, and keeps `content.text` readable without double-serialized newlines.
+- format-files: verify `lm_formatFiles` requires `pathScope`, rejects outside-workspace scopes, respects workspace `files.exclude` plus `search.exclude`, formats through the VS Code editor command path so configured `editor.defaultFormatter` is honored, best-effort restores the prior active editor, saves only changed files, returns `matched/formatted/unchanged/skipped/failed`, and keeps `content.text` readable without double-serialized newlines.
 - workspace-config-write: verify `useWorkspaceSettings=true` writes panel changes to `.vscode/settings.json` in single-folder workspaces and to `.code-workspace` in workspace-file sessions, `useWorkspaceSettings=false` still writes Global settings, single-folder reads still fall back from `WorkspaceFolder` to `Workspace`, and config write failures surface a scope-aware error message.
 - qgrep-startup-repair: verify startup auto-update assertion signature (`Assertion failed` + `filter.cpp`/`entries.entries`) triggers one rebuild attempt per workspace per startup, and non-signature update failures do not trigger rebuild.
 - Docs: verify update triggers against `AGENTS.md`.

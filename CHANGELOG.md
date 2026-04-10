@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.158] - 2026-04-10
+
+### English
+
+#### Changed
+- Updated `lm_formatFiles` to format through VS Code's document-format command so the configured formatter selection, including `editor.defaultFormatter`, is honored while preserving the existing file summary contract.
+
+### 中文
+
+#### 变更
+- 调整 `lm_formatFiles` 改为通过 VS Code 的 document format 命令执行格式化,从而遵循已配置的 formatter 选择(包括 `editor.defaultFormatter`),同时保持现有文件汇总返回约定不变.
+
 ## [1.0.157] - 2026-04-10
 
 ### English

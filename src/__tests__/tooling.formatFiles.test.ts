@@ -11,9 +11,9 @@ type MockUri = {
   toString(): string;
 };
 
-type MockFormattingEdit = {
-  range: unknown;
-  newText: string;
+type MockTextEditor = {
+  document: MockTextDocument;
+  viewColumn?: number;
 };
 
 class MockTextDocument {
@@ -26,7 +26,17 @@ class MockTextDocument {
   constructor(
     public readonly uri: MockUri,
     private readonly state: MockVscodeState,
+    private content = '',
   ) {}
+
+  getText(): string {
+    return this.content;
+  }
+
+  setText(text: string): void {
+    this.content = text;
+    this.isDirty = true;
+  }
 
   async save(): Promise<boolean> {
     this.state.savedPaths.push(this.uri.fsPath);
@@ -58,12 +68,13 @@ type MockVscodeState = {
   searchExclude: Record<string, unknown>;
   filesExclude: Record<string, unknown>;
   documents: Map<string, MockTextDocument>;
+  defaultFormatters: Map<string, string>;
   findFilesHandler: (include: MockRelativePattern) => Promise<MockUri[]>;
-  formatHandler: (uri: MockUri) => Promise<MockFormattingEdit[] | undefined>;
-  applyEditFailures: Set<string>;
   saveFailures: Set<string>;
   savedPaths: string[];
-  appliedEditPaths: string[];
+  showTextDocumentPaths: string[];
+  formatCommandCalls: Array<{ path: string; formatter: string | undefined }>;
+  activeTextEditor: MockTextEditor | undefined;
   reset(): void;
 };
 
@@ -74,12 +85,13 @@ const mockState: MockVscodeState = {
   searchExclude: {},
   filesExclude: {},
   documents: new Map(),
+  defaultFormatters: new Map(),
   findFilesHandler: async () => [],
-  formatHandler: async () => [],
-  applyEditFailures: new Set(),
   saveFailures: new Set(),
   savedPaths: [],
-  appliedEditPaths: [],
+  showTextDocumentPaths: [],
+  formatCommandCalls: [],
+  activeTextEditor: undefined,
   reset() {
     this.workspaceFolders = [{
       name: 'WorkspaceA',
@@ -88,12 +100,13 @@ const mockState: MockVscodeState = {
     this.searchExclude = {};
     this.filesExclude = {};
     this.documents = new Map();
+    this.defaultFormatters = new Map();
     this.findFilesHandler = async () => [];
-    this.formatHandler = async () => [];
-    this.applyEditFailures = new Set();
     this.saveFailures = new Set();
     this.savedPaths = [];
-    this.appliedEditPaths = [];
+    this.showTextDocumentPaths = [];
+    this.formatCommandCalls = [];
+    this.activeTextEditor = undefined;
   },
 };
 
@@ -144,8 +157,11 @@ async function loadToolingModule(): Promise<ToolingModule> {
             return mockState.workspaceFolders;
           },
           workspaceFile: undefined,
-          getConfiguration: (section: string) => ({
+          getConfiguration: (section: string, resource?: MockUri) => ({
             get: (key: string, fallback: unknown) => {
+              if (section === 'editor' && key === 'defaultFormatter' && resource) {
+                return mockState.defaultFormatters.get(resource.fsPath) ?? fallback;
+              }
               if (key !== 'exclude') {
                 return fallback;
               }
@@ -169,35 +185,47 @@ async function loadToolingModule(): Promise<ToolingModule> {
             }
             return document;
           },
-          applyEdit: async (edit: MockWorkspaceEdit) => {
-            for (const entry of edit.entries) {
-              if (mockState.applyEditFailures.has(entry.uri.fsPath)) {
-                return false;
-              }
-            }
-            for (const entry of edit.entries) {
-              mockState.appliedEditPaths.push(entry.uri.fsPath);
-              const document = mockState.documents.get(entry.uri.fsPath);
-              if (document) {
-                document.isDirty = true;
-              }
-            }
-            return true;
-          },
           fs: {
             readFile: async () => new Uint8Array(),
           },
         },
         commands: {
-          executeCommand: async (command: string, uri: MockUri) => {
-            if (command !== 'vscode.executeFormatDocumentProvider') {
+          executeCommand: async (command: string) => {
+            if (command !== 'editor.action.formatDocument') {
               throw new Error(`Unexpected command ${command}`);
             }
-            return mockState.formatHandler(uri);
+            const editor = mockState.activeTextEditor;
+            if (!editor) {
+              throw new Error('No active editor');
+            }
+            const filePath = editor.document.uri.fsPath;
+            const formatter = mockState.defaultFormatters.get(filePath);
+            mockState.formatCommandCalls.push({ path: filePath, formatter });
+            if (filePath === path.join(workspaceRoot, 'src', 'formatted.ts')) {
+              editor.document.setText('formatted content');
+              return undefined;
+            }
+            if (filePath === path.join(workspaceRoot, 'src', 'unchanged.ts')) {
+              return undefined;
+            }
+            if (filePath === path.join(workspaceRoot, 'src', 'failed.ts')) {
+              throw new Error('Formatter crashed');
+            }
+            throw new Error(`Unexpected format target ${filePath}`);
           },
         },
         window: {
-          activeTextEditor: undefined,
+          get activeTextEditor() {
+            return mockState.activeTextEditor;
+          },
+          showTextDocument: async (document: MockTextDocument, options?: { viewColumn?: number }) => {
+            mockState.showTextDocumentPaths.push(document.uri.fsPath);
+            mockState.activeTextEditor = {
+              document,
+              viewColumn: options?.viewColumn,
+            };
+            return mockState.activeTextEditor;
+          },
           showQuickPick: async () => undefined,
           showWarningMessage: async () => undefined,
           showInformationMessage: async () => undefined,
@@ -213,7 +241,6 @@ async function loadToolingModule(): Promise<ToolingModule> {
         LanguageModelDataPart,
         Disposable,
         RelativePattern: MockRelativePattern,
-        WorkspaceEdit: MockWorkspaceEdit,
         ConfigurationTarget: {
           Global: 1,
           Workspace: 2,
@@ -253,10 +280,26 @@ test('lm_formatFiles formats, skips, fails, and summarizes results', async () =>
   const skippedPath = path.join(workspaceRoot, 'src', 'binary.bin');
   const failedPath = path.join(workspaceRoot, 'src', 'failed.ts');
   const excludedPath = path.join(workspaceRoot, 'ignored', 'excluded.ts');
+  const previousPath = path.join(workspaceRoot, 'notes', 'current.ts');
 
-  for (const filePath of [formattedPath, unchangedPath, failedPath, excludedPath]) {
-    mockState.documents.set(filePath, new MockTextDocument(createUri(filePath), mockState));
+  for (const filePath of [formattedPath, unchangedPath, failedPath, excludedPath, previousPath]) {
+    mockState.documents.set(
+      filePath,
+      new MockTextDocument(
+        createUri(filePath),
+        mockState,
+        filePath === formattedPath ? 'before formatting' : 'unchanged',
+      ),
+    );
   }
+  mockState.defaultFormatters.set(previousPath, 'first.provider');
+  mockState.defaultFormatters.set(formattedPath, 'configured.formatter');
+  mockState.defaultFormatters.set(unchangedPath, 'configured.formatter');
+  mockState.defaultFormatters.set(failedPath, 'configured.formatter');
+  mockState.activeTextEditor = {
+    document: mockState.documents.get(previousPath) as MockTextDocument,
+    viewColumn: 1,
+  };
 
   mockState.findFilesHandler = async (include) => {
     assert.equal(include.pattern, 'src/**/*');
@@ -267,21 +310,6 @@ test('lm_formatFiles formats, skips, fails, and summarizes results', async () =>
       createUri(failedPath),
       createUri(excludedPath),
     ];
-  };
-  mockState.formatHandler = async (uri) => {
-    if (uri.fsPath === formattedPath) {
-      return [{
-        range: { start: 0, end: 1 },
-        newText: 'formatted content',
-      }];
-    }
-    if (uri.fsPath === unchangedPath) {
-      return [];
-    }
-    if (uri.fsPath === failedPath) {
-      throw new Error('Formatter crashed');
-    }
-    throw new Error(`Unexpected format target ${uri.fsPath}`);
   };
 
   const tool = await getFormatTool();
@@ -310,8 +338,23 @@ test('lm_formatFiles formats, skips, fails, and summarizes results', async () =>
     path: 'WorkspaceA/src/binary.bin',
     reason: `Could not open text document: Cannot open ${skippedPath}`,
   }]);
-  assert.deepEqual(mockState.appliedEditPaths, [formattedPath]);
   assert.deepEqual(mockState.savedPaths, [formattedPath]);
+  assert.deepEqual(mockState.showTextDocumentPaths, [
+    failedPath,
+    previousPath,
+    formattedPath,
+    previousPath,
+    unchangedPath,
+    previousPath,
+  ]);
+  assert.deepEqual(mockState.formatCommandCalls, [
+    { path: failedPath, formatter: 'configured.formatter' },
+    { path: formattedPath, formatter: 'configured.formatter' },
+    { path: unchangedPath, formatter: 'configured.formatter' },
+  ]);
+  assert.equal(mockState.activeTextEditor?.document.uri.fsPath, previousPath);
+  assert.equal((mockState.documents.get(formattedPath) as MockTextDocument).getText(), 'formatted content');
+  assert.equal((mockState.documents.get(unchangedPath) as MockTextDocument).getText(), 'unchanged');
 
   const text = result.content[0]?.value ?? '';
   assert.match(text, /^Format files/mu);

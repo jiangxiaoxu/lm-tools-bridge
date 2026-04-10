@@ -2460,41 +2460,47 @@ async function formatSingleWorkspaceFile(absolutePath: string): Promise<LmFormat
     };
   }
 
-  const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
-    'vscode.executeFormatDocumentProvider',
-    document.uri,
-    buildDocumentFormattingOptions(document),
+  const previousActiveEditor = vscode.window.activeTextEditor;
+  const previousDocument = previousActiveEditor?.document;
+  const previousViewColumn = previousActiveEditor?.viewColumn;
+  const shouldRestorePreviousEditor = Boolean(
+    previousDocument && previousDocument.uri.fsPath !== document.uri.fsPath,
   );
-  if (!Array.isArray(edits) || edits.length === 0) {
+  const originalText = document.getText();
+
+  if (!previousDocument || previousDocument.uri.fsPath !== document.uri.fsPath) {
+    await vscode.window.showTextDocument(document, {
+      preserveFocus: false,
+      preview: false,
+      viewColumn: previousViewColumn,
+    });
+  }
+
+  try {
+    await vscode.commands.executeCommand('editor.action.formatDocument');
+  } finally {
+    if (shouldRestorePreviousEditor && previousDocument) {
+      try {
+        await vscode.window.showTextDocument(previousDocument, {
+          preserveFocus: false,
+          preview: false,
+          viewColumn: previousViewColumn,
+        });
+      } catch {
+        // Best effort only; keep the formatting result if the editor cannot be restored.
+      }
+    }
+  }
+
+  if (document.getText() === originalText) {
     return { kind: 'unchanged' };
   }
 
-  const workspaceEdit = new vscode.WorkspaceEdit();
-  for (const edit of edits) {
-    workspaceEdit.replace(document.uri, edit.range, edit.newText);
-  }
-  const applied = await vscode.workspace.applyEdit(workspaceEdit);
-  if (!applied) {
-    throw new Error('VS Code refused to apply formatting edits.');
-  }
   const saved = await document.save();
   if (!saved) {
     throw new Error('VS Code refused to save the formatted file.');
   }
   return { kind: 'formatted' };
-}
-
-function buildDocumentFormattingOptions(document: vscode.TextDocument): vscode.FormattingOptions {
-  const editorConfig = vscode.workspace.getConfiguration('editor', document.uri);
-  const configuredTabSize = editorConfig.get<unknown>('tabSize', 4);
-  const tabSize = typeof configuredTabSize === 'number' && Number.isFinite(configuredTabSize)
-    ? configuredTabSize
-    : 4;
-  const configuredInsertSpaces = editorConfig.get<boolean>('insertSpaces', true);
-  return {
-    tabSize,
-    insertSpaces: configuredInsertSpaces,
-  };
 }
 
 async function collectLmFormatFiles(pathScope: string): Promise<string[]> {

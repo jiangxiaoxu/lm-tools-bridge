@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.156`.
+- Version baseline: `1.0.157`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -18,7 +18,7 @@
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
 - Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and applies to any tool argument named `pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
 - `lm_getDiagnostics.pathScope` uses the shared syntax above, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
-- `lm_formatFiles` is default exposed and default enabled, requires `pathScope`, formats matched workspace files with `vscode.executeFormatDocumentProvider`, applies edits headlessly, saves changed files, returns summary counts plus `failures` and `skippedEntries`, and treats zero returned edits as `unchanged`.
+- `lm_formatFiles` is default exposed but not default enabled, requires `pathScope`, formats matched workspace files with `vscode.executeFormatDocumentProvider`, applies edits headlessly, saves changed files, returns summary counts plus `failures` and `skippedEntries`, and treats zero returned edits as `unchanged`.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).
 - `lm_findFiles` and `lm_findTextInFiles` are default exposed but not default enabled.
 - `lm_findFiles.query` always uses glob semantics and rejects bare `|` alternation with guidance to use brace globs such as `{A,B}`.

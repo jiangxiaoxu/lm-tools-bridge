@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.159] - 2026-04-15
+
+### English
+
+#### Changed
+- Added qgrep watch stale-progress self-recovery in the bridge: if a live watch process stays below `100%` without a new progress frame, the extension restarts `watch` once and then escalates to `rebuild` if the same partial signature stalls again.
+- Tightened the stale-watch detection window to a `5s` check cadence with a `20s` stale timeout so recovery starts sooner during stuck qgrep updates.
+
+### 中文
+
+#### 变更
+- 在 bridge 侧新增 qgrep watch 卡住自恢复: 当活动中的 watch 进度停在 `<100%` 且没有新的 progress frame 时,扩展会先重启一次 `watch`,如果仍卡在同一个部分进度签名,则升级为自动 `rebuild`.
+- 收紧 stale watch 检测窗口为每 `5s` 检查一次,`20s` 视为 stale timeout,从而更早触发 stuck qgrep update 的恢复流程.
+
 ## [1.0.158] - 2026-04-10
 
 ### English

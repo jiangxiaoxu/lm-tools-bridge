@@ -6,11 +6,13 @@ import {
   createEmptyQgrepRecoveryState,
   finalizeSuccessfulQgrepIndexProgress,
   hasQueuedQgrepAutoUpdate,
+  isQgrepWatchStaleRecoveryCandidate,
   isQgrepWorkspaceReadyForToolSearch,
   markQgrepRecoveryDegraded,
   QGREP_UPDATE_RECOVERY_RETRY_DELAYS_MS,
   resetQgrepRecoveryState,
   restoreQgrepAutoUpdateQueueAfterFailure,
+  shouldRecoverStaleQgrepWatch,
 } from '../qgrepIndexingState';
 
 test('ready check blocks tool search while an auto update is still queued', () => {
@@ -80,6 +82,88 @@ test('finalizeSuccessfulQgrepIndexProgress promotes a trailing partial frame to 
     progressKnown: true,
     indexing: true,
   });
+});
+
+test('watch stale recovery candidates require an active partial watch state', () => {
+  assert.equal(
+    isQgrepWatchStaleRecoveryCandidate({
+      watchRunning: true,
+      lastProgressFrameAt: 1_000,
+      initialized: true,
+      pendingIndexOperationCount: 0,
+      autoUpdateInFlight: false,
+      startupRefreshPending: false,
+      autoUpdateDirty: false,
+      managedSearchExcludeDirty: false,
+      pendingCreateDeleteCount: 0,
+      recoveryPhase: 'idle',
+      recoveryAttemptCount: 0,
+      warningShownForCurrentFailure: false,
+      watchWasRunningBeforeRebuild: false,
+      allowExplicitRecovery: false,
+      progress: {
+        progressKnown: true,
+        indexing: false,
+        progressPercent: 46,
+        indexedFiles: 1353,
+      },
+    }),
+    true,
+  );
+
+  assert.equal(
+    isQgrepWatchStaleRecoveryCandidate({
+      watchRunning: true,
+      lastProgressFrameAt: 1_000,
+      initialized: true,
+      pendingIndexOperationCount: 0,
+      autoUpdateInFlight: false,
+      startupRefreshPending: false,
+      autoUpdateDirty: false,
+      managedSearchExcludeDirty: false,
+      pendingCreateDeleteCount: 0,
+      recoveryPhase: 'idle',
+      recoveryAttemptCount: 0,
+      warningShownForCurrentFailure: false,
+      watchWasRunningBeforeRebuild: false,
+      allowExplicitRecovery: false,
+      progress: {
+        progressKnown: true,
+        indexing: false,
+        progressPercent: 100,
+        indexedFiles: 2928,
+      },
+    }),
+    false,
+  );
+});
+
+test('stale watch recovery waits for the timeout window', () => {
+  const state = {
+    watchRunning: true,
+    lastProgressFrameAt: 10_000,
+    initialized: true,
+    pendingIndexOperationCount: 0,
+    autoUpdateInFlight: false,
+    startupRefreshPending: false,
+    autoUpdateDirty: false,
+    managedSearchExcludeDirty: false,
+    pendingCreateDeleteCount: 0,
+    recoveryPhase: 'idle' as const,
+    recoveryAttemptCount: 0,
+    warningShownForCurrentFailure: false,
+    watchWasRunningBeforeRebuild: false,
+    allowExplicitRecovery: false,
+    progress: {
+      progressKnown: true,
+      indexing: false,
+      progressPercent: 46,
+      indexedFiles: 1353,
+    },
+  };
+
+  assert.equal(shouldRecoverStaleQgrepWatch(state, 29_999, 20_000), false);
+  assert.equal(shouldRecoverStaleQgrepWatch(state, 30_000, 20_000), true);
 });
 
 test('restoreQgrepAutoUpdateQueueAfterFailure keeps retry intent for the failed batch', () => {

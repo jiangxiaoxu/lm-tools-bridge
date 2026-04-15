@@ -41,11 +41,15 @@ import {
   type QgrepRecoveryPhase,
   resetQgrepRecoveryState,
   restoreQgrepAutoUpdateQueueAfterFailure,
+  shouldRecoverStaleQgrepWatch,
 } from './qgrepIndexingState';
 
 const QGREP_DIR_NAME = 'qgrep';
 const QGREP_CONFIG_FILE_NAME = 'workspace.cfg';
 const WATCH_RESTART_DELAY_MS = 1000;
+const WATCH_STALE_CHECK_INTERVAL_MS = 5_000;
+const WATCH_STALE_PROGRESS_TIMEOUT_MS = 20_000;
+const WATCH_STALE_MAX_RESTARTS = 1;
 const CLEAR_PROCESS_EXIT_TIMEOUT_MS = 5000;
 const AUTO_UPDATE_DEBOUNCE_MS = 2000;
 const SEARCH_EXCLUDE_SYNC_DEBOUNCE_MS = 500;
@@ -160,6 +164,9 @@ interface WorkspaceQgrepState {
   warningShownForCurrentFailure: boolean;
   watchWasRunningBeforeRebuild: boolean;
   allowExplicitRecovery: boolean;
+  lastProgressFrameAt?: number;
+  staleWatchRestartCount: number;
+  staleWatchRecoverySignature?: string;
 }
 
 interface WorkspaceIndexProgress {
@@ -278,6 +285,7 @@ class QgrepService implements vscode.Disposable {
   private readonly states = new Map<string, WorkspaceQgrepState>();
   private readonly subscriptions: vscode.Disposable[] = [];
   private disposed = false;
+  private watchHealthTimer?: NodeJS.Timeout;
 
   constructor(private readonly binaryPath: string) {}
 
@@ -285,6 +293,7 @@ class QgrepService implements vscode.Disposable {
     this.syncWorkspaceStates(vscode.workspace.workspaceFolders ?? []);
     this.startWatchForInitializedWorkspaces();
     this.startAutoUpdateWatchersForInitializedWorkspaces();
+    this.startWatchHealthChecks();
     this.notifyStatusChanged();
     this.queueStartupRefreshForInitializedWorkspaces();
 
@@ -307,6 +316,10 @@ class QgrepService implements vscode.Disposable {
       this.stopWatch(state);
       this.stopAutoUpdateWatcher(state);
       this.cancelWorkspaceIndexCommandForClear(state);
+    }
+    if (this.watchHealthTimer) {
+      clearInterval(this.watchHealthTimer);
+      this.watchHealthTimer = undefined;
     }
     this.states.clear();
     this.notifyStatusChanged();
@@ -667,6 +680,7 @@ class QgrepService implements vscode.Disposable {
 
   private resetWorkspaceProgress(state: WorkspaceQgrepState): void {
     state.progress = this.createEmptyProgress();
+    this.resetStaleWatchTracking(state);
     this.notifyStatusChanged();
   }
 
@@ -820,6 +834,7 @@ class QgrepService implements vscode.Disposable {
       changed = true;
     }
     if (changed) {
+      this.resetStaleWatchTracking(state);
       this.notifyStatusChanged();
     }
   }
@@ -879,6 +894,7 @@ class QgrepService implements vscode.Disposable {
     }
 
     if (changed) {
+      this.refreshStaleWatchHeartbeat(state);
       this.notifyStatusChanged();
     }
   }
@@ -1859,6 +1875,7 @@ class QgrepService implements vscode.Disposable {
       restartOnExit: false,
       startupRefreshPending: false,
       startupAutoRepairAttempted: false,
+      staleWatchRestartCount: 0,
       ...createEmptyQgrepRecoveryState(),
     };
   }
@@ -1914,6 +1931,132 @@ class QgrepService implements vscode.Disposable {
       }
       this.startWatch(state);
     }
+  }
+
+  private startWatchHealthChecks(): void {
+    if (this.watchHealthTimer) {
+      clearInterval(this.watchHealthTimer);
+    }
+    this.watchHealthTimer = setInterval(() => {
+      this.checkForStaleWatchProgress();
+    }, WATCH_STALE_CHECK_INTERVAL_MS);
+  }
+
+  private checkForStaleWatchProgress(): void {
+    const nowMs = Date.now();
+    for (const state of this.states.values()) {
+      if (!shouldRecoverStaleQgrepWatch(this.toWatchStalenessState(state), nowMs, WATCH_STALE_PROGRESS_TIMEOUT_MS)) {
+        continue;
+      }
+      this.recoverStaleWatchProgress(state, nowMs);
+    }
+  }
+
+  private toWatchStalenessState(state: WorkspaceQgrepState) {
+    return {
+      watchRunning: state.watchProcess !== undefined,
+      lastProgressFrameAt: state.lastProgressFrameAt,
+      initialized: this.isWorkspaceInitialized(state),
+      pendingIndexOperationCount: state.pendingIndexOperationCount,
+      autoUpdateInFlight: state.autoUpdateInFlight,
+      startupRefreshPending: state.startupRefreshPending,
+      autoUpdateDirty: state.autoUpdateDirty,
+      managedSearchExcludeDirty: state.managedSearchExcludeDirty,
+      pendingCreateDeleteCount: state.pendingCreateDeleteCount,
+      recoveryPhase: state.recoveryPhase,
+      recoveryAttemptCount: state.recoveryAttemptCount,
+      lastRecoverableError: state.lastRecoverableError,
+      warningShownForCurrentFailure: state.warningShownForCurrentFailure,
+      watchWasRunningBeforeRebuild: state.watchWasRunningBeforeRebuild,
+      allowExplicitRecovery: state.allowExplicitRecovery,
+      progress: state.progress,
+    };
+  }
+
+  private recoverStaleWatchProgress(state: WorkspaceQgrepState, nowMs: number): void {
+    const signature = this.getIncompleteProgressSignature(state);
+    if (!signature) {
+      this.resetStaleWatchTracking(state);
+      return;
+    }
+
+    const lastProgressFrameAt = state.lastProgressFrameAt ?? nowMs;
+    const stalledForMs = Math.max(nowMs - lastProgressFrameAt, 0);
+    if (
+      state.staleWatchRestartCount >= WATCH_STALE_MAX_RESTARTS
+      && state.staleWatchRecoverySignature === signature
+    ) {
+      this.triggerStaleWatchRebuild(state, signature, stalledForMs);
+      return;
+    }
+    this.restartStaleWatch(state, signature, stalledForMs);
+  }
+
+  private restartStaleWatch(
+    state: WorkspaceQgrepState,
+    signature: string,
+    stalledForMs: number,
+  ): void {
+    state.staleWatchRestartCount += 1;
+    state.staleWatchRecoverySignature = signature;
+    state.lastProgressFrameAt = Date.now();
+    qgrepLogger.warn(
+      `[qgrep.watch:${state.folder.name}] no new progress frame for ${String(stalledForMs)}ms at ${signature}; restarting watch (${String(state.staleWatchRestartCount)}/${String(WATCH_STALE_MAX_RESTARTS)})`,
+    );
+    this.stopWatch(state);
+    if (!this.disposed && this.isWorkspaceInitialized(state)) {
+      this.startWatch(state);
+    }
+  }
+
+  private triggerStaleWatchRebuild(
+    state: WorkspaceQgrepState,
+    signature: string,
+    stalledForMs: number,
+  ): void {
+    state.lastProgressFrameAt = Date.now();
+    qgrepLogger.warn(
+      `[qgrep.watch:${state.folder.name}] no new progress frame for ${String(stalledForMs)}ms at ${signature} after ${String(state.staleWatchRestartCount)} stale restart(s); rebuilding index`,
+    );
+    void this.rebuildWorkspace(state)
+      .then(() => {
+        this.resetStaleWatchTracking(state);
+      })
+      .catch((error) => {
+        const errorSummary = `Stale watch recovery rebuild failed for workspace '${state.folder.name}'. ${String(error)}`;
+        this.applyWorkspaceDegradedState(state, errorSummary, this.classifyRecoveryFailure(error, 'rebuild') === 'recoverable');
+      });
+  }
+
+  private getIncompleteProgressSignature(state: WorkspaceQgrepState): string | undefined {
+    if (!state.progress.progressKnown) {
+      return undefined;
+    }
+    const percent = state.progress.progressPercent ?? 0;
+    const indexedFiles = state.progress.indexedFiles;
+    if (percent >= 100 || typeof indexedFiles !== 'number' || !Number.isInteger(indexedFiles) || indexedFiles < 0) {
+      return undefined;
+    }
+    return `${String(indexedFiles)} files @ ${String(percent)}%`;
+  }
+
+  private refreshStaleWatchHeartbeat(state: WorkspaceQgrepState): void {
+    const signature = this.getIncompleteProgressSignature(state);
+    if (!signature) {
+      this.resetStaleWatchTracking(state);
+      return;
+    }
+    state.lastProgressFrameAt = Date.now();
+    if (state.staleWatchRecoverySignature !== signature) {
+      state.staleWatchRestartCount = 0;
+      state.staleWatchRecoverySignature = signature;
+    }
+  }
+
+  private resetStaleWatchTracking(state: WorkspaceQgrepState): void {
+    state.lastProgressFrameAt = undefined;
+    state.staleWatchRestartCount = 0;
+    state.staleWatchRecoverySignature = undefined;
   }
 
   private cancelWorkspaceIndexCommandForClear(state: WorkspaceQgrepState): void {
@@ -2020,6 +2163,7 @@ class QgrepService implements vscode.Disposable {
 
     state.watchProcess = child;
     state.restartOnExit = true;
+    this.refreshStaleWatchHeartbeat(state);
     this.notifyStatusChanged();
     const stdoutProgress = { pendingText: '' };
     const stdoutLogLines = { pendingText: '' };
@@ -2721,9 +2865,11 @@ class QgrepService implements vscode.Disposable {
   private finalizeWorkspaceProgressAfterSuccessfulIndexCommand(state: WorkspaceQgrepState): void {
     const nextProgress = finalizeSuccessfulQgrepIndexProgress(state.progress);
     if (nextProgress === state.progress) {
+      this.refreshStaleWatchHeartbeat(state);
       return;
     }
     state.progress = nextProgress;
+    this.refreshStaleWatchHeartbeat(state);
     this.notifyStatusChanged();
   }
 

@@ -34,6 +34,11 @@ export interface QgrepWorkspaceToolReadinessState extends QgrepAutoUpdateQueueSt
   progress: QgrepWorkspaceIndexProgressState;
 }
 
+export interface QgrepWatchStalenessState extends QgrepWorkspaceToolReadinessState {
+  watchRunning: boolean;
+  lastProgressFrameAt?: number;
+}
+
 export interface QgrepRecoveryDecision {
   action: 'retry-update' | 'fallback-rebuild';
   delayMs: number;
@@ -106,6 +111,52 @@ export function finalizeSuccessfulQgrepIndexProgress(
     progressPercent: 100,
     progressKnown: true,
   };
+}
+
+export function isQgrepWatchStaleRecoveryCandidate(state: QgrepWatchStalenessState): boolean {
+  if (!state.watchRunning) {
+    return false;
+  }
+  if (!state.initialized) {
+    return false;
+  }
+  if (state.pendingIndexOperationCount > 0) {
+    return false;
+  }
+  if (state.autoUpdateInFlight) {
+    return false;
+  }
+  if (isQgrepRecoveryActive(state)) {
+    return false;
+  }
+  if (hasQueuedQgrepAutoUpdate(state)) {
+    return false;
+  }
+  if (state.progress.indexing) {
+    return false;
+  }
+  if (!state.progress.progressKnown) {
+    return false;
+  }
+  const percent = state.progress.progressPercent ?? 0;
+  if (percent >= 100) {
+    return false;
+  }
+  return typeof state.lastProgressFrameAt === 'number' && Number.isFinite(state.lastProgressFrameAt);
+}
+
+export function shouldRecoverStaleQgrepWatch(
+  state: QgrepWatchStalenessState,
+  nowMs: number,
+  timeoutMs: number,
+): boolean {
+  if (!isQgrepWatchStaleRecoveryCandidate(state)) {
+    return false;
+  }
+  if (!Number.isFinite(nowMs) || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return false;
+  }
+  return nowMs - (state.lastProgressFrameAt ?? nowMs) >= timeoutMs;
 }
 
 export function resetQgrepRecoveryState(state: QgrepRecoveryState): QgrepRecoveryState {

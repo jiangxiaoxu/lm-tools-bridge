@@ -141,11 +141,11 @@ test('lm_formatFiles is exposed with required shared pathScope schema', async ()
   assert.equal(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax']?.uri, 'lm-tools://spec/pathScope');
 });
 
-test('lm_formatFiles is enabled by default', async () => {
+test('lm_formatFiles is exposed by default but not enabled by default', async () => {
   const { getEnabledExposedToolsSnapshot } = await loadToolingModule();
   const tool = getEnabledExposedToolsSnapshot().find((entry) => entry.name === 'lm_formatFiles');
 
-  assert.ok(tool);
+  assert.equal(tool, undefined);
 });
 
 test('mapQgrepToolErrorToMcpError maps qgrep invalid input errors to InvalidParams', async () => {

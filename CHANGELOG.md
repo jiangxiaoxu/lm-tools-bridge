@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.161] - 2026-04-16
+
+### English
+
+#### Changed
+- Fixed the outdated `lm_formatFiles` unit test expectation so it now matches the documented contract: the tool is exposed by default but not enabled by default.
+
+### 中文
+
+#### 变更
+- 修复了过期的 `lm_formatFiles` 单元测试预期,使其与当前文档契约一致: 该工具默认 exposed,但默认不 enabled.
+
 ## [1.0.160] - 2026-04-16
 
 ### English

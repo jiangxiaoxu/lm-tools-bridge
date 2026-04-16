@@ -58,6 +58,7 @@ export function getPathScopeSpecText(): string {
     '- Script/**/*.as',
     '- WorkspaceA/Script/**/*.as',
     '- {WorkspaceA,UE5}/**/*.{h,cpp,as}',
+    '- {WorkspaceA/Script/Foo.as,WorkspaceA/Script/Bar.as}',
     '- {WorkspaceA/Script/**/*.as,UE5/Engine/**/Source/**/*.h}',
     '',
     'Mixed example:',

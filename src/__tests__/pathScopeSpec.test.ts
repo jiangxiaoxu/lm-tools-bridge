@@ -24,6 +24,7 @@ test('pathScope spec text uses generic applicability wording instead of tool lis
 
   assert.match(text, /Applies to any tool argument named `pathScope`\./u);
   assert.match(text, /This spec applies only to `pathScope`, not file-search `query` fields\./u);
+  assert.match(text, /\{WorkspaceA\/Script\/Foo\.as,WorkspaceA\/Script\/Bar\.as\}/u);
   assert.doesNotMatch(text, /lm_findTextInFiles\.pathScope/u);
   assert.doesNotMatch(text, /lm_qgrepSearchText\.pathScope/u);
   assert.doesNotMatch(text, /lm_getDiagnostics\.pathScope/u);

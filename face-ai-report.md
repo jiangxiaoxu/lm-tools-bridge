@@ -3,7 +3,7 @@
 ## Section A: Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.158`.
+- Version baseline: `1.0.160`.
 - Must-read objective: preload this file, then jump to task-relevant entrypoints only.
 
 ### Hard Invariants
@@ -16,7 +16,7 @@
 - `tools.disabledDelta` overrides `tools.enabledDelta`.
 - Built-in disabled tools must be pruned from all tool delta settings.
 - `lm_getDiagnostics` uses `vscode.languages.getDiagnostics`.
-- Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and applies to any tool argument named `pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
+- Shared `pathScope` syntax lives at `lm-tools://spec/pathScope` and applies to any tool argument named `pathScope`; accepted forms include workspace-relative patterns plus placeholder-style multi-root examples such as `WorkspaceA/...` or `{WorkspaceA,UE5}/...`, explicit top-level brace enumeration of full file/glob branches such as `{WorkspaceA/Script/Foo.as,WorkspaceA/Script/Bar.as}`, mixed top-level brace branches, and absolute paths or globs inside current workspaces, while bare `|` alternation is rejected in favor of brace globs.
 - `lm_getDiagnostics.pathScope` uses the shared syntax above, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
 - `lm_formatFiles` is default exposed but not default enabled, requires `pathScope`, formats matched workspace files through `editor.action.formatDocument` so VS Code can honor the active language-scoped formatter selection (including `editor.defaultFormatter`), best-effort restores the previously active editor after each file, saves only changed files, returns summary counts plus `failures` and `skippedEntries`, and treats unchanged document text as `unchanged`.
 - `lm_findFiles` and `lm_findTextInFiles` use VS Code workspace search backends (ripgrep-based file/text search).

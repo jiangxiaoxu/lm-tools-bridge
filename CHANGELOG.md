@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.160] - 2026-04-16
+
+### English
+
+#### Changed
+- Clarified the shared `pathScope` spec with an explicit top-level brace example that enumerates full file branches such as `{WorkspaceA/Script/Foo.as,WorkspaceA/Script/Bar.as}`.
+
+### 中文
+
+#### 变更
+- 在共享 `pathScope` 规范中补充了显式 top-level brace 示例,说明可直接枚举完整文件分支,例如 `{WorkspaceA/Script/Foo.as,WorkspaceA/Script/Bar.as}`.
+
 ## [1.0.159] - 2026-04-15
 
 ### English

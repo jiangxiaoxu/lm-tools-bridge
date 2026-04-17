@@ -142,6 +142,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   void syncBundledStdioManager({
     bundledManagerPath: context.asAbsolutePath(path.join('out', 'stdioManager.js')),
+    bundledRuntimePath: context.asAbsolutePath(path.join('out', 'stdioManagerRuntime.js')),
     extensionVersion: getExtensionVersion(context),
     logger: {
       info: logStatusInfo,

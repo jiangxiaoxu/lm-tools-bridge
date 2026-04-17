@@ -35,6 +35,15 @@ if (shouldBuildTarget('stdioManager')) {
         outfile: path.join(outDir, 'stdioManager.js'),
         tsconfig: path.join(rootDir, 'tsconfig.json'),
     });
+    await build({
+        ...shared,
+        banner: {
+            js: '/* lm-tools-bridge bundled stdioManager runtime */',
+        },
+        entryPoints: [path.join(rootDir, 'src', 'stdioManagerRuntime.ts')],
+        outfile: path.join(outDir, 'stdioManagerRuntime.js'),
+        tsconfig: path.join(rootDir, 'tsconfig.json'),
+    });
 }
 
 const ripgrepBinDir = path.join(rootDir, 'node_modules', '@vscode', 'ripgrep', 'bin');

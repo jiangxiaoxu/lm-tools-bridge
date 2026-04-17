@@ -6,6 +6,48 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.165] - 2026-04-17
+
+### English
+
+#### Fixed
+- Synced stdio manager publication now treats the pre-`1.0.163` metadata format as a migratable legacy state instead of an invalid state, so upgrades from older installed releases republish the new bootstrap/runtime pair and write the new generation metadata instead of skipping sync forever.
+
+### 中文
+
+#### 修复
+- 已同步 stdio manager 的发布逻辑现在会把 `1.0.163` 之前的旧版 metadata 识别为可迁移 legacy 状态,因此从旧安装版本升级时会重新发布新的 bootstrap/runtime 双文件并写入新的 generation metadata,而不会一直跳过同步.
+
+## [1.0.164] - 2026-04-17
+
+### English
+
+#### Fixed
+- The stable stdio manager bootstrap now rejects stale binds that race with a generation cutover, retries loading the same runtime generation after transient load failures, and acknowledges control-pipe generation changes without waiting on MCP list-changed notifications.
+- Synced manager publication now bumps generations only when the manager or runtime artifact hash changes, skips publish when existing synced artifacts have missing or invalid metadata, keeps timed-out live manager registry entries for later retries, and preserves Unix publish-lock safety when recovering stale sockets.
+- Real VS Code manager integration cleanup now tolerates transient Windows file locks so release verification no longer fails on best-effort temp-directory teardown.
+
+### 中文
+
+#### 修复
+- 稳定 stdio manager bootstrap 现在会拒绝与 generation 切换并发的陈旧 bind,会在瞬时 runtime 加载失败后继续重试同一 generation,并且 control pipe 的 generation 变更确认不再等待 MCP list-changed 通知完成.
+- 已同步 manager 的发布逻辑现在只会在 manager 或 runtime artifact hash 变化时递增 generation,当现有已同步 artifact 的 metadata 缺失或无效时会跳过发布,notify 超时不会删除仍存活的 manager registry 项,同时补上了 Unix stale socket 恢复时的 publish lock 安全边界.
+- 真实 VS Code manager integration 的清理流程现在会容忍 Windows 下临时文件锁,因此 release 验证不再因为 best-effort 临时目录回收而失败.
+
+## [1.0.163] - 2026-04-17
+
+### English
+
+#### Changed
+- The synced stdio manager now uses a stable bootstrap plus a hot-reloadable runtime module, so long-lived chat-thread MCP manager processes can pick up updated runtime JS without manually restarting the conversation thread.
+- Extension activation now syncs both `stdioManager.js` and `stdioManagerRuntime.js` into `%LOCALAPPDATA%\\lm-tools-bridge`.
+
+### 中文
+
+#### 变更
+- 已同步的 stdio manager 现在改为稳定 bootstrap 加可热重载 runtime 模块,因此长驻的聊天线程 MCP manager 进程可以直接吃到更新后的 runtime JS,不再需要手工重启会话线程.
+- 扩展激活时现在会同时同步 `stdioManager.js` 和 `stdioManagerRuntime.js` 到 `%LOCALAPPDATA%\\lm-tools-bridge`.
+
 ## [1.0.162] - 2026-04-17
 
 ### English

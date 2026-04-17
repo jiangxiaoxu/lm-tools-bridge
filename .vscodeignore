@@ -7,6 +7,7 @@ out/**/*.js
 out/**/*.map
 !out/extension.js
 !out/stdioManager.js
+!out/stdioManagerRuntime.js
 !bin/**
 **/*.ts
 **/*.d.ts

@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.162] - 2026-04-17
+
+### English
+
+#### Changed
+- `lm-tools://tool-names` and bridged `lm-tools://tool/{name}` now return actionable bind/rebind MCP errors until the workspace is actively bound, instead of exposing misleading pre-handshake results.
+
+### 中文
+
+#### 变更
+- `lm-tools://tool-names` 和 bridged `lm-tools://tool/{name}` 在 workspace 处于活动绑定前,现在会返回可执行的 bind/rebind MCP 错误提示,不再暴露会误导调用方的预握手结果.
+
 ## [1.0.161] - 2026-04-16
 
 ### English

@@ -400,6 +400,110 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal((bridgeCall.structuredContent as { value?: string }).value, 'world');
 });
 
+test('stdio manager requires bind before bridged discovery resources are readable', async (t) => {
+  const pipeEnv = createPipeEnv('resource-bind-required');
+  const manager = await connectStdioManager(pipeEnv);
+
+  t.after(async () => {
+    await manager.close();
+  });
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: 'lm-tools://tool-names',
+    }),
+    /Workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u,
+  );
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
+    }),
+    /Workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u,
+  );
+});
+
+test('stdio manager requires rebind for bridged discovery resources after the workspace goes offline', async (t) => {
+  const pipeEnv = createPipeEnv('resource-rebind-required');
+  const rootDir = await makeTempDir('lm-tools-bridge-stdio-');
+  const workspaceRoot = path.join(rootDir, 'workspace');
+  await fs.promises.mkdir(workspaceRoot, { recursive: true });
+
+  const workspace = await startFakeWorkspaceServer({
+    pipeEnv,
+    workspaceFolders: [workspaceRoot],
+  });
+  const manager = await connectStdioManager(pipeEnv);
+
+  t.after(async () => {
+    await manager.close();
+    await fs.promises.rm(rootDir, { recursive: true, force: true });
+  });
+
+  await manager.client.callTool({
+    name: REQUEST_WORKSPACE_METHOD,
+    arguments: {
+      cwd: workspaceRoot,
+    },
+  });
+  await workspace.stop();
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: 'lm-tools://tool-names',
+    }),
+    /Active workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\. Bridged discovery resources are available only after a successful bind\./u,
+  );
+});
+
+test('stdio manager keeps local bridge helper definitions readable before bind', async (t) => {
+  const pipeEnv = createPipeEnv('resource-local-helper');
+  const manager = await connectStdioManager(pipeEnv);
+
+  t.after(async () => {
+    await manager.close();
+  });
+
+  const bindWorkspaceDefinition = await manager.client.readResource({
+    uri: `lm-tools://tool/${REQUEST_WORKSPACE_METHOD}`,
+  });
+  const payload = JSON.parse(getResourceText(bindWorkspaceDefinition)) as { name?: unknown };
+  assert.equal(payload.name, REQUEST_WORKSPACE_METHOD);
+});
+
+test('stdio manager still reports unavailable bridged tools after bind', async (t) => {
+  const pipeEnv = createPipeEnv('resource-unavailable-after-bind');
+  const rootDir = await makeTempDir('lm-tools-bridge-stdio-');
+  const workspaceRoot = path.join(rootDir, 'workspace');
+  await fs.promises.mkdir(workspaceRoot, { recursive: true });
+
+  const workspace = await startFakeWorkspaceServer({
+    pipeEnv,
+    workspaceFolders: [workspaceRoot],
+  });
+  const manager = await connectStdioManager(pipeEnv);
+
+  t.after(async () => {
+    await manager.close();
+    await workspace.stop();
+    await fs.promises.rm(rootDir, { recursive: true, force: true });
+  });
+
+  await manager.client.callTool({
+    name: REQUEST_WORKSPACE_METHOD,
+    arguments: {
+      cwd: workspaceRoot,
+    },
+  });
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: 'lm-tools://tool/lm_missingTool',
+    }),
+    /Tool not found or unavailable: lm_missingTool/u,
+  );
+});
+
 test('stdio manager clears bound tools when the workspace server goes offline', async (t) => {
   const pipeEnv = createPipeEnv('offline');
   const rootDir = await makeTempDir('lm-tools-bridge-stdio-');

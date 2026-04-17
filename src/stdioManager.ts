@@ -154,6 +154,20 @@ function getWorkspaceNotSetMessage(): string {
   );
 }
 
+function getBridgedResourceBindingRequiredMessage(): string {
+  return appendNextStep(
+    'Workspace binding required before reading bridged discovery resources.',
+    `call ${REQUEST_WORKSPACE_METHOD} with params.cwd, wait for ok=true, then retry once.`,
+  );
+}
+
+function getBridgedResourceRebindMessage(): string {
+  return appendNextStep(
+    'Active workspace binding required before reading bridged discovery resources.',
+    `${getRebindRetryHint()} Bridged discovery resources are available only after a successful bind.`,
+  );
+}
+
 function getTargetUnreachableMessage(): string {
   return appendNextStep(
     'Workspace MCP server is unreachable.',
@@ -510,6 +524,10 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
   };
 }
 
+function isLocalBridgeHelperToolName(name: string): boolean {
+  return name === REQUEST_WORKSPACE_METHOD || name === DIRECT_TOOL_CALL_NAME;
+}
+
 function getBoundToolNames(): string[] {
   return session.boundTools
     .map((tool) => tool.name)
@@ -611,7 +629,7 @@ function getNamesResource() {
   return {
     uri: TOOL_NAMES_RESOURCE_URI,
     name: 'Bridged tool names',
-    description: 'Read bridged tool names after bind. This is names-only discovery; read lm-tools://tool/{name} on demand for the full definition.',
+    description: `Read bridged tool names after bind. This is names-only discovery; read lm-tools://tool/{name} on demand for the full definition. Before bind, call ${REQUEST_WORKSPACE_METHOD} first.`,
     mimeType: 'application/json',
   };
 }
@@ -629,9 +647,24 @@ function getToolTemplate() {
   return {
     name: 'Tool URI template',
     uriTemplate: TOOL_URI_TEMPLATE,
-    description: 'Read a bridged tool definition by name before the first call, then build arguments from its inputSchema.',
+    description: `Read a bridged tool definition by name after bind and before the first call, then build arguments from its inputSchema. Before bind, call ${REQUEST_WORKSPACE_METHOD} first.`,
     mimeType: 'application/json',
   };
+}
+
+async function ensureBridgedDiscoveryResourceReadable(server: Server): Promise<void> {
+  if (!session.workspaceSetExplicitly) {
+    throw new McpError(ErrorCode.InvalidRequest, getBridgedResourceBindingRequiredMessage());
+  }
+  if (!session.workspaceMatched || !session.currentTarget) {
+    throw new McpError(ErrorCode.InvalidRequest, getBridgedResourceRebindMessage());
+  }
+
+  const health = await checkTargetHealth(session.currentTarget);
+  if (!isHealthOk(health)) {
+    await clearBindingIfNeeded(server);
+    throw new McpError(ErrorCode.InvalidRequest, getBridgedResourceRebindMessage());
+  }
 }
 
 async function clearBindingIfNeeded(server: Server): Promise<void> {
@@ -1127,7 +1160,7 @@ function getHandshakeResourceText(): string {
     `1. Call ${REQUEST_WORKSPACE_METHOD} with params.cwd set to the project path or .code-workspace path.`,
     '2. Treat the resolved workspace roots as the validated lmToolsBridge scope.',
     `3. Follow guidance.nextSteps from the handshake response.`,
-    `4. Use discovery.bridgedTools as names-only discovery and read lm-tools://tool/{name} only for the tools needed by the current task.`,
+    `4. Use discovery.bridgedTools as names-only discovery and read lm-tools://tool/{name} only for the tools needed by the current task after bind.`,
     `5. Before the first bridged tool call, ${getToolReadHint()}`,
     `6. ${getPathScopeSpecReadHint()}`,
     `7. Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and tool-definition read, or call the bridged tools returned by tools/list after handshake.`,
@@ -1145,6 +1178,7 @@ function getHandshakeResourceText(): string {
     'Handshake result:',
     '- A successful handshake response includes discovery data (callTool, bridgedTools, resourceTemplates).',
     '- discovery.bridgedTools returns names only; read lm-tools://tool/{name} for per-tool description and inputSchema.',
+    '- Reading lm-tools://tool-names or bridged lm-tools://tool/{name} before bind returns an actionable bind-required error.',
     '',
     'Direct tool call after handshake:',
     `- ${DIRECT_TOOL_CALL_NAME} is used after a successful workspace binding.`,
@@ -1254,6 +1288,7 @@ function createServer(): Server {
       return resourceJson(uri, getHandshakeResourceText(), 'text/plain');
     }
     if (uri === TOOL_NAMES_RESOURCE_URI) {
+      await ensureBridgedDiscoveryResourceReadable(server);
       return resourceJson(uri, { tools: getBoundToolNames() });
     }
     if (uri === PATH_SCOPE_SPEC_URI) {
@@ -1261,6 +1296,9 @@ function createServer(): Server {
     }
     const toolName = getToolNameFromUri(uri, 'lm-tools://tool/');
     if (toolName) {
+      if (!isLocalBridgeHelperToolName(toolName)) {
+        await ensureBridgedDiscoveryResourceReadable(server);
+      }
       const tool = findToolDefinitionByName(toolName);
       if (!tool) {
         throw new McpError(ErrorCode.InvalidParams, `Tool not found or unavailable: ${toolName}`);

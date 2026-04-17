@@ -59,9 +59,9 @@ Notes:
 - Read `lm-tools://guide` for the detailed workflow, routing, and fallback guide. It is guide-only and does not embed live status snapshots or example payloads.
 - VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - `lm_formatFiles` is exposed by default but disabled by default. It formats the files selected by `pathScope` through VS Code's document-format command so the configured formatter selection, including `editor.defaultFormatter`, is honored, then saves changed files after you enable it.
-- Handshake `discovery.bridgedTools` returns tool names only. Read `lm-tools://tool/{name}` for the tool description and `inputSchema`.
+- Handshake `discovery.bridgedTools` returns tool names only. Read `lm-tools://tool/{name}` for the tool description and `inputSchema`, but only after a successful bind.
 - Read `lm-tools://tool/{name}` before the first bridged tool call, then build arguments from its `inputSchema`.
-- The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools://guide`; the names-only discovery resource is `lm-tools://tool-names`.
+- The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools://guide`; the names-only discovery resource is `lm-tools://tool-names`, and both bridged discovery resources return an actionable bind/rebind error until the workspace is actively bound.
 - If a tool argument uses `pathScope`, read `lm-tools://spec/pathScope` after bind.
 
 ### Workspace Settings
@@ -129,9 +129,9 @@ enabled = true
 - 读取 `lm-tools://guide`,里面包含更详细的 workflow、routing 和 fallback 指南,不会内嵌 live status snapshot 或 example payload.
 - 来自 VS Code 的 workspace tool 对外统一带 `lm_` 前缀. 例如 `copilot_searchCodebase` 会暴露为 `lm_copilot_searchCodebase`.
 - `lm_formatFiles` 默认已暴露但默认禁用,启用后会按 `pathScope` 选择文件,通过 VS Code 的 document format 命令执行格式化,从而遵循已配置的 formatter 选择(包括 `editor.defaultFormatter`),然后保存实际发生变更的文件.
-- 握手里的 `discovery.bridgedTools` 只返回 tool name. 需要 tool description 和 `inputSchema` 时,请读取 `lm-tools://tool/{name}`.
+- 握手里的 `discovery.bridgedTools` 只返回 tool name. 需要 tool description 和 `inputSchema` 时,请在成功握手后读取 `lm-tools://tool/{name}`.
 - 首次调用桥接 tool 之前,先读取 `lm-tools://tool/{name}`,再根据其中的 `inputSchema` 组装参数.
-- `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools://guide`; names-only discovery resource 是 `lm-tools://tool-names`.
+- `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools://guide`; names-only discovery resource 是 `lm-tools://tool-names`,这两个 bridged discovery resource 在未绑定或绑定失效时都会返回可执行的 bind/rebind 提示.
 - 如果某个工具参数使用了 `pathScope`,请在绑定后读取 `lm-tools://spec/pathScope`.
 
 ### 工作区设置

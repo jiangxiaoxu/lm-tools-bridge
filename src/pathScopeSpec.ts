@@ -67,6 +67,8 @@ export function getPathScopeSpecText(): string {
     '',
     'Invalid or misleading examples:',
     '- WorkspaceA|UE5/**/*.as: invalid. Use brace globs such as {WorkspaceA,UE5}/**/*.as.',
+    '- MovieSceneTracks/**/*.{h,cpp}|MovieSceneTools/**/*.cpp: invalid. When you need OR across multiple full path/glob branches, wrap the branches in one top-level brace expression instead.',
+    '- Use {MovieSceneTracks/**/*.{h,cpp},MovieSceneTools/**/*.cpp} instead of the bare `|` form above.',
     '- WorkspaceA/*/*.as: valid, but not recursive. If you meant recursive matching, use WorkspaceA/**/*.as.',
     '',
     'Scope note:',

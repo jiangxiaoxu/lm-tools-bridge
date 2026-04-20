@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.167] - 2026-04-20
+
+### English
+
+#### Changed
+- Clarified the shared `lm-tools://spec/pathScope` examples so bare `|` alternation across multiple path/glob branches is easier to spot as invalid, and added a shorter brace-glob replacement example.
+
+### 中文
+
+#### 变更
+- 补强并收短了共享 `lm-tools://spec/pathScope` 示例,让多个路径或 glob 分支之间的 bare `|` 误用更容易被看出是无效写法,同时给出更短的 brace-glob 替代写法.
+
 ## [1.0.166] - 2026-04-20
 
 ### English

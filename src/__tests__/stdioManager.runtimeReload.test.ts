@@ -20,7 +20,12 @@ import {
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
+const PATH_SCOPE_RESOURCE_URI = 'lm-tools://spec/pathScope';
+const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const ECHO_TOOL_NAME = 'lm_testEcho';
+const RELOAD_BIND_INVALIDATED_PATTERN = /Stdio runtime reloaded; the previous workspace binding was invalidated\..*Next step: call lmToolsBridge\.bindWorkspace with a cwd inside the target workspace, wait for success, then retry once\./u;
+const RELOAD_RESOURCE_REBIND_PATTERN = /Stdio runtime reloaded; bridged discovery resources require a new workspace bind\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u;
+const FATAL_RELOAD_FAILURE_PATTERN = /MCP stdio runtime reload failed and this stdio manager is no longer available \(broken runtime module\)\. Next step: reactivate the VS Code extension to start a fresh stdio manager, then retry from bind\./u;
 
 interface ManagerRegistryEntry {
   protocolVersion: 1;
@@ -486,7 +491,7 @@ test('stdio manager invalidates binding on control notification and requires reb
         value: 'stale-bind',
       },
     }),
-    /Workspace not matched\..*Next step: call lmToolsBridge\.bindWorkspace/u,
+    RELOAD_BIND_INVALIDATED_PATTERN,
   );
 
   await manager.client.callTool({
@@ -571,7 +576,7 @@ test('stdio manager rejects a bind that races with a generation cutover', async 
 
   await assert.rejects(
     async () => bindPromise,
-    /Workspace not matched\..*Next step: call lmToolsBridge\.bindWorkspace/u,
+    RELOAD_BIND_INVALIDATED_PATTERN,
   );
 
   await manager.client.callTool({
@@ -662,7 +667,7 @@ test('stdio manager rejects a bridged tool call that races with a generation cut
 
   await assert.rejects(
     () => toolCallPromise,
-    /Workspace not matched\..*Next step: call lmToolsBridge\.bindWorkspace/u,
+    RELOAD_BIND_INVALIDATED_PATTERN,
   );
 
   await manager.client.callTool({
@@ -750,7 +755,7 @@ test('stdio manager rejects a bridged resource read that races with a generation
 
   await assert.rejects(
     () => resourceReadPromise,
-    /Active workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace/u,
+    RELOAD_RESOURCE_REBIND_PATTERN,
   );
 
   await manager.client.callTool({
@@ -821,21 +826,52 @@ test('stdio manager retries the same generation after a runtime load failure', a
   const failedResponse = await sendGenerationChanged(registry.entry.controlPipePath, 2);
   assert.equal(failedResponse.generationApplied, 1);
   assert.equal(failedResponse.bindingInvalidated, false);
+  await waitForMissingFile(registry.filePath);
 
   await assert.rejects(
-    () => manager.client.callTool({
-      name: REQUEST_WORKSPACE_METHOD,
-      arguments: {},
+    () => manager.client.listTools(),
+    FATAL_RELOAD_FAILURE_PATTERN,
+  );
+
+  await assert.rejects(
+    () => manager.client.listResources(),
+    FATAL_RELOAD_FAILURE_PATTERN,
+  );
+
+  await assert.rejects(
+    () => manager.client.listResourceTemplates(),
+    FATAL_RELOAD_FAILURE_PATTERN,
+  );
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: GUIDE_RESOURCE_URI,
     }),
-    /Invalid params: expected params\.cwd \(string\)\./u,
+    FATAL_RELOAD_FAILURE_PATTERN,
+  );
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: PATH_SCOPE_RESOURCE_URI,
+    }),
+    FATAL_RELOAD_FAILURE_PATTERN,
+  );
+
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: TOOL_NAMES_RESOURCE_URI,
+    }),
+    FATAL_RELOAD_FAILURE_PATTERN,
   );
 
   await assert.rejects(
     () => manager.client.callTool({
-      name: DIRECT_TOOL_CALL_NAME,
-      arguments: {},
+      name: REQUEST_WORKSPACE_METHOD,
+      arguments: {
+        cwd: nestedPath,
+      },
     }),
-    /Invalid params: expected arguments\.name \(string\)\./u,
+    FATAL_RELOAD_FAILURE_PATTERN,
   );
 
   await assert.rejects(
@@ -843,44 +879,23 @@ test('stdio manager retries the same generation after a runtime load failure', a
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
         name: ECHO_TOOL_NAME,
-        arguments: 'invalid-shape',
+        arguments: {
+          value: 'still-dead',
+        },
       },
     }),
-    /Invalid params: expected arguments\.arguments \(object\)\./u,
+    FATAL_RELOAD_FAILURE_PATTERN,
   );
 
-  const guideWhileReloadFailed = await manager.client.readResource({
-    uri: GUIDE_RESOURCE_URI,
-  });
-  assert.match(getResourceText(guideWhileReloadFailed), /Workspace bridge guide/u);
-
-  const toolWhileReloadFailed = await manager.client.callTool({
-    name: DIRECT_TOOL_CALL_NAME,
-    arguments: {
+  await assert.rejects(
+    () => manager.client.callTool({
       name: ECHO_TOOL_NAME,
       arguments: {
-        value: 'still-alive',
+        value: 'still-dead',
       },
-    },
-  });
-  assert.match(JSON.stringify(toolWhileReloadFailed.structuredContent ?? {}), /still-alive/u);
-
-  const recoveredRuntimeText = originalRuntimeText.replace(
-    'Workspace bridge guide',
-    'Workspace bridge guide recovered',
+    }),
+    FATAL_RELOAD_FAILURE_PATTERN,
   );
-  await fs.promises.writeFile(copiedRuntimePath, recoveredRuntimeText, 'utf8');
-
-  await manager.client.callTool({
-    name: REQUEST_WORKSPACE_METHOD,
-    arguments: {
-      cwd: nestedPath,
-    },
-  });
-  const guideAfterRecovery = await manager.client.readResource({
-    uri: GUIDE_RESOURCE_URI,
-  });
-  assert.match(getResourceText(guideAfterRecovery), /Workspace bridge guide recovered/u);
 });
 
 test('stdio manager lazily applies generation changes and cleans up registry on exit', async (t) => {
@@ -952,7 +967,7 @@ test('stdio manager lazily applies generation changes and cleans up registry on 
         value: 'needs-rebind',
       },
     }),
-    /Workspace not matched\..*Next step: call lmToolsBridge\.bindWorkspace/u,
+    RELOAD_BIND_INVALIDATED_PATTERN,
   );
 
   await manager.close();

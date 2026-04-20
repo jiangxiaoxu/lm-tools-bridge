@@ -102,10 +102,17 @@ interface RuntimeModuleShape {
   createStdioManagerRuntime: () => StdioManagerRuntimeApi;
 }
 
+interface FatalReloadFailureState {
+  generation: number;
+  reason: string;
+}
+
 class RuntimeController {
   private readonly runtimePath: string;
 
   private readonly metadataPath: string;
+
+  private readonly removeRegistryEntry: () => Promise<void>;
 
   private runtime?: StdioManagerRuntimeApi;
 
@@ -125,11 +132,20 @@ class RuntimeController {
 
   private visibilityNotificationTail: Promise<void> = Promise.resolve();
 
+  private fatalReloadFailure?: FatalReloadFailureState;
+
   private bindingState: 'never-bound' | 'bound' | 'stale' = 'never-bound';
 
-  public constructor(runtimePath: string, metadataPath: string) {
+  public constructor(
+    runtimePath: string,
+    metadataPath: string,
+    options?: {
+      removeRegistryEntry?: () => Promise<void>;
+    },
+  ) {
     this.runtimePath = runtimePath;
     this.metadataPath = metadataPath;
+    this.removeRegistryEntry = options?.removeRegistryEntry ?? (async () => undefined);
     const metadataState = readMetadataStateSync(this.metadataPath);
     this.metadataFingerprint = metadataState.fingerprint;
     if (metadataState.warning) {
@@ -142,6 +158,9 @@ class RuntimeController {
   }
 
   public async ensureCurrent(server: Server): Promise<void> {
+    if (this.fatalReloadFailure) {
+      return;
+    }
     if (!this.refreshPromise) {
       this.refreshPromise = this.refreshInternal(server);
     }
@@ -150,6 +169,12 @@ class RuntimeController {
     } finally {
       this.refreshPromise = undefined;
     }
+  }
+
+  public async ensureAvailable(server: Server): Promise<void> {
+    this.throwIfFatalReloadFailure();
+    await this.ensureCurrent(server);
+    this.throwIfFatalReloadFailure();
   }
 
   public getHelperOverrides(): StdioManagerRuntimeLocalHelperOverrides {
@@ -163,11 +188,13 @@ class RuntimeController {
   public async bindWorkspace(server: Server, cwd: unknown): Promise<WorkspaceHandshakePayload> {
     this.validateBindWorkspaceParams(cwd);
     await this.ensureCurrent(server);
+    this.throwIfFatalReloadFailure();
     const runtime = this.requireRuntimeForBind();
     const runtimeEpoch = this.runtimeEpoch;
     const payload = await runtime.bindWorkspace(server, cwd);
     if (this.runtime !== runtime || this.runtimeEpoch !== runtimeEpoch) {
-      throw new McpError(ErrorCode.InvalidRequest, getWorkspaceNotMatchedMessage());
+      this.throwIfFatalReloadFailure();
+      throw new McpError(ErrorCode.InvalidRequest, getReloadedWorkspaceBindingInvalidatedMessage());
     }
     this.bindingState = 'bound';
     return payload;
@@ -179,6 +206,7 @@ class RuntimeController {
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     await this.ensureCurrent(server);
+    this.throwIfFatalReloadFailure();
     if (this.bindingState === 'stale') {
       throw this.getStaleBridgedRequestError('tool-call');
     }
@@ -196,6 +224,7 @@ class RuntimeController {
 
   public async readBridgedResource(server: Server, uri: string): Promise<Record<string, unknown>> {
     await this.ensureCurrent(server);
+    this.throwIfFatalReloadFailure();
     if (this.bindingState === 'stale') {
       throw this.getStaleBridgedRequestError('resource-read');
     }
@@ -297,10 +326,7 @@ class RuntimeController {
       try {
         nextRuntime = this.loadRuntimeModule();
       } catch (error) {
-        this.runtimeLoadError = error;
-        process.stderr.write(
-          `stdio manager runtime load failed for generation ${String(targetGeneration)}: ${formatErrorMessage(error)}\n`,
-        );
+        await this.enterFatalReloadFailure(server, targetGeneration, error);
         return {
           bindingInvalidated: false,
           generationApplied: this.loadedGeneration,
@@ -339,6 +365,7 @@ class RuntimeController {
   }
 
   private requireRuntimeForBind(): StdioManagerRuntimeApi {
+    this.throwIfFatalReloadFailure();
     if (this.runtime) {
       return this.runtime;
     }
@@ -346,6 +373,7 @@ class RuntimeController {
   }
 
   private requireRuntimeForBridgedRequest(kind: 'tool-call' | 'resource-read'): StdioManagerRuntimeApi {
+    this.throwIfFatalReloadFailure();
     if (this.runtime) {
       return this.runtime;
     }
@@ -378,6 +406,7 @@ class RuntimeController {
     runtimeEpoch: number,
     kind: 'tool-call' | 'resource-read',
   ): void {
+    this.throwIfFatalReloadFailure();
     if (this.runtime !== runtime || this.runtimeEpoch !== runtimeEpoch) {
       throw this.getStaleBridgedRequestError(kind);
     }
@@ -387,8 +416,8 @@ class RuntimeController {
     return new McpError(
       ErrorCode.InvalidRequest,
       kind === 'resource-read'
-        ? getBridgedResourceRebindMessage()
-        : getWorkspaceNotMatchedMessage(),
+        ? getReloadedBridgedResourceRebindMessage()
+        : getReloadedWorkspaceBindingInvalidatedMessage(),
     );
   }
 
@@ -404,6 +433,43 @@ class RuntimeController {
   private setRuntime(runtime: StdioManagerRuntimeApi | undefined): void {
     this.runtime = runtime;
     this.runtimeEpoch += 1;
+  }
+
+  private throwIfFatalReloadFailure(): void {
+    if (!this.fatalReloadFailure) {
+      return;
+    }
+    throw new McpError(ErrorCode.InternalError, buildFatalReloadFailureMessage(this.fatalReloadFailure));
+  }
+
+  private async enterFatalReloadFailure(
+    server: Server,
+    generation: number,
+    error: unknown,
+  ): Promise<void> {
+    const previousRuntime = this.runtime;
+    const reason = formatErrorSummary(error);
+    this.fatalReloadFailure = {
+      generation,
+      reason,
+    };
+    this.runtimeLoadError = error;
+    this.bindingState = 'never-bound';
+    this.setRuntime(undefined);
+    process.stderr.write(
+      `stdio manager runtime reload failed permanently for generation ${String(generation)}: ${formatErrorMessage(error)}\n`,
+    );
+    if (previousRuntime) {
+      await disposeRuntime(previousRuntime);
+    }
+    try {
+      await this.removeRegistryEntry();
+    } catch (registryError) {
+      process.stderr.write(
+        `stdio manager registry cleanup failed after fatal reload error: ${formatErrorMessage(registryError)}\n`,
+      );
+    }
+    this.queueVisibilityNotifications(server);
   }
 
   private async enqueueGenerationTransition<T>(operation: () => Promise<T>): Promise<T> {
@@ -706,6 +772,13 @@ function getWorkspaceNotMatchedMessage(): string {
   );
 }
 
+function getReloadedWorkspaceBindingInvalidatedMessage(): string {
+  return appendNextStep(
+    'Stdio runtime reloaded; the previous workspace binding was invalidated.',
+    `call ${REQUEST_WORKSPACE_METHOD} with a cwd inside the target workspace, wait for success, then retry once.`,
+  );
+}
+
 function getBridgedResourceBindingRequiredMessage(): string {
   return appendNextStep(
     'Workspace binding required before reading bridged discovery resources.',
@@ -717,6 +790,13 @@ function getBridgedResourceRebindMessage(): string {
   return appendNextStep(
     'Active workspace binding required before reading bridged discovery resources.',
     `${getRebindRetryHint()} Bridged discovery resources are available only after a successful bind.`,
+  );
+}
+
+function getReloadedBridgedResourceRebindMessage(): string {
+  return appendNextStep(
+    'Stdio runtime reloaded; bridged discovery resources require a new workspace bind.',
+    `call ${REQUEST_WORKSPACE_METHOD} with params.cwd, wait for ok=true, then retry once.`,
   );
 }
 
@@ -760,6 +840,13 @@ function buildRuntimeUnavailableMessage(error: unknown): string {
   return appendNextStep(
     `Runtime reload is unavailable${reason}`,
     `retry ${REQUEST_WORKSPACE_METHOD} once; if it still fails, reactivate the VS Code extension and retry.`,
+  );
+}
+
+function buildFatalReloadFailureMessage(failure: FatalReloadFailureState): string {
+  return appendNextStep(
+    `MCP stdio runtime reload failed and this stdio manager is no longer available (${failure.reason})`,
+    'reactivate the VS Code extension to start a fresh stdio manager, then retry from bind.',
   );
 }
 
@@ -858,6 +945,13 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.stack ?? error.message : String(error);
 }
 
+function formatErrorSummary(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
 function getPackageVersion(): string {
   try {
     const pkgPath = path.resolve(__dirname, '..', 'package.json');
@@ -870,14 +964,20 @@ function getPackageVersion(): string {
 }
 
 function createServer(): { server: Server; cleanup: () => void } {
-  const runtimeController = new RuntimeController(
-    path.join(__dirname, RUNTIME_MODULE_FILENAME),
-    path.join(__dirname, METADATA_FILENAME),
-  );
   const shellSessionId = crypto.randomUUID();
   const controlPipePath = buildControlPipePath(shellSessionId);
   const registryDir = path.join(__dirname, MANAGER_REGISTRY_DIRNAME);
   const registryPath = path.join(registryDir, `${shellSessionId}.json`);
+  const removeRegistryEntry = async () => {
+    await fs.promises.rm(registryPath, { force: true });
+  };
+  const runtimeController = new RuntimeController(
+    path.join(__dirname, RUNTIME_MODULE_FILENAME),
+    path.join(__dirname, METADATA_FILENAME),
+    {
+      removeRegistryEntry,
+    },
+  );
 
   const server = new Server(
     {
@@ -984,7 +1084,7 @@ function createServer(): { server: Server; cleanup: () => void } {
   })();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    await runtimeController.ensureCurrent(server);
+    await runtimeController.ensureAvailable(server);
     return {
       tools: [
         ...getHelperToolDefinitions(runtimeController.getHelperOverrides()),
@@ -994,6 +1094,7 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    await runtimeController.ensureAvailable(server);
     const name = request.params.name;
     const rawArgs = request.params.arguments;
     const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
@@ -1024,12 +1125,11 @@ function createServer(): { server: Server; cleanup: () => void } {
       );
     }
 
-    await runtimeController.ensureCurrent(server);
     return await runtimeController.callBridgedTool(server, name, args);
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    await runtimeController.ensureCurrent(server);
+    await runtimeController.ensureAvailable(server);
     return {
       resources: [
         {
@@ -1055,7 +1155,7 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    await runtimeController.ensureCurrent(server);
+    await runtimeController.ensureAvailable(server);
     const overrides = runtimeController.getHelperOverrides();
     return {
       resourceTemplates: [
@@ -1070,7 +1170,7 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    await runtimeController.ensureCurrent(server);
+    await runtimeController.ensureAvailable(server);
     const uri = request.params.uri;
     const overrides = runtimeController.getHelperOverrides();
     if (uri === GUIDE_RESOURCE_URI) {

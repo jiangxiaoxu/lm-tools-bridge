@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.166] - 2026-04-20
+
+### English
+
+#### Fixed
+- Tightened stdio runtime reload semantics so successful runtime cutovers now return explicit reload/rebind MCP errors instead of generic workspace-mismatch failures, while runtime load/export failures permanently disable the affected stdio manager, remove its registry entry, and return a clear fatal `InternalError` until VS Code starts a fresh manager.
+
+### 中文
+
+#### 修复
+- 收紧了 stdio runtime reload 语义: 成功切代后,旧 binding/resource 请求现在会返回明确的 reload/rebind MCP 错误,不再复用含糊的 workspace mismatch 提示; 如果新 runtime load/export 失败,对应的 stdio manager 会永久停摆,移除自己的 registry entry,并持续返回明确的 fatal `InternalError`,直到 VS Code 创建新的 manager.
+
 ## [1.0.165] - 2026-04-17
 
 ### English

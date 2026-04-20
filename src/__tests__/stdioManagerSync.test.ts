@@ -570,6 +570,38 @@ test('syncBundledStdioManager notifies live managers after publishing a new gene
   assert.deepEqual(liveEntry.requests.map((request) => request.generation), [1]);
 });
 
+test('syncBundledStdioManager skips managers whose registry entries were removed before publish', async (t) => {
+  const sourceDir = await makeTempDir('lm-tools-bridge-sync-src-');
+  const localAppDataDir = await makeTempDir('lm-tools-bridge-sync-localappdata-');
+  const bundledManagerPath = path.join(sourceDir, 'stdioManager.js');
+  const bundledRuntimePath = path.join(sourceDir, 'stdioManagerRuntime.js');
+  await writeBundledManager(bundledManagerPath, 'console.log("manager");');
+  await writeBundledRuntime(bundledRuntimePath, 'console.log("runtime");');
+  const paths = resolveStdioManagerSyncPaths({ LOCALAPPDATA: localAppDataDir });
+  const liveEntry = await createLiveRegistryEntry(paths.managersDir!, 'fatal-manager');
+  await fs.promises.rm(liveEntry.registryPath, { force: true });
+
+  t.after(async () => {
+    await liveEntry.close();
+    await fs.promises.rm(sourceDir, { recursive: true, force: true });
+    await fs.promises.rm(localAppDataDir, { recursive: true, force: true });
+  });
+
+  const result = await syncBundledStdioManager({
+    bundledManagerPath,
+    bundledRuntimePath,
+    extensionVersion: '1.0.0',
+    env: {
+      ...process.env,
+      LOCALAPPDATA: localAppDataDir,
+    },
+  });
+
+  assert.equal(result.status, 'synced');
+  assert.equal(result.notifiedManagers, 0);
+  assert.deepEqual(liveEntry.requests, []);
+});
+
 test('syncBundledStdioManager keeps live registry entries when notify times out', async (t) => {
   const sourceDir = await makeTempDir('lm-tools-bridge-sync-src-');
   const localAppDataDir = await makeTempDir('lm-tools-bridge-sync-localappdata-');

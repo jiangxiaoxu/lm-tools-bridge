@@ -70,9 +70,12 @@ export interface StdioManagerRuntimeSessionState {
 }
 
 const HEALTH_PATH = '/mcp/health';
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
 const GET_TOOL_DEFINITIONS_METHOD = LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME;
+const LEGACY_REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
+const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const HEALTH_TIMEOUT_MS = 1200;
 const INSTANCE_POLL_INTERVAL_MS = 500;
@@ -239,6 +242,16 @@ function getDirectCallForbiddenToolNameMessage(): string {
     'Invalid params: tool name is not allowed.',
     'set arguments.name to a bridged workspace tool from discovery.bridgedTools or tools/list.',
   );
+}
+
+function isBridgeHelperToolName(name: string): boolean {
+  return name === REQUEST_WORKSPACE_METHOD
+    || name === DIRECT_TOOL_CALL_NAME
+    || name === GET_TOOL_DEFINITIONS_METHOD
+    || name === LEGACY_REQUEST_WORKSPACE_METHOD
+    || name === LEGACY_DIRECT_TOOL_CALL_NAME
+    || name === LEGACY_GET_TOOL_DEFINITIONS_METHOD
+    || name === LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME;
 }
 
 function getRequestWorkspaceToolDescription(): string {
@@ -880,10 +893,7 @@ async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
     const name = typeof (entry as { name?: unknown }).name === 'string'
       ? (entry as { name: string }).name
       : '';
-    return name !== REQUEST_WORKSPACE_METHOD
-      && name !== DIRECT_TOOL_CALL_NAME
-      && name !== GET_TOOL_DEFINITIONS_METHOD
-      && name !== LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME;
+    return !isBridgeHelperToolName(name);
   });
 
   const tools = filtered.map((entry) => {

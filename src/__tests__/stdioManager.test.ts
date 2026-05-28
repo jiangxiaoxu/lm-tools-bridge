@@ -11,9 +11,13 @@ import {
   WorkspaceDiscoveryPublisher,
 } from '../workspaceDiscovery';
 
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
-const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge_getToolDefinitions';
+const LEGACY_REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
+const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
+const LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD = 'lm_getToolDefinitions';
 const ECHO_TOOL_NAME = 'lm_testEcho';
 
 async function makeTempDir(prefix: string): Promise<string> {
@@ -93,6 +97,13 @@ async function startFakeWorkspaceServer(args: {
                 type: 'object',
               },
             },
+            { name: REQUEST_WORKSPACE_METHOD, description: 'Local helper should be filtered.' },
+            { name: DIRECT_TOOL_CALL_NAME, description: 'Local helper should be filtered.' },
+            { name: GET_TOOL_DEFINITIONS_METHOD, description: 'Local helper should be filtered.' },
+            { name: LEGACY_REQUEST_WORKSPACE_METHOD, description: 'Legacy helper should be filtered.' },
+            { name: LEGACY_DIRECT_TOOL_CALL_NAME, description: 'Legacy helper should be filtered.' },
+            { name: LEGACY_GET_TOOL_DEFINITIONS_METHOD, description: 'Legacy helper should be filtered.' },
+            { name: LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD, description: 'Legacy helper should be filtered.' },
           ],
         },
       });
@@ -341,7 +352,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /only after its ToolDefinition has been fetched with lmToolsBridge\.getToolDefinitions/u,
+    /only after its ToolDefinition has been fetched with lmToolsBridge_getToolDefinitions/u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
@@ -363,7 +374,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /Bind:/u);
   assert.match(getResourceText(handshakeResource), /Tool discovery and calls:/u);
   assert.match(getResourceText(handshakeResource), /Routing and recovery:/u);
-  assert.match(getResourceText(handshakeResource), /fetch its ToolDefinition with lmToolsBridge\.getToolDefinitions/u);
+  assert.match(getResourceText(handshakeResource), /fetch its ToolDefinition with lmToolsBridge_getToolDefinitions/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
   assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);
@@ -395,18 +406,28 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal(toolDefinitionsPayload.tools?.[0]?.name, ECHO_TOOL_NAME);
   assert.deepEqual(toolDefinitionsPayload.tools?.[0]?.inputSchema, { type: 'object' });
 
-  await assert.rejects(
-    () => manager.client.callTool({
-      name: DIRECT_TOOL_CALL_NAME,
-      arguments: {
-        name: GET_TOOL_DEFINITIONS_METHOD,
+  for (const forbiddenName of [
+    REQUEST_WORKSPACE_METHOD,
+    DIRECT_TOOL_CALL_NAME,
+    GET_TOOL_DEFINITIONS_METHOD,
+    LEGACY_REQUEST_WORKSPACE_METHOD,
+    LEGACY_DIRECT_TOOL_CALL_NAME,
+    LEGACY_GET_TOOL_DEFINITIONS_METHOD,
+    LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD,
+  ]) {
+    await assert.rejects(
+      () => manager.client.callTool({
+        name: DIRECT_TOOL_CALL_NAME,
         arguments: {
-          names: [ECHO_TOOL_NAME],
+          name: forbiddenName,
+          arguments: {
+            names: [ECHO_TOOL_NAME],
+          },
         },
-      },
-    }),
-    /Invalid params: tool name is not allowed/u,
-  );
+      }),
+      /Invalid params: tool name is not allowed/u,
+    );
+  }
 
   const toolNamesResource = await manager.client.readResource({
     uri: 'lm-tools://tool-names',
@@ -448,7 +469,7 @@ test('stdio manager requires bind before bridged discovery resources are readabl
     () => manager.client.readResource({
       uri: 'lm-tools://tool-names',
     }),
-    /Workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u,
+    /Workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge_bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u,
   );
 
   await assert.rejects(
@@ -488,7 +509,7 @@ test('stdio manager requires rebind for bridged discovery resources after the wo
     () => manager.client.readResource({
       uri: 'lm-tools://tool-names',
     }),
-    /Active workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\. Bridged discovery resources are available only after a successful bind\./u,
+    /Active workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge_bindWorkspace with params\.cwd, wait for ok=true, then retry once\. Bridged discovery resources are available only after a successful bind\./u,
   );
 });
 
@@ -504,7 +525,7 @@ test('stdio manager does not expose bridge helper definitions as resources', asy
     () => manager.client.readResource({
       uri: `lm-tools://tool/${REQUEST_WORKSPACE_METHOD}`,
     }),
-    /Unknown resource URI: lm-tools:\/\/tool\/lmToolsBridge\.bindWorkspace/u,
+    /Unknown resource URI: lm-tools:\/\/tool\/lmToolsBridge_bindWorkspace/u,
   );
 });
 

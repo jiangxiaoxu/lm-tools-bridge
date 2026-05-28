@@ -1,6 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
-export const LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lmToolsBridge.getToolDefinitions';
+export const LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lmToolsBridge_getToolDefinitions';
 export const LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lm_getToolDefinitions';
 
 export const LM_GET_TOOL_DEFINITIONS_DESCRIPTION = [

@@ -186,7 +186,7 @@ test('local tool definition lookup contract uses bridge helper name and schemas'
   const { getToolDefinitionsLookupDefinition } = await import('../toolDefinitionsContract');
   const tool = getToolDefinitionsLookupDefinition();
 
-  assert.equal(tool.name, 'lmToolsBridge.getToolDefinitions');
+  assert.equal(tool.name, 'lmToolsBridge_getToolDefinitions');
   assert.deepEqual(tool.inputSchema.required, ['names']);
   assert.deepEqual(tool.outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
 });

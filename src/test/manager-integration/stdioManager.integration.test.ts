@@ -25,9 +25,9 @@ import {
   removeDirectoryWithRetries,
 } from '../integration/vscodeTestUtils';
 
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
-const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge_getToolDefinitions';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const QGREP_STATUS_TOOL_NAME = 'lm_qgrepGetStatus';
 const QGREP_TEXT_TOOL_NAME = 'lm_qgrepSearchText';

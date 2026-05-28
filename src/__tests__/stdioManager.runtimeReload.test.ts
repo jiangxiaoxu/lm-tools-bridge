@@ -17,14 +17,14 @@ import {
   WorkspaceDiscoveryPublisher,
 } from '../workspaceDiscovery';
 
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
-const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge_getToolDefinitions';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const ECHO_TOOL_NAME = 'lm_testEcho';
-const RELOAD_BIND_INVALIDATED_PATTERN = /Stdio runtime reloaded; the previous workspace binding was invalidated\..*Next step: call lmToolsBridge\.bindWorkspace with a cwd inside the target workspace, wait for success, then retry once\./u;
-const RELOAD_RESOURCE_REBIND_PATTERN = /Stdio runtime reloaded; bridged discovery resources require a new workspace bind\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u;
+const RELOAD_BIND_INVALIDATED_PATTERN = /Stdio runtime reloaded; the previous workspace binding was invalidated\..*Next step: call lmToolsBridge_bindWorkspace with a cwd inside the target workspace, wait for success, then retry once\./u;
+const RELOAD_RESOURCE_REBIND_PATTERN = /Stdio runtime reloaded; bridged discovery resources require a new workspace bind\..*Next step: call lmToolsBridge_bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u;
 const FATAL_RELOAD_FAILURE_PATTERN = /MCP stdio runtime reload failed and this stdio manager is no longer available \(broken runtime module\)\. Next step: reactivate the VS Code extension to start a fresh stdio manager, then retry from bind\./u;
 
 interface ManagerRegistryEntry {

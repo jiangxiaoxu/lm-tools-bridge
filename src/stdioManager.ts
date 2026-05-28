@@ -24,13 +24,17 @@ import { isSupportedWindowsWorkspacePath } from './windowsWorkspacePath';
 import {
   formatToolDefinitionsSummary,
   getToolDefinitionsLookupDefinition,
+  LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
   LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME,
   type LmGetToolDefinitionsPayload,
 } from './toolDefinitionsContract';
 
-const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
+const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
 const GET_TOOL_DEFINITIONS_METHOD = LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME;
+const LEGACY_REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
+const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const RUNTIME_MODULE_FILENAME = 'stdioManagerRuntime.js';
@@ -834,6 +838,16 @@ function getDirectCallForbiddenToolNameMessage(): string {
   );
 }
 
+function isBridgeHelperToolName(name: string): boolean {
+  return name === REQUEST_WORKSPACE_METHOD
+    || name === DIRECT_TOOL_CALL_NAME
+    || name === GET_TOOL_DEFINITIONS_METHOD
+    || name === LEGACY_REQUEST_WORKSPACE_METHOD
+    || name === LEGACY_DIRECT_TOOL_CALL_NAME
+    || name === LEGACY_GET_TOOL_DEFINITIONS_METHOD
+    || name === LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME;
+}
+
 function buildRuntimeUnavailableMessage(error: unknown): string {
   const reason = error ? ` (${formatErrorMessage(error)})` : '';
   return appendNextStep(
@@ -1115,11 +1129,7 @@ function createServer(): { server: Server; cleanup: () => void } {
       if (!targetToolName) {
         throw new McpError(ErrorCode.InvalidParams, getDirectCallNameParamMessage());
       }
-      if (
-        targetToolName === DIRECT_TOOL_CALL_NAME
-        || targetToolName === REQUEST_WORKSPACE_METHOD
-        || targetToolName === GET_TOOL_DEFINITIONS_METHOD
-      ) {
+      if (isBridgeHelperToolName(targetToolName)) {
         throw new McpError(ErrorCode.InvalidParams, getDirectCallForbiddenToolNameMessage());
       }
       const targetArgs = args.arguments;

@@ -295,13 +295,13 @@ export async function run(): Promise<void> {
           await client.connect(transport);
           const tools = await client.listTools();
           const toolNames = tools.tools.map((tool) => tool.name);
-          if (!toolNames.includes('lmToolsBridge.bindWorkspace')) {
+          if (!toolNames.includes('lmToolsBridge_bindWorkspace')) {
             throw new Error(`Expected requestWorkspace tool in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
           }
-          if (!toolNames.includes('lmToolsBridge.callBridgedTool')) {
+          if (!toolNames.includes('lmToolsBridge_callBridgedTool')) {
             throw new Error(`Expected callBridgedTool helper in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
           }
-          if (!toolNames.includes('lmToolsBridge.getToolDefinitions')) {
+          if (!toolNames.includes('lmToolsBridge_getToolDefinitions')) {
             throw new Error(`Expected getToolDefinitions helper in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
           }
         } catch (error) {

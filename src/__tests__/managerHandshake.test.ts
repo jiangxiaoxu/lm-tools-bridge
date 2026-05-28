@@ -17,8 +17,8 @@ test('handshake payload omits redundant online and health fields', () => {
     },
     discovery: {
       callTool: {
-        name: 'lmToolsBridge.callBridgedTool',
-        description: 'Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with lmToolsBridge.getToolDefinitions; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.',
+        name: 'lmToolsBridge_callBridgedTool',
+        description: 'Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with lmToolsBridge_getToolDefinitions; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -28,7 +28,7 @@ test('handshake payload omits redundant online and health fields', () => {
         },
       },
       toolDefinitionsTool: {
-        name: 'lmToolsBridge.getToolDefinitions',
+        name: 'lmToolsBridge_getToolDefinitions',
         description: 'Read full definitions for multiple bound bridged workspace tools in one call after workspace bind.',
         inputSchema: {
           type: 'object',
@@ -50,7 +50,7 @@ test('handshake payload omits redundant online and health fields', () => {
     },
     guidance: {
       nextSteps: [
-        'call lmToolsBridge.getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
+        'call lmToolsBridge_getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
         'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
       ],
     },
@@ -72,7 +72,7 @@ test('handshake payload omits redundant online and health fields', () => {
     Object.prototype.hasOwnProperty.call(payload.discovery.callTool, 'description'),
     true,
   );
-  assert.equal(payload.discovery.toolDefinitionsTool.name, 'lmToolsBridge.getToolDefinitions');
+  assert.equal(payload.discovery.toolDefinitionsTool.name, 'lmToolsBridge_getToolDefinitions');
   assert.equal(
     Object.prototype.hasOwnProperty.call(payload.discovery.toolDefinitionsTool, 'outputSchema'),
     true,
@@ -98,7 +98,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
     discovery: {
       partial: false,
       toolDefinitionsTool: {
-        name: 'lmToolsBridge.getToolDefinitions',
+        name: 'lmToolsBridge_getToolDefinitions',
         description: 'Read full definitions for multiple bound bridged workspace tools in one call after workspace bind.',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
@@ -111,7 +111,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
     },
     guidance: {
       nextSteps: [
-        'call lmToolsBridge.getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
+        'call lmToolsBridge_getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
         'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
       ],
     },

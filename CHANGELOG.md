@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.169] - 2026-05-28
+
+### English
+
+#### Changed
+- Renamed local stdio manager helper MCP tools to underscore names: `lmToolsBridge_bindWorkspace`, `lmToolsBridge_callBridgedTool`, and `lmToolsBridge_getToolDefinitions`.
+- Updated handshake discovery, guide text, error guidance, README docs, and tests to show only the underscore helper names.
+- Kept legacy dot helper names and `lm_getToolDefinitions` filtered from bridged discovery without exposing them as callable aliases.
+
+### 中文
+
+#### 变更
+- 将本地 stdio manager helper MCP 工具名改为下划线格式: `lmToolsBridge_bindWorkspace`, `lmToolsBridge_callBridgedTool`, `lmToolsBridge_getToolDefinitions`.
+- 更新 handshake discovery, guide 文案, error guidance, README 文档和测试, 仅展示下划线 helper 名称.
+- 继续从 bridged discovery 中过滤旧 dot helper 名称和 `lm_getToolDefinitions`, 但不把它们暴露为可调用 alias.
+
 ## [1.0.168] - 2026-05-28
 
 ### English

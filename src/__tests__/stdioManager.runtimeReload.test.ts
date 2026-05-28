@@ -20,7 +20,6 @@ import {
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
-const PATH_SCOPE_RESOURCE_URI = 'lm-tools://spec/pathScope';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const ECHO_TOOL_NAME = 'lm_testEcho';
 const RELOAD_BIND_INVALIDATED_PATTERN = /Stdio runtime reloaded; the previous workspace binding was invalidated\..*Next step: call lmToolsBridge\.bindWorkspace with a cwd inside the target workspace, wait for success, then retry once\./u;
@@ -86,7 +85,7 @@ async function startFakeWorkspaceServer(args: {
   pipeEnv: Record<string, string>;
   workspaceFolders: string[];
   toolsListDelayMs?: number;
-  resourceReadDelayMs?: number;
+  healthDelayMs?: number;
   toolCallDelayMs?: number;
 }) {
   const target = resolveWorkspaceDiscoveryTargetFromWindow(
@@ -98,6 +97,11 @@ async function startFakeWorkspaceServer(args: {
 
   const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/mcp/health') {
+      if ((args.healthDelayMs ?? 0) > 0) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, args.healthDelayMs);
+        });
+      }
       respondJson(res, { ok: true });
       return;
     }
@@ -128,36 +132,6 @@ async function startFakeWorkspaceServer(args: {
                   value: { type: 'string' },
                 },
               },
-            },
-          ],
-        },
-      });
-      return;
-    }
-    if (message?.method === 'resources/read' && message.params?.uri === `lm-tools://tool/${ECHO_TOOL_NAME}`) {
-      if ((args.resourceReadDelayMs ?? 0) > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, args.resourceReadDelayMs);
-        });
-      }
-      respondJson(res, {
-        jsonrpc: '2.0',
-        id,
-        result: {
-          contents: [
-            {
-              uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
-              mimeType: 'application/json',
-              text: JSON.stringify({
-                name: ECHO_TOOL_NAME,
-                description: 'Echo back the provided value.',
-                inputSchema: {
-                  type: 'object',
-                  properties: {
-                    value: { type: 'string' },
-                  },
-                },
-              }),
             },
           ],
         },
@@ -713,7 +687,7 @@ test('stdio manager rejects a bridged resource read that races with a generation
   const workspace = await startFakeWorkspaceServer({
     pipeEnv,
     workspaceFolders: [workspaceRoot],
-    resourceReadDelayMs: 1000,
+    healthDelayMs: 1000,
   });
   const manager = await connectStdioManager(copiedManagerPath, pipeEnv);
 
@@ -732,7 +706,7 @@ test('stdio manager rejects a bridged resource read that races with a generation
   });
 
   const resourceReadPromise = manager.client.readResource({
-    uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
+    uri: TOOL_NAMES_RESOURCE_URI,
   });
 
   await new Promise((resolve) => {
@@ -765,9 +739,9 @@ test('stdio manager rejects a bridged resource read that races with a generation
     },
   });
   const reboundResource = await manager.client.readResource({
-    uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
+    uri: TOOL_NAMES_RESOURCE_URI,
   });
-  assert.match(getResourceText(reboundResource), /"name": "lm_testEcho"/u);
+  assert.deepEqual(JSON.parse(getResourceText(reboundResource)), { tools: [ECHO_TOOL_NAME] });
 });
 
 test('stdio manager retries the same generation after a runtime load failure', async (t) => {
@@ -846,13 +820,6 @@ test('stdio manager retries the same generation after a runtime load failure', a
   await assert.rejects(
     () => manager.client.readResource({
       uri: GUIDE_RESOURCE_URI,
-    }),
-    FATAL_RELOAD_FAILURE_PATTERN,
-  );
-
-  await assert.rejects(
-    () => manager.client.readResource({
-      uri: PATH_SCOPE_RESOURCE_URI,
     }),
     FATAL_RELOAD_FAILURE_PATTERN,
   );

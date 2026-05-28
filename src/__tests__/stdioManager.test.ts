@@ -14,13 +14,6 @@ import {
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const ECHO_TOOL_NAME = 'lm_testEcho';
-const TOOL_INPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    value: { type: 'string' },
-  },
-  required: ['value'],
-};
 
 async function makeTempDir(prefix: string): Promise<string> {
   return fs.promises.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -98,26 +91,6 @@ async function startFakeWorkspaceServer(args: {
               inputSchema: {
                 type: 'object',
               },
-            },
-          ],
-        },
-      });
-      return;
-    }
-    if (message?.method === 'resources/read' && message.params?.uri === `lm-tools://tool/${ECHO_TOOL_NAME}`) {
-      respondJson(res, {
-        jsonrpc: '2.0',
-        id,
-        result: {
-          contents: [
-            {
-              uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
-              mimeType: 'application/json',
-              text: JSON.stringify({
-                name: ECHO_TOOL_NAME,
-                description: 'Echo back the provided value.',
-                inputSchema: TOOL_INPUT_SCHEMA,
-              }),
             },
           ],
         },
@@ -270,7 +243,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
       ?.properties?.cwd?.description,
     'Absolute workspace path to resolve. Use the absolute project root path or the absolute .code-workspace path. Relative paths are invalid.',
   );
-  assert.match(String(directCallTool?.description ?? ''), /call a bridged workspace tool after bind/u);
+  assert.match(String(directCallTool?.description ?? ''), /call a bridged workspace tool only after its ToolDefinition has been fetched/u);
   assert.equal(
     (
       directCallTool?.inputSchema as {
@@ -280,7 +253,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
         };
       } | undefined
     )?.properties?.name?.description,
-    'Bridged tool name to call. Resolve it from discovery.bridgedTools, lm-tools://tool-names, or lm-tools://tool/{name}.',
+    'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
   );
   assert.equal(
     (
@@ -294,14 +267,10 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     'Optional arguments object for the bridged tool call. Must match the target tool inputSchema.',
   );
 
-  const pathScopeSpec = await manager.client.readResource({
-    uri: 'lm-tools://spec/pathScope',
-  });
-  assert.match(getResourceText(pathScopeSpec), /^Shared pathScope syntax/mu);
   const resourceTemplates = await manager.client.listResourceTemplates();
   assert.deepEqual(
     resourceTemplates.resourceTemplates.map((entry) => entry.uriTemplate),
-    ['lm-tools://tool/{name}'],
+    [],
   );
 
   const handshake = await manager.client.callTool({
@@ -315,6 +284,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     target?: { workspaceFolders?: string[]; workspaceFile?: string | null };
     discovery?: {
       callTool?: { name?: unknown; description?: unknown; inputSchema?: unknown };
+      toolDefinitionsTool?: { name?: unknown; description?: unknown; inputSchema?: unknown; outputSchema?: unknown };
       bridgedTools?: Array<{ name?: unknown; inputSchema?: unknown }>;
     };
   } | undefined;
@@ -327,17 +297,30 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     },
   ]);
   assert.equal(handshakePayload?.discovery?.callTool?.name, DIRECT_TOOL_CALL_NAME);
+  assert.equal(handshakePayload?.discovery?.toolDefinitionsTool?.name, 'lm_getToolDefinitions');
+  assert.match(
+    String(handshakePayload?.discovery?.toolDefinitionsTool?.description ?? ''),
+    /Read full definitions for multiple enabled bridged tools/u,
+  );
+  assert.deepEqual(
+    (handshakePayload?.discovery?.toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['names'],
+  );
+  assert.deepEqual(
+    (handshakePayload?.discovery?.toolDefinitionsTool?.outputSchema as { required?: unknown } | undefined)?.required,
+    ['requested', 'tools', 'missing', 'count', 'missingCount'],
+  );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
     /^Read lm-tools:\/\/guide before first use\./u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /read lm-tools:\/\/tool\/\{name\} before the first call/u,
+    /only after its ToolDefinition has been fetched with lm_getToolDefinitions/u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /read lm-tools:\/\/spec\/pathScope before any pathScope argument\./u,
+    /pathScope syntax already included in lm-tools:\/\/guide/u,
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(handshakePayload?.discovery?.bridgedTools?.[0] ?? {}, 'description'),
@@ -352,11 +335,13 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     uri: 'lm-tools://guide',
   });
   assert.match(getResourceText(handshakeResource), /Workspace bridge guide/u);
-  assert.match(getResourceText(handshakeResource), /When to bind:/u);
-  assert.match(getResourceText(handshakeResource), /Routing and fallback:/u);
+  assert.match(getResourceText(handshakeResource), /Bind:/u);
+  assert.match(getResourceText(handshakeResource), /Tool discovery and calls:/u);
+  assert.match(getResourceText(handshakeResource), /Routing and recovery:/u);
+  assert.match(getResourceText(handshakeResource), /fetch its ToolDefinition with lm_getToolDefinitions/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
-  assert.match(getResourceText(handshakeResource), /Direct tool call after handshake:/u);
-  assert.match(getResourceText(handshakeResource), /lm-tools:\/\/spec\/pathScope/u);
+  assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
+  assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);
 
   const afterTools = await manager.client.listTools();
   assert.deepEqual(
@@ -371,14 +356,6 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     JSON.parse(getResourceText(toolNamesResource)),
     { tools: [ECHO_TOOL_NAME] },
   );
-
-  const toolDefinition = await manager.client.readResource({
-    uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
-  });
-  const toolDefinitionPayload = JSON.parse(getResourceText(toolDefinition)) as Record<string, unknown>;
-  assert.match(getResourceText(toolDefinition), /"value"/u);
-  assert.equal(Object.prototype.hasOwnProperty.call(toolDefinitionPayload, 'toolUri'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(toolDefinitionPayload, 'usageHint'), false);
 
   const directCall = await manager.client.callTool({
     name: ECHO_TOOL_NAME,
@@ -419,7 +396,7 @@ test('stdio manager requires bind before bridged discovery resources are readabl
     () => manager.client.readResource({
       uri: `lm-tools://tool/${ECHO_TOOL_NAME}`,
     }),
-    /Workspace binding required before reading bridged discovery resources\..*Next step: call lmToolsBridge\.bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u,
+    /Unknown resource URI: lm-tools:\/\/tool\/lm_testEcho/u,
   );
 });
 
@@ -456,7 +433,7 @@ test('stdio manager requires rebind for bridged discovery resources after the wo
   );
 });
 
-test('stdio manager keeps local bridge helper definitions readable before bind', async (t) => {
+test('stdio manager does not expose bridge helper definitions as resources', async (t) => {
   const pipeEnv = createPipeEnv('resource-local-helper');
   const manager = await connectStdioManager(pipeEnv);
 
@@ -464,14 +441,15 @@ test('stdio manager keeps local bridge helper definitions readable before bind',
     await manager.close();
   });
 
-  const bindWorkspaceDefinition = await manager.client.readResource({
-    uri: `lm-tools://tool/${REQUEST_WORKSPACE_METHOD}`,
-  });
-  const payload = JSON.parse(getResourceText(bindWorkspaceDefinition)) as { name?: unknown };
-  assert.equal(payload.name, REQUEST_WORKSPACE_METHOD);
+  await assert.rejects(
+    () => manager.client.readResource({
+      uri: `lm-tools://tool/${REQUEST_WORKSPACE_METHOD}`,
+    }),
+    /Unknown resource URI: lm-tools:\/\/tool\/lmToolsBridge\.bindWorkspace/u,
+  );
 });
 
-test('stdio manager still reports unavailable bridged tools after bind', async (t) => {
+test('stdio manager keeps tool definition resources removed after bind', async (t) => {
   const pipeEnv = createPipeEnv('resource-unavailable-after-bind');
   const rootDir = await makeTempDir('lm-tools-bridge-stdio-');
   const workspaceRoot = path.join(rootDir, 'workspace');
@@ -500,7 +478,7 @@ test('stdio manager still reports unavailable bridged tools after bind', async (
     () => manager.client.readResource({
       uri: 'lm-tools://tool/lm_missingTool',
     }),
-    /Tool not found or unavailable: lm_missingTool/u,
+    /Unknown resource URI: lm-tools:\/\/tool\/lm_missingTool/u,
   );
 });
 
@@ -566,7 +544,6 @@ const http = require('node:http');
 const path = require('node:path');
 const { resolveWorkspaceDiscoveryTargetFromWindow, WorkspaceDiscoveryPublisher } = require(${JSON.stringify(path.join(process.cwd(), 'out', 'workspaceDiscovery.js'))});
 const toolName = ${JSON.stringify(ECHO_TOOL_NAME)};
-const toolInputSchema = ${JSON.stringify(TOOL_INPUT_SCHEMA)};
 const openPath = process.argv[process.argv.length - 1];
 const workspaceRoot = openPath.toLowerCase().endsWith('.code-workspace') ? path.dirname(openPath) : openPath;
 const workspaceFile = openPath.toLowerCase().endsWith('.code-workspace') ? openPath : undefined;
@@ -606,28 +583,6 @@ const server = http.createServer(async (req, res) => {
             name: toolName,
             description: 'Echo back the provided value.',
             inputSchema: { type: 'object' },
-          },
-        ],
-      },
-    }));
-    return;
-  }
-  if (message.method === 'resources/read' && message.params?.uri === 'lm-tools://tool/' + toolName) {
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({
-      jsonrpc: '2.0',
-      id,
-      result: {
-        contents: [
-          {
-            uri: 'lm-tools://tool/' + toolName,
-            mimeType: 'application/json',
-            text: JSON.stringify({
-              name: toolName,
-              description: 'Echo back the provided value.',
-              inputSchema: toolInputSchema,
-            }),
           },
         ],
       },

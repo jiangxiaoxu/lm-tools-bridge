@@ -9,6 +9,13 @@ export interface HandshakeDiscoveryCallTool {
   inputSchema?: Record<string, unknown>;
 }
 
+export interface HandshakeDiscoveryToolDefinitionsTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+}
+
 export interface HandshakeDiscoveryResourceTemplate {
   name: string;
   uriTemplate: string;
@@ -28,6 +35,7 @@ export interface HandshakeDiscoveryIssue {
 
 export interface HandshakeDiscoveryPayload {
   callTool: HandshakeDiscoveryCallTool;
+  toolDefinitionsTool: HandshakeDiscoveryToolDefinitionsTool;
   bridgedTools: HandshakeDiscoveryBridgedTool[];
   resourceTemplates: HandshakeDiscoveryResourceTemplate[];
   partial: boolean;
@@ -82,6 +90,13 @@ export function formatWorkspaceHandshakeSummary(payload: unknown): string {
     ? record.discovery as Record<string, unknown>
     : undefined;
   const discoveryIssues = Array.isArray(discovery?.issues) ? discovery.issues : [];
+  const toolDefinitionsTool = (
+    discovery?.toolDefinitionsTool
+    && typeof discovery.toolDefinitionsTool === 'object'
+    && !Array.isArray(discovery.toolDefinitionsTool)
+  )
+    ? discovery.toolDefinitionsTool as Record<string, unknown>
+    : undefined;
   const workspaceFolders = Array.isArray(target?.workspaceFolders) ? target.workspaceFolders : [];
   const bridgedTools = Array.isArray(discovery?.bridgedTools) ? discovery.bridgedTools : [];
   const guidance = (record.guidance && typeof record.guidance === 'object' && !Array.isArray(record.guidance))
@@ -106,6 +121,7 @@ export function formatWorkspaceHandshakeSummary(payload: unknown): string {
     `workspaceFile: ${typeof target?.workspaceFile === 'string' ? target.workspaceFile : '(none)'}`,
     `workspaceFolders: ${workspaceFolders.length}`,
     `discovery.partial: ${discovery?.partial === true ? 'true' : 'false'}`,
+    `toolDefinitionsTool: ${typeof toolDefinitionsTool?.name === 'string' ? toolDefinitionsTool.name : 'n/a'}`,
     `bridgedTools: ${bridgedTools.length}`,
   ];
   lines.push('tools:');

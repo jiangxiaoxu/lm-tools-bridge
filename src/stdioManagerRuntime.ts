@@ -16,7 +16,7 @@ import type {
   HandshakeDiscoveryBridgedTool,
   HandshakeDiscoveryIssue,
   HandshakeDiscoveryPayload,
-  HandshakeDiscoveryResourceTemplate,
+  HandshakeDiscoveryToolDefinitionsTool,
   HandshakeGuidance,
   WorkspaceHandshakePayload,
 } from './managerHandshake';
@@ -33,10 +33,11 @@ import {
   isSupportedWindowsWorkspacePath,
   resolveComparablePath,
 } from './windowsWorkspacePath';
+import { getPathScopeSpecText } from './pathScopeSpec';
 import {
-  getPathScopeSpecReadHint,
-  getPathScopeSpecText,
-} from './pathScopeSpec';
+  getToolDefinitionsLookupDefinition,
+  LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
+} from './toolDefinitionsContract';
 
 interface ManagerMatch {
   sessionId: string;
@@ -50,6 +51,7 @@ interface WorkspaceToolDefinition {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -68,7 +70,6 @@ const HEALTH_PATH = '/mcp/health';
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
-const TOOL_URI_TEMPLATE = 'lm-tools://tool/{name}';
 const HEALTH_TIMEOUT_MS = 1200;
 const INSTANCE_POLL_INTERVAL_MS = 500;
 const DISCOVERY_POLL_INTERVAL_MS = 500;
@@ -84,9 +85,7 @@ export interface StdioManagerRuntimeInitialState {
 
 export interface StdioManagerRuntimeLocalHelperOverrides {
   guideText?: string;
-  pathScopeText?: string;
   helperToolDefinitions?: WorkspaceToolDefinition[];
-  toolTemplateDescription?: string;
 }
 
 export interface StdioManagerRuntimeApi {
@@ -149,7 +148,7 @@ function appendNextStep(message: string, nextStep: string): string {
 }
 
 function getToolReadHint(): string {
-  return `read ${TOOL_URI_TEMPLATE} before the first tool call and build arguments that match its inputSchema.`;
+  return 'fetch missing ToolDefinitions with lm_getToolDefinitions, batching likely-needed future tool names when possible, then build arguments that match each returned inputSchema.';
 }
 
 function getDiscoveryRefreshHint(): string {
@@ -226,7 +225,7 @@ function getDirectCallNameParamMessage(): string {
 function getDirectCallArgumentsParamMessage(): string {
   return appendNextStep(
     'Invalid params: expected arguments.arguments (object).',
-    `pass arguments.arguments as an object that matches the target tool inputSchema from ${TOOL_URI_TEMPLATE}.`,
+    'pass arguments.arguments as an object that matches the target tool inputSchema from lm_getToolDefinitions.',
   );
 }
 
@@ -242,7 +241,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return 'Read lm-tools://guide before first use. Then call a bridged workspace tool after bind, read lm-tools://tool/{name} before the first call, pass arguments that match the target tool inputSchema, and read lm-tools://spec/pathScope before any pathScope argument. Input: { name: string, arguments?: object }.';
+  return 'Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with lm_getToolDefinitions; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.';
 }
 
 function toOfflineDurationSec(startedAt?: number): number | null {
@@ -428,7 +427,7 @@ function toHandshakeDiscoveryTool(entry: unknown): HandshakeDiscoveryBridgedTool
   };
 }
 
-// Handshake discovery only advertises bridged tool names. Clients must read tool resources on demand.
+// Handshake discovery only advertises bridged tool names. Clients fetch tool definitions through lm_getToolDefinitions.
 function toHandshakeDiscoveryCallTool(entry: unknown): HandshakeDiscoveryCallTool | undefined {
   if (!entry || typeof entry !== 'object') {
     return undefined;
@@ -446,6 +445,28 @@ function toHandshakeDiscoveryCallTool(entry: unknown): HandshakeDiscoveryCallToo
     normalized.inputSchema = record.inputSchema as Record<string, unknown>;
   }
   return normalized;
+}
+
+function getObjectSchema(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function buildHandshakeDiscoveryToolDefinitionsTool(
+  tools: readonly WorkspaceToolDefinition[],
+): HandshakeDiscoveryToolDefinitionsTool {
+  const fallback = getToolDefinitionsLookupDefinition();
+  const discovered = tools.find((tool) => tool.name === LM_GET_TOOL_DEFINITIONS_TOOL_NAME);
+  if (!discovered) {
+    return fallback;
+  }
+  return {
+    name: fallback.name,
+    description: normalizeHandshakeToolDescription(discovered.description) || fallback.description,
+    inputSchema: getObjectSchema(discovered.inputSchema) ?? fallback.inputSchema,
+    outputSchema: getObjectSchema(discovered.outputSchema) ?? fallback.outputSchema,
+  };
 }
 
 function mergeHandshakeDiscoveryTools(
@@ -471,19 +492,14 @@ function sortHandshakeDiscoveryTools(
   return [...tools].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function buildHandshakeUriTemplates(): HandshakeDiscoveryResourceTemplate[] {
-  return [
-    {
-      name: 'Tool URI template',
-      uriTemplate: TOOL_URI_TEMPLATE,
-    },
-  ];
+function buildHandshakeUriTemplates(): [] {
+  return [];
 }
 
 function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): HandshakeGuidance {
   const nextSteps = [
-    `For each bridged tool, ${getToolReadHint()}`,
-    getPathScopeSpecReadHint(),
+    `Use discovery.toolDefinitionsTool for lm_getToolDefinitions usage, inputSchema, and outputSchema; ${getToolReadHint()}`,
+    'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
   ];
   if (discovery.partial || discovery.issues.length > 0) {
     nextSteps.push(`Discovery is partial or has issues: ${getDiscoveryRefreshHint()}`);
@@ -516,7 +532,7 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
       properties: {
         name: {
           type: 'string',
-          description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, lm-tools://tool-names, or lm-tools://tool/{name}.',
+          description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
         },
         arguments: {
           type: 'object',
@@ -538,63 +554,6 @@ function findBridgedToolDefinitionByName(name: string): WorkspaceToolDefinition 
   return session.boundTools.find((tool) => tool.name === name);
 }
 
-function buildToolInfoPayload(tool: WorkspaceToolDefinition): Record<string, unknown> {
-  return {
-    ...tool,
-  };
-}
-
-async function readToolInputSchemaFromResource(
-  target: ManagerMatch,
-  toolName: string,
-): Promise<Record<string, unknown> | undefined> {
-  const response = await requestTargetJson(target, {
-    jsonrpc: '2.0',
-    id: `mgr-tool-${toolName}-${Date.now()}`,
-    method: 'resources/read',
-    params: {
-      uri: `lm-tools://tool/${toolName}`,
-    },
-  });
-  if (!response.ok) {
-    return undefined;
-  }
-  const parsed = getRemoteResultObject(response.data);
-  if (parsed.errorMessage) {
-    return undefined;
-  }
-  const contents = Array.isArray(parsed.result?.contents) ? parsed.result.contents : undefined;
-  if (!contents || contents.length === 0) {
-    return undefined;
-  }
-  const first = contents[0];
-  if (!first || typeof first !== 'object') {
-    return undefined;
-  }
-  const text = (first as { text?: unknown }).text;
-  if (typeof text !== 'string') {
-    return undefined;
-  }
-  try {
-    const payload = JSON.parse(text) as { inputSchema?: unknown };
-    if (!payload.inputSchema || typeof payload.inputSchema !== 'object' || Array.isArray(payload.inputSchema)) {
-      return undefined;
-    }
-    return payload.inputSchema as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-}
-
-async function resolveToolInputSchema(tool: WorkspaceToolDefinition): Promise<Record<string, unknown> | null> {
-  const isBoundTool = session.boundTools.some((entry) => entry.name === tool.name);
-  if (!isBoundTool || !session.currentTarget) {
-    return tool.inputSchema ?? null;
-  }
-  // Avoid tool-definition fan-out during handshake and fetch the latest inputSchema only when a resource is actually read.
-  return await readToolInputSchemaFromResource(session.currentTarget, tool.name) ?? tool.inputSchema ?? null;
-}
-
 function resourceJson(uri: string, payload: unknown, mimeType = 'application/json') {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
   return {
@@ -605,15 +564,6 @@ function resourceJson(uri: string, payload: unknown, mimeType = 'application/jso
         text,
       },
     ],
-  };
-}
-
-function getToolTemplate() {
-  return {
-    name: 'Tool URI template',
-    uriTemplate: TOOL_URI_TEMPLATE,
-    description: `Read a bridged tool definition by name after bind and before the first call, then build arguments from its inputSchema. Before bind, call ${REQUEST_WORKSPACE_METHOD} first.`,
-    mimeType: 'application/json',
   };
 }
 
@@ -995,10 +945,12 @@ async function buildHandshakeDiscovery(
   const bridgedTools = sortHandshakeDiscoveryTools(
     mergeHandshakeDiscoveryTools([], fetched.tools),
   );
+  const toolDefinitionsTool = buildHandshakeDiscoveryToolDefinitionsTool(fetched.tools);
   return {
     tools: fetched.tools,
     discovery: {
       callTool,
+      toolDefinitionsTool,
       bridgedTools,
       resourceTemplates: buildHandshakeUriTemplates(),
       partial: fetched.partial,
@@ -1122,56 +1074,32 @@ function getHandshakeResourceText(): string {
     '',
     'This MCP manager requires an explicit workspace binding before workspace tools can be used.',
     '',
-    'When to bind:',
-    `- Call ${REQUEST_WORKSPACE_METHOD} with params.cwd once per client session.`,
-    '- Reuse the current bind across calls; do not handshake again before every tool call.',
-    '- Re-run handshake only when the workspace target changes or the bound workspace goes offline.',
+    'Bind:',
+    `- Call ${REQUEST_WORKSPACE_METHOD} once per client session with params.cwd set to an absolute project path or .code-workspace path.`,
+    '- Reuse the current bind; rebind only when the workspace target changes or the bound workspace goes offline.',
+    '- Treat returned workspaceFolders/workspaceFile as the validated lmToolsBridge scope.',
+    '- Follow guidance.nextSteps from the handshake response.',
     '',
-    'Core flow:',
-    `1. Call ${REQUEST_WORKSPACE_METHOD} with params.cwd set to the project path or .code-workspace path.`,
-    '2. Treat the resolved workspace roots as the validated lmToolsBridge scope.',
-    `3. Follow guidance.nextSteps from the handshake response.`,
-    `4. Use discovery.bridgedTools as names-only discovery and read lm-tools://tool/{name} only for the tools needed by the current task after bind.`,
-    `5. Before the first bridged tool call, ${getToolReadHint()}`,
-    `6. ${getPathScopeSpecReadHint()}`,
-    `7. Invoke ${DIRECT_TOOL_CALL_NAME} only after handshake and tool-definition read, or call the bridged tools returned by tools/list after handshake.`,
+    'Tool discovery and calls:',
+    '- discovery.bridgedTools is names-only.',
+    '- discovery.toolDefinitionsTool describes lm_getToolDefinitions and includes its inputSchema/outputSchema.',
+    '- Before calling a bridged tool, fetch its ToolDefinition with lm_getToolDefinitions if it has not already been fetched; batch likely-needed future tool names when possible.',
+    '- Build arguments from the returned inputSchema.',
+    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call bridged tools returned by tools/list after bind.`,
+    '- If an argument is named pathScope, use the shared pathScope syntax below.',
     '',
-    'Routing and fallback:',
+    'Routing and recovery:',
     '- Prefer lmToolsBridge tools for workspace file search, text search, multi-file inspection, and VS Code IDE actions inside validated workspace roots.',
     '- Prefer qgrep search tools for repeated workspace text search when they are available.',
     '- In multi-root workspaces, use WorkspaceName/... only when narrowing to one root; otherwise keep cross-root scope.',
     '- Do not use lmToolsBridge tools for paths outside validated workspace roots.',
     '- Never perform silent fallback. Report the failing tool and reason before any non-lmToolsBridge fallback.',
-    '- If discovery is partial or has issues, refresh tool visibility before assuming a tool is unavailable.',
-    `- On workspace failures or MCP call failures, ${getRebindRetryHint()}`,
-    `- After handshake, ${getDiscoveryRefreshHint()}`,
+    `- If discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
+    `- On workspace or MCP call failures, ${getRebindRetryHint()}`,
+    '- Reading lm-tools://tool-names before bind returns an actionable bind-required error.',
     '',
-    'Handshake result:',
-    '- A successful handshake response includes discovery data (callTool, bridgedTools, resourceTemplates).',
-    '- discovery.bridgedTools returns names only; read lm-tools://tool/{name} for per-tool description and inputSchema.',
-    '- Reading lm-tools://tool-names or bridged lm-tools://tool/{name} before bind returns an actionable bind-required error.',
-    '',
-    'Direct tool call after handshake:',
-    `- ${DIRECT_TOOL_CALL_NAME} is used after a successful workspace binding.`,
-    `- Before the first direct call, ${getToolReadHint()}`,
-    '- Build arguments from the tool inputSchema you just read.',
-    `- If any argument is named pathScope, ${getPathScopeSpecReadHint()}`,
-    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object.`,
-    '- Prefer bridged workspace tools for validated workspace requests.',
-    '- Prefer qgrep search tools for repeated workspace text search when they are available.',
-    '- Do not use lmToolsBridge tools for paths outside validated workspace roots.',
-    '- Never perform silent fallback. Report the failing tool and reason before any non-lmToolsBridge fallback.',
-    `- When discovery is partial or has issues, ${getDiscoveryRefreshHint()}`,
-    `- If workspace errors appear, ${getRebindRetryHint()}`,
+    getPathScopeSpecText(),
   ].join('\n');
-}
-
-function getToolNameFromUri(uri: string, prefix: string): string | undefined {
-  if (!uri.startsWith(prefix)) {
-    return undefined;
-  }
-  const raw = uri.slice(prefix.length);
-  return raw.length > 0 ? decodeURIComponent(raw) : undefined;
 }
 
 export function createStdioManagerRuntime(
@@ -1200,19 +1128,7 @@ export function createStdioManagerRuntime(
         await ensureBridgedDiscoveryResourceReadable(server);
         return resourceJson(uri, { tools: getBoundToolNames() });
       }
-      const toolName = getToolNameFromUri(uri, 'lm-tools://tool/');
-      if (!toolName) {
-        throw new McpError(ErrorCode.InvalidParams, `Unknown bridged resource URI: ${uri}`);
-      }
-      await ensureBridgedDiscoveryResourceReadable(server);
-      const tool = findBridgedToolDefinitionByName(toolName);
-      if (!tool) {
-        throw new McpError(ErrorCode.InvalidParams, `Tool not found or unavailable: ${toolName}`);
-      }
-      return resourceJson(uri, {
-        ...buildToolInfoPayload(tool),
-        inputSchema: await resolveToolInputSchema(tool),
-      });
+      throw new McpError(ErrorCode.InvalidParams, `Unknown bridged resource URI: ${uri}`);
     },
     async invalidateBinding(server) {
       await clearBindingIfNeeded(server, { notify: false });
@@ -1220,12 +1136,10 @@ export function createStdioManagerRuntime(
     getLocalHelperOverrides() {
       return {
         guideText: getHandshakeResourceText(),
-        pathScopeText: getPathScopeSpecText(),
         helperToolDefinitions: [
           getRequestWorkspaceToolDefinition(),
           getDirectToolCallDefinition(),
         ],
-        toolTemplateDescription: getToolTemplate().description,
       };
     },
     async dispose() {

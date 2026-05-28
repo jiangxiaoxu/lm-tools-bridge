@@ -18,7 +18,7 @@ test('handshake payload omits redundant online and health fields', () => {
     discovery: {
       callTool: {
         name: 'lmToolsBridge.callBridgedTool',
-        description: 'Read lm-tools://guide before first use. Then call a bridged workspace tool after bind, read lm-tools://tool/{name} before the first call, pass arguments that match the target tool inputSchema, and read lm-tools://spec/pathScope before any pathScope argument. Input: { name: string, arguments?: object }.',
+        description: 'Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with lm_getToolDefinitions; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -27,19 +27,31 @@ test('handshake payload omits redundant online and health fields', () => {
           required: ['name'],
         },
       },
+      toolDefinitionsTool: {
+        name: 'lm_getToolDefinitions',
+        description: 'Read full definitions for multiple enabled bridged tools in one call after workspace bind.',
+        inputSchema: {
+          type: 'object',
+          properties: { names: { type: 'array' } },
+          required: ['names'],
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { tools: { type: 'array' } },
+          required: ['requested', 'tools', 'missing', 'count', 'missingCount'],
+        },
+      },
       bridgedTools: [
         { name: 'lm_findFiles' },
       ],
-      resourceTemplates: [
-        { name: 'Tool URI template', uriTemplate: 'lm-tools://tool/{name}' },
-      ],
+      resourceTemplates: [],
       partial: false,
       issues: [],
     },
     guidance: {
       nextSteps: [
-        'read lm-tools://tool/{name} before the first tool call and build arguments that match its inputSchema.',
-        'Before using any tool argument named pathScope, you must read lm-tools://spec/pathScope first.',
+        'call lm_getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
+        'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
       ],
     },
   });
@@ -55,9 +67,14 @@ test('handshake payload omits redundant online and health fields', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'sessionId'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'host'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(payload.target, 'port'), false);
-  assert.equal(payload.discovery.resourceTemplates.length, 1);
+  assert.equal(payload.discovery.resourceTemplates.length, 0);
   assert.equal(
     Object.prototype.hasOwnProperty.call(payload.discovery.callTool, 'description'),
+    true,
+  );
+  assert.equal(payload.discovery.toolDefinitionsTool.name, 'lm_getToolDefinitions');
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(payload.discovery.toolDefinitionsTool, 'outputSchema'),
     true,
   );
   assert.equal(
@@ -80,6 +97,12 @@ test('handshake summary keeps useful fields and omits online line', () => {
     },
     discovery: {
       partial: false,
+      toolDefinitionsTool: {
+        name: 'lm_getToolDefinitions',
+        description: 'Read full definitions for multiple enabled bridged tools in one call after workspace bind.',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+      },
       bridgedTools: [
         { name: 'lm_findFiles' },
         { name: 'lm_getDiagnostics' },
@@ -88,8 +111,8 @@ test('handshake summary keeps useful fields and omits online line', () => {
     },
     guidance: {
       nextSteps: [
-        'read lm-tools://tool/{name} before the first tool call and build arguments that match its inputSchema.',
-        'Before using any tool argument named pathScope, you must read lm-tools://spec/pathScope first.',
+        'call lm_getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
+        'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
       ],
     },
   });

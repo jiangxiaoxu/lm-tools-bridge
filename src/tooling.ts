@@ -65,6 +65,12 @@ import {
   type NormalizedVsCodeToolCollision,
   type NormalizedVsCodeToolInfo,
 } from './toolNameNormalization';
+import {
+  LM_GET_TOOL_DEFINITIONS_DESCRIPTION,
+  LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA,
+  LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA,
+  LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
+} from './toolDefinitionsContract';
 
 type ToolingLogger = {
   info: (message: string) => void;
@@ -233,6 +239,7 @@ const DEFAULT_ENABLED_VSCODE_SOURCE_TOOL_NAMES = [
 const DEFAULT_ENABLED_TOOL_NAMES = [
   ...DEFAULT_ENABLED_VSCODE_SOURCE_TOOL_NAMES.map((name) => toNormalizedVsCodeToolName(name)),
   'lm_getDiagnostics',
+  LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
   LM_QGREP_GET_STATUS_TOOL_NAME,
   LM_QGREP_SEARCH_TOOL_NAME,
   LM_QGREP_FILES_TOOL_NAME,
@@ -716,6 +723,14 @@ interface DebugStartPayload {
   message: string;
 }
 
+export interface LmGetToolDefinitionsPayload {
+  requested: string[];
+  tools: Array<Record<string, unknown>>;
+  missing: string[];
+  count: number;
+  missingCount: number;
+}
+
 interface LaunchConfigEntry {
   summary: LaunchConfigSummary;
   workspaceFolder: vscode.WorkspaceFolder | undefined;
@@ -734,6 +749,7 @@ interface ToolInformationBase {
   description: string;
   tags: string[];
   inputSchema: unknown;
+  outputSchema?: unknown;
 }
 
 interface CustomToolInformation extends ToolInformationBase {
@@ -1997,6 +2013,10 @@ export function formatToolInfoText(payload: Record<string, unknown>): string {
     lines.push('inputSchema:');
     lines.push(indentLines(formatSchema(payload.inputSchema as object | undefined), 2));
   }
+  if (payload.outputSchema !== undefined) {
+    lines.push('outputSchema:');
+    lines.push(indentLines(formatSchema(payload.outputSchema as object | undefined), 2));
+  }
   return lines.join('\n');
 }
 
@@ -2041,13 +2061,18 @@ export function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
     };
   }
   const inputSchema = buildToolInputSchema(tool);
+  const outputSchema = tool.outputSchema;
 
-  return {
+  const payload: Record<string, unknown> = {
     name: tool.name,
     description: tool.description,
     tags: tool.tags,
     inputSchema,
   };
+  if (outputSchema !== undefined) {
+    payload.outputSchema = outputSchema;
+  }
+  return payload;
 }
 
 export function buildToolInputSchema(tool: ExposedTool): unknown {
@@ -2233,6 +2258,18 @@ function buildGetDiagnosticsToolDefinition(): CustomToolDefinition {
   };
 }
 
+function buildGetToolDefinitionsToolDefinition(): CustomToolDefinition {
+  return {
+    name: LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
+    description: LM_GET_TOOL_DEFINITIONS_DESCRIPTION,
+    tags: [],
+    inputSchema: LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA,
+    outputSchema: LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA,
+    isCustom: true,
+    invoke: runGetToolDefinitionsTool,
+  };
+}
+
 function buildFormatFilesToolDefinition(): CustomToolDefinition {
   return {
     name: LM_FORMAT_FILES_TOOL_NAME,
@@ -2384,6 +2421,12 @@ async function runGetDiagnosticsTool(input: Record<string, unknown>): Promise<vs
   };
   const summaryText = formatLmGetDiagnosticsSummary(payload, limited.returnedDiagnostics);
   return buildCustomToolResult(summaryText, payload);
+}
+
+async function runGetToolDefinitionsTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const names = parseRequiredToolDefinitionNames(input);
+  const payload = buildToolDefinitionsPayload(getEnabledExposedToolsSnapshot(), names);
+  return buildCustomToolResult(formatToolDefinitionsSummary(payload), payload);
 }
 
 async function runFormatFilesTool(input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
@@ -2715,6 +2758,82 @@ async function runQgrepFilesTool(input: Record<string, unknown>): Promise<vscode
     throw error;
   }
   return buildCustomTextToolResult(formatQgrepFilesSummary(payload));
+}
+
+export function parseRequiredToolDefinitionNames(input: Record<string, unknown>): string[] {
+  const value = input.names;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new McpError(ErrorCode.InvalidParams, 'names must be a non-empty array of tool name strings.');
+  }
+
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== 'string') {
+      throw new McpError(ErrorCode.InvalidParams, `names[${index}] must be a string.`);
+    }
+    const name = entry.trim();
+    if (name.length === 0) {
+      throw new McpError(ErrorCode.InvalidParams, `names[${index}] must be a non-empty string.`);
+    }
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+export function buildToolDefinitionsPayload(
+  tools: readonly ExposedTool[],
+  names: readonly string[],
+): LmGetToolDefinitionsPayload {
+  const toolsByName = new Map<string, ExposedTool>();
+  for (const tool of tools) {
+    toolsByName.set(tool.name, tool);
+  }
+
+  const definitions: Array<Record<string, unknown>> = [];
+  const missing: string[] = [];
+  for (const name of names) {
+    const tool = toolsByName.get(name);
+    if (!tool) {
+      missing.push(name);
+      continue;
+    }
+    definitions.push(toolInfoPayload(tool, 'full'));
+  }
+
+  return {
+    requested: [...names],
+    tools: definitions,
+    missing,
+    count: definitions.length,
+    missingCount: missing.length,
+  };
+}
+
+export function formatToolDefinitionsSummary(payload: LmGetToolDefinitionsPayload): string {
+  const lines = [
+    'Tool definitions',
+    `requested: ${String(payload.requested.length)}`,
+    `returned: ${String(payload.count)}`,
+    `missing: ${String(payload.missingCount)}`,
+  ];
+  if (payload.tools.length > 0) {
+    lines.push('tools:');
+    for (const tool of payload.tools) {
+      const name = typeof tool.name === 'string' ? tool.name : '<unknown>';
+      lines.push(`  - ${name}`);
+    }
+  }
+  if (payload.missing.length > 0) {
+    lines.push('missing tools:');
+    for (const name of payload.missing) {
+      lines.push(`  - ${name}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function parseOptionalStringInput(input: Record<string, unknown>, key: string): string | undefined {
@@ -4136,6 +4255,7 @@ function getCustomToolsSnapshot(): readonly CustomToolDefinition[] {
     buildFindFilesToolDefinition(),
     buildFindTextInFilesToolDefinition(),
     buildGetDiagnosticsToolDefinition(),
+    buildGetToolDefinitionsToolDefinition(),
     buildFormatFilesToolDefinition(),
     buildTasksRunBuildToolDefinition(),
     buildTasksRunTestToolDefinition(),
@@ -4201,7 +4321,7 @@ export function prioritizeTool(
 
 export function registerExposedTools(server: import('@modelcontextprotocol/sdk/server/mcp.js').McpServer): void {
   const toolInputSchema: z.ZodTypeAny = z.object({}).passthrough()
-    .describe('Tool input object. Use lm-tools://tool/{name} for the expected shape.');
+    .describe('Tool input object. Use lm_getToolDefinitions for the expected shape.');
   const tools = getEnabledExposedToolsSnapshot();
   for (const tool of tools) {
     if (isToolBackedBySourceName(tool, GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME)) {
@@ -4310,11 +4430,11 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       if (isQgrepQueryToolName(tool.name)) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          formatQgrepInvalidParamsMessage('tool input must be an object. Use lm-tools://tool/{name} for the expected shape.'),
+          formatQgrepInvalidParamsMessage('tool input must be an object. Use lm_getToolDefinitions for the expected shape.'),
         );
       }
       return toolErrorResultPayload({
-        error: 'Tool input must be an object. Use lm-tools://tool/{name} for the expected shape.',
+        error: 'Tool input must be an object. Use lm_getToolDefinitions for the expected shape.',
         name: tool.name,
         inputSchema: tool.inputSchema ?? null,
       });

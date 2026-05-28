@@ -1,23 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  PATH_SCOPE_SPEC_URI,
   buildPathScopeSchema,
-  getPathScopeSpecReadHint,
-  getPathScopeSpecResourceDescription,
   getPathScopeSpecText,
 } from '../pathScopeSpec';
-
-test('pathScope resource description uses generic pathScope wording', () => {
-  assert.equal(
-    getPathScopeSpecResourceDescription(),
-    'Read the shared pathScope syntax before using any tool argument named pathScope.',
-  );
-  assert.equal(
-    getPathScopeSpecReadHint(),
-    `Before using any tool argument named pathScope, you must read ${PATH_SCOPE_SPEC_URI} first.`,
-  );
-});
 
 test('pathScope spec text uses generic applicability wording instead of tool lists', () => {
   const text = getPathScopeSpecText();
@@ -44,7 +30,7 @@ test('pathScope schema still exposes shared syntax metadata', () => {
     ['x-lm-tools-bridge-sharedSyntax']?: { uri?: string; id?: string; kind?: string };
   };
 
-  assert.equal(schema['x-lm-tools-bridge-sharedSyntax']?.uri, PATH_SCOPE_SPEC_URI);
+  assert.equal(Object.prototype.hasOwnProperty.call(schema['x-lm-tools-bridge-sharedSyntax'] ?? {}, 'uri'), false);
   assert.equal(schema['x-lm-tools-bridge-sharedSyntax']?.id, 'lm-tools-bridge/pathScope/v1');
   assert.equal(schema['x-lm-tools-bridge-sharedSyntax']?.kind, 'workspace-path-or-glob-scope');
 });

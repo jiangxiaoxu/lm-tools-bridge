@@ -20,6 +20,19 @@ const TOOL: ExposedTool = {
   isCustom: true,
 } as ExposedTool;
 
+const DIAGNOSTICS_TOOL: ExposedTool = {
+  name: 'lm_getDiagnostics',
+  description: 'Get diagnostics.',
+  tags: [],
+  inputSchema: {
+    type: 'object',
+    properties: {
+      maxResults: { type: 'integer' },
+    },
+  },
+  isCustom: true,
+} as ExposedTool;
+
 let toolingModulePromise: Promise<ToolingModule> | undefined;
 
 async function loadToolingModule(): Promise<ToolingModule> {
@@ -137,8 +150,8 @@ test('lm_formatFiles is exposed with required shared pathScope schema', async ()
     properties?: { pathScope?: { description?: string; ['x-lm-tools-bridge-sharedSyntax']?: { uri?: string } } };
   };
   assert.deepEqual(schema.required, ['pathScope']);
-  assert.match(schema.properties?.pathScope?.description ?? '', /lm-tools:\/\/spec\/pathScope/u);
-  assert.equal(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax']?.uri, 'lm-tools://spec/pathScope');
+  assert.match(schema.properties?.pathScope?.description ?? '', /lm-tools:\/\/guide/u);
+  assert.equal(Object.prototype.hasOwnProperty.call(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax'] ?? {}, 'uri'), false);
 });
 
 test('lm_formatFiles is exposed by default but not enabled by default', async () => {
@@ -146,6 +159,73 @@ test('lm_formatFiles is exposed by default but not enabled by default', async ()
   const tool = getEnabledExposedToolsSnapshot().find((entry) => entry.name === 'lm_formatFiles');
 
   assert.equal(tool, undefined);
+});
+
+test('lm_getToolDefinitions is enabled by default with names schema', async () => {
+  const { getEnabledExposedToolsSnapshot } = await loadToolingModule();
+  const tool = getEnabledExposedToolsSnapshot().find((entry) => entry.name === 'lm_getToolDefinitions');
+
+  assert.ok(tool);
+  const schema = tool.inputSchema as {
+    required?: unknown;
+    properties?: { names?: { type?: unknown; items?: { type?: unknown } } };
+  };
+  assert.deepEqual(schema.required, ['names']);
+  assert.equal(schema.properties?.names?.type, 'array');
+  assert.equal(schema.properties?.names?.items?.type, 'string');
+  const outputSchema = tool.outputSchema as {
+    required?: unknown;
+    properties?: { tools?: { type?: unknown }; missing?: { type?: unknown } };
+  };
+  assert.deepEqual(outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
+  assert.equal(outputSchema.properties?.tools?.type, 'array');
+  assert.equal(outputSchema.properties?.missing?.type, 'array');
+});
+
+test('tool definitions payload includes outputSchema when a tool defines it', async () => {
+  const { getEnabledExposedToolsSnapshot, buildToolDefinitionsPayload } = await loadToolingModule();
+  const payload = buildToolDefinitionsPayload(getEnabledExposedToolsSnapshot(), ['lm_getToolDefinitions']);
+  const definition = payload.tools[0] as { outputSchema?: unknown };
+
+  assert.equal(payload.count, 1);
+  assert.ok(definition.outputSchema);
+});
+
+test('tool definitions payload returns requested tools and missing names', async () => {
+  const { buildToolDefinitionsPayload, formatToolDefinitionsSummary } = await loadToolingModule();
+  const payload = buildToolDefinitionsPayload(
+    [TOOL, DIAGNOSTICS_TOOL],
+    ['lm_getDiagnostics', 'lm_missingTool', 'lm_qgrepSearchText'],
+  );
+
+  assert.deepEqual(payload.requested, ['lm_getDiagnostics', 'lm_missingTool', 'lm_qgrepSearchText']);
+  assert.deepEqual(payload.missing, ['lm_missingTool']);
+  assert.equal(payload.count, 2);
+  assert.equal(payload.missingCount, 1);
+  assert.deepEqual(payload.tools.map((tool) => tool.name), ['lm_getDiagnostics', 'lm_qgrepSearchText']);
+  assert.match(formatToolDefinitionsSummary(payload), /^returned: 2$/mu);
+  assert.match(formatToolDefinitionsSummary(payload), /^  - lm_missingTool$/mu);
+});
+
+test('tool definition names parser trims and rejects invalid entries', async () => {
+  const { parseRequiredToolDefinitionNames } = await loadToolingModule();
+
+  assert.deepEqual(
+    parseRequiredToolDefinitionNames({ names: [' lm_getDiagnostics ', 'lm_getDiagnostics', 'lm_qgrepSearchText'] }),
+    ['lm_getDiagnostics', 'lm_qgrepSearchText'],
+  );
+  assert.throws(
+    () => parseRequiredToolDefinitionNames({ names: [] }),
+    /names must be a non-empty array of tool name strings/u,
+  );
+  assert.throws(
+    () => parseRequiredToolDefinitionNames({ names: ['lm_getDiagnostics', ''] }),
+    /names\[1\] must be a non-empty string/u,
+  );
+  assert.throws(
+    () => parseRequiredToolDefinitionNames({ names: ['lm_getDiagnostics', 12] }),
+    /names\[1\] must be a string/u,
+  );
 });
 
 test('mapQgrepToolErrorToMcpError maps qgrep invalid input errors to InvalidParams', async () => {

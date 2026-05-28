@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.168] - 2026-05-28
+
+### English
+
+#### Changed
+- Added `lm_getToolDefinitions` as the single batched ToolDefinition lookup entrypoint, exposed its input/output schemas in the workspace handshake, and kept `discovery.bridgedTools` names-only.
+- Removed per-tool `lm-tools://tool/{name}` and standalone `lm-tools://spec/pathScope` resource discovery; `pathScope` syntax now lives in `lm-tools://guide`.
+- Simplified `lm-tools://guide` while preserving bind, lazy ToolDefinition fetch, routing, recovery, and pathScope guidance.
+
+### 中文
+
+#### 变更
+- 新增 `lm_getToolDefinitions` 作为唯一的批量 ToolDefinition 查询入口,在 workspace 握手中暴露它的 input/output schema,并保持 `discovery.bridgedTools` 只返回 tool name.
+- 移除了逐工具的 `lm-tools://tool/{name}` 和独立的 `lm-tools://spec/pathScope` resource discovery; `pathScope` 语法现在并入 `lm-tools://guide`.
+- 精简了 `lm-tools://guide`,同时保留 bind、懒加载 ToolDefinition、routing、recovery 和 pathScope 指南.
+
 ## [1.0.167] - 2026-04-20
 
 ### English

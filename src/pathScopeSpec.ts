@@ -1,21 +1,12 @@
-export const PATH_SCOPE_SPEC_URI = 'lm-tools://spec/pathScope';
 export const PATH_SCOPE_SHARED_SYNTAX_ID = 'lm-tools-bridge/pathScope/v1';
 const PATH_SCOPE_SHARED_SYNTAX_KIND = 'workspace-path-or-glob-scope';
 
 export function getPathScopeFieldDescription(): string {
-  return `Optional workspace path or glob scope. Read ${PATH_SCOPE_SPEC_URI} before using this field.`;
+  return 'Optional workspace path or glob scope. The shared syntax is included in lm-tools://guide.';
 }
 
 export function getPathScopeToolDescriptionSentence(): string {
-  return `pathScope uses the shared ${PATH_SCOPE_SPEC_URI} syntax.`;
-}
-
-export function getPathScopeSpecResourceDescription(): string {
-  return 'Read the shared pathScope syntax before using any tool argument named pathScope.';
-}
-
-export function getPathScopeSpecReadHint(): string {
-  return `Before using any tool argument named pathScope, you must read ${PATH_SCOPE_SPEC_URI} first.`;
+  return 'pathScope uses the shared syntax documented in lm-tools://guide.';
 }
 
 export function buildPathScopeSchema(options?: Record<string, unknown>): Record<string, unknown> {
@@ -24,7 +15,6 @@ export function buildPathScopeSchema(options?: Record<string, unknown>): Record<
     description: getPathScopeFieldDescription(),
     'x-lm-tools-bridge-sharedSyntax': {
       id: PATH_SCOPE_SHARED_SYNTAX_ID,
-      uri: PATH_SCOPE_SPEC_URI,
       kind: PATH_SCOPE_SHARED_SYNTAX_KIND,
     },
     ...(options ?? {}),

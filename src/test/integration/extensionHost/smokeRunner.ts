@@ -137,9 +137,12 @@ export async function run(): Promise<void> {
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
           throw new Error('Expected pathScope shared syntax metadata.');
         }
-        const metadataRecord = metadata as { uri?: unknown };
-        if (metadataRecord.uri !== 'lm-tools://spec/pathScope') {
-          throw new Error(`Expected pathScope shared syntax URI, got ${JSON.stringify(metadataRecord.uri)}.`);
+        const metadataRecord = metadata as { uri?: unknown; id?: unknown };
+        if (Object.prototype.hasOwnProperty.call(metadataRecord, 'uri')) {
+          throw new Error(`Expected pathScope shared syntax metadata to omit uri, got ${JSON.stringify(metadataRecord.uri)}.`);
+        }
+        if (metadataRecord.id !== 'lm-tools-bridge/pathScope/v1') {
+          throw new Error(`Expected pathScope shared syntax id, got ${JSON.stringify(metadataRecord.id)}.`);
         }
       },
     },
@@ -239,19 +242,19 @@ export async function run(): Promise<void> {
           throw new Error(`Expected /mcp/health to return 200, got ${String(response.statusCode)}.\nBody:\n${response.body}`);
         }
 
-        const specResponse = await requestMcp(`http://${advertisement.host}:${String(advertisement.port)}/mcp`, {
+        const guideResponse = await requestMcp(`http://${advertisement.host}:${String(advertisement.port)}/mcp`, {
           jsonrpc: '2.0',
-          id: 'smoke-include-pattern-spec',
+          id: 'smoke-guide-path-scope',
           method: 'resources/read',
           params: {
-            uri: 'lm-tools://spec/pathScope',
+            uri: 'lm-tools://guide',
           },
         });
-        if (specResponse.statusCode !== 200) {
-          throw new Error(`Expected pathScope spec resource to return 200, got ${String(specResponse.statusCode)}.\nBody:\n${specResponse.body}`);
+        if (guideResponse.statusCode !== 200) {
+          throw new Error(`Expected guide resource to return 200, got ${String(guideResponse.statusCode)}.\nBody:\n${guideResponse.body}`);
         }
-        if (!specResponse.body.includes('Shared pathScope syntax')) {
-          throw new Error(`Expected pathScope spec resource body.\nBody:\n${specResponse.body}`);
+        if (!guideResponse.body.includes('Shared pathScope syntax')) {
+          throw new Error(`Expected guide resource to include pathScope syntax.\nBody:\n${guideResponse.body}`);
         }
       },
     },

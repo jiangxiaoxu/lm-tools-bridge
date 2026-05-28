@@ -1,9 +1,8 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import * as path from 'node:path';
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import {
   clearUseWorkspaceSettingsFromUserSettings,
   CONFIG_SECTION,
@@ -22,17 +21,10 @@ import {
   getEnabledExposedToolsSnapshot,
   listToolsPayload,
   normalizeToolSelectionState,
-  prioritizeTool,
   registerExposedTools,
   setToolingLogger,
   showEnabledToolsDump,
-  toolInfoPayload,
 } from './tooling';
-import {
-  getPathScopeSpecResourceDescription,
-  getPathScopeSpecText,
-  PATH_SCOPE_SPEC_URI,
-} from './pathScopeSpec';
 import {
   activateQgrepService,
   getQgrepStatusSummary,
@@ -575,61 +567,12 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   registerExposedTools(server);
 
   server.registerResource(
-    'lmToolsPathScopeSpec',
-    PATH_SCOPE_SPEC_URI,
-    { description: getPathScopeSpecResourceDescription() },
-    async () => {
-      logDebugDetail(`Resource read: ${PATH_SCOPE_SPEC_URI}`);
-      return resourceJson(PATH_SCOPE_SPEC_URI, getPathScopeSpecText(), 'text/plain');
-    },
-  );
-
-  server.registerResource(
     'lmToolsNames',
     'lm-tools://tool-names',
-    { description: 'Read bridged workspace tool names. This is names-only discovery; read lm-tools://tool/{name} only for the tools needed by the current task, usually before the first call.' },
+    { description: 'Read enabled bridged workspace tool names. This is names-only discovery; before calling a bridged tool, fetch its ToolDefinition with lm_getToolDefinitions if it has not already been fetched, batching likely-needed future names when possible.' },
     async () => {
       logDebugDetail('Resource read: lm-tools://tool-names');
       return resourceJson('lm-tools://tool-names', listToolsPayload(getEnabledExposedToolsSnapshot(), 'names'));
-    },
-  );
-
-  const toolTemplate = new ResourceTemplate('lm-tools://tool/{name}', {
-    list: () => {
-      logDebugDetail('Resource list: lm-tools://tool/{name}');
-      return {
-        resources: prioritizeTool(getEnabledExposedToolsSnapshot(), 'getVSCodeWorkspace').map((tool) => ({
-          uri: `lm-tools://tool/${tool.name}`,
-          name: tool.name,
-          description: tool.description,
-        })),
-      };
-    },
-    complete: {
-      name: (value) => {
-        logDebugDetail(`Resource complete: lm-tools://tool/{name} value=${value}`);
-        return getEnabledExposedToolsSnapshot()
-          .map((tool) => tool.name)
-          .filter((name) => name.startsWith(value));
-      },
-    },
-  });
-
-  server.registerResource(
-    'lmToolsTool',
-    toolTemplate,
-    { description: 'Read a tool definition by name before the first call, then build arguments from its inputSchema.' },
-    async (uri, variables) => {
-      const name = readTemplateVariable(variables, 'name');
-      logDebugDetail(`Resource read: ${uri.toString()} name=${name ?? ''}`);
-      if (!name) {
-        throw new McpError(ErrorCode.InvalidParams, 'Tool name is required.');
-      }
-      const tool = getEnabledExposedToolsSnapshot().find((candidate) => candidate.name === name);
-      if (!tool) {
-        throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${name}`);
-      }
-      return resourceJson(uri.toString(), toolInfoPayload(tool, 'full'));
     },
   );
 
@@ -669,19 +612,6 @@ async function handleHealth(
     respondJson(res, 500, { ok: false, error: String(error) });
   }
 }
-
-function readTemplateVariable(
-  variables: Record<string, string | string[]>,
-  name: string,
-): string | undefined {
-  const value = variables[name];
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-
-  return value;
-}
-
 
 function normalizeWorkspacePath(value: string | undefined): string {
   if (!value) {

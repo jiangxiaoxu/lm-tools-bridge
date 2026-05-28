@@ -33,6 +33,20 @@ const DIAGNOSTICS_TOOL: ExposedTool = {
   isCustom: true,
 } as ExposedTool;
 
+const TOOL_WITH_OUTPUT: ExposedTool = {
+  name: 'lm_toolWithOutput',
+  description: 'Tool with output schema.',
+  tags: [],
+  inputSchema: { type: 'object' },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+    },
+  },
+  isCustom: true,
+} as ExposedTool;
+
 let toolingModulePromise: Promise<ToolingModule> | undefined;
 
 async function loadToolingModule(): Promise<ToolingModule> {
@@ -161,30 +175,25 @@ test('lm_formatFiles is exposed by default but not enabled by default', async ()
   assert.equal(tool, undefined);
 });
 
-test('lm_getToolDefinitions is enabled by default with names schema', async () => {
+test('lm_getToolDefinitions is no longer exposed as a bridged workspace tool', async () => {
   const { getEnabledExposedToolsSnapshot } = await loadToolingModule();
   const tool = getEnabledExposedToolsSnapshot().find((entry) => entry.name === 'lm_getToolDefinitions');
 
-  assert.ok(tool);
-  const schema = tool.inputSchema as {
-    required?: unknown;
-    properties?: { names?: { type?: unknown; items?: { type?: unknown } } };
-  };
-  assert.deepEqual(schema.required, ['names']);
-  assert.equal(schema.properties?.names?.type, 'array');
-  assert.equal(schema.properties?.names?.items?.type, 'string');
-  const outputSchema = tool.outputSchema as {
-    required?: unknown;
-    properties?: { tools?: { type?: unknown }; missing?: { type?: unknown } };
-  };
-  assert.deepEqual(outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
-  assert.equal(outputSchema.properties?.tools?.type, 'array');
-  assert.equal(outputSchema.properties?.missing?.type, 'array');
+  assert.equal(tool, undefined);
+});
+
+test('local tool definition lookup contract uses bridge helper name and schemas', async () => {
+  const { getToolDefinitionsLookupDefinition } = await import('../toolDefinitionsContract');
+  const tool = getToolDefinitionsLookupDefinition();
+
+  assert.equal(tool.name, 'lmToolsBridge.getToolDefinitions');
+  assert.deepEqual(tool.inputSchema.required, ['names']);
+  assert.deepEqual(tool.outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
 });
 
 test('tool definitions payload includes outputSchema when a tool defines it', async () => {
-  const { getEnabledExposedToolsSnapshot, buildToolDefinitionsPayload } = await loadToolingModule();
-  const payload = buildToolDefinitionsPayload(getEnabledExposedToolsSnapshot(), ['lm_getToolDefinitions']);
+  const { buildToolDefinitionsPayload } = await loadToolingModule();
+  const payload = buildToolDefinitionsPayload([TOOL_WITH_OUTPUT], ['lm_toolWithOutput']);
   const definition = payload.tools[0] as { outputSchema?: unknown };
 
   assert.equal(payload.count, 1);

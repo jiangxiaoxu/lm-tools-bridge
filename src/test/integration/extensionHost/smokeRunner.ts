@@ -301,6 +301,9 @@ export async function run(): Promise<void> {
           if (!toolNames.includes('lmToolsBridge.callBridgedTool')) {
             throw new Error(`Expected callBridgedTool helper in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
           }
+          if (!toolNames.includes('lmToolsBridge.getToolDefinitions')) {
+            throw new Error(`Expected getToolDefinitions helper in synced manager tools/list.\nActual tools: ${toolNames.join(', ')}`);
+          }
         } catch (error) {
           const message = error instanceof Error ? error.stack ?? error.message : String(error);
           throw new Error(`${message}\nManager stderr:\n${stderrChunks.join('').trim() || '<empty>'}`);

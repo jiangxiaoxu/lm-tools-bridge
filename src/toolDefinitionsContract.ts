@@ -1,10 +1,13 @@
-export const LM_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lm_getToolDefinitions';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+
+export const LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lmToolsBridge.getToolDefinitions';
+export const LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lm_getToolDefinitions';
 
 export const LM_GET_TOOL_DEFINITIONS_DESCRIPTION = [
-  'Read full definitions for multiple enabled bridged tools in one call after workspace bind.',
+  'Read full definitions for multiple bound bridged workspace tools in one call after workspace bind.',
   'Before the first call to a bridged tool, use this if that tool definition has not already been fetched.',
   'Batch likely-needed future tool names into the same request when possible.',
-  'Unknown, unavailable, or disabled names are returned in missing without failing the whole request.',
+  'Unknown or unavailable names are returned in missing without failing the whole request.',
 ].join(' ');
 
 export const LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA: Record<string, unknown> = {
@@ -81,11 +84,116 @@ export interface ToolDefinitionsLookupDefinition {
   outputSchema: Record<string, unknown>;
 }
 
+export interface LmToolDefinitionSource {
+  name: string;
+  description?: unknown;
+  tags?: unknown;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+}
+
+export interface LmGetToolDefinitionsPayload {
+  requested: string[];
+  tools: Array<Record<string, unknown>>;
+  missing: string[];
+  count: number;
+  missingCount: number;
+}
+
 export function getToolDefinitionsLookupDefinition(): ToolDefinitionsLookupDefinition {
   return {
-    name: LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
+    name: LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME,
     description: LM_GET_TOOL_DEFINITIONS_DESCRIPTION,
     inputSchema: LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA,
     outputSchema: LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA,
   };
+}
+
+export function parseRequiredToolDefinitionNames(input: Record<string, unknown>): string[] {
+  const value = input.names;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new McpError(ErrorCode.InvalidParams, 'names must be a non-empty array of tool name strings.');
+  }
+
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== 'string') {
+      throw new McpError(ErrorCode.InvalidParams, `names[${index}] must be a string.`);
+    }
+    const name = entry.trim();
+    if (name.length === 0) {
+      throw new McpError(ErrorCode.InvalidParams, `names[${index}] must be a non-empty string.`);
+    }
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+export function buildToolDefinitionPayload(tool: LmToolDefinitionSource): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: tool.name,
+    description: typeof tool.description === 'string' ? tool.description : '',
+    tags: Array.isArray(tool.tags) ? tool.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+    inputSchema: tool.inputSchema ?? null,
+  };
+  if (tool.outputSchema !== undefined) {
+    payload.outputSchema = tool.outputSchema;
+  }
+  return payload;
+}
+
+export function buildToolDefinitionsPayload(
+  tools: readonly LmToolDefinitionSource[],
+  names: readonly string[],
+): LmGetToolDefinitionsPayload {
+  const toolsByName = new Map<string, LmToolDefinitionSource>();
+  for (const tool of tools) {
+    toolsByName.set(tool.name, tool);
+  }
+
+  const definitions: Array<Record<string, unknown>> = [];
+  const missing: string[] = [];
+  for (const name of names) {
+    const tool = toolsByName.get(name);
+    if (!tool) {
+      missing.push(name);
+      continue;
+    }
+    definitions.push(buildToolDefinitionPayload(tool));
+  }
+
+  return {
+    requested: [...names],
+    tools: definitions,
+    missing,
+    count: definitions.length,
+    missingCount: missing.length,
+  };
+}
+
+export function formatToolDefinitionsSummary(payload: LmGetToolDefinitionsPayload): string {
+  const lines = [
+    'Tool definitions',
+    `requested: ${String(payload.requested.length)}`,
+    `returned: ${String(payload.count)}`,
+    `missing: ${String(payload.missingCount)}`,
+  ];
+  if (payload.tools.length > 0) {
+    lines.push('tools:');
+    for (const tool of payload.tools) {
+      const name = typeof tool.name === 'string' ? tool.name : '<unknown>';
+      lines.push(`  - ${name}`);
+    }
+  }
+  if (payload.missing.length > 0) {
+    lines.push('missing tools:');
+    for (const name of payload.missing) {
+      lines.push(`  - ${name}`);
+    }
+  }
+  return lines.join('\n');
 }

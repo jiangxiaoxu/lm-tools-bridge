@@ -21,9 +21,16 @@ import {
 } from './managerHandshake';
 import { getPathScopeSpecText } from './pathScopeSpec';
 import { isSupportedWindowsWorkspacePath } from './windowsWorkspacePath';
+import {
+  formatToolDefinitionsSummary,
+  getToolDefinitionsLookupDefinition,
+  LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME,
+  type LmGetToolDefinitionsPayload,
+} from './toolDefinitionsContract';
 
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME;
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const RUNTIME_MODULE_FILENAME = 'stdioManagerRuntime.js';
@@ -84,6 +91,7 @@ interface StdioManagerRuntimeLocalHelperOverrides {
 
 interface StdioManagerRuntimeApi {
   bindWorkspace(server: Server, cwd: unknown): Promise<WorkspaceHandshakePayload>;
+  getToolDefinitions(server: Server, args: Record<string, unknown>): Promise<Record<string, unknown>>;
   callBridgedTool(server: Server, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
   listBridgedTools(): WorkspaceToolDefinition[];
   readBridgedResource(server: Server, uri: string): Promise<Record<string, unknown>>;
@@ -208,6 +216,27 @@ class RuntimeController {
     const runtimeEpoch = this.runtimeEpoch;
     try {
       const result = await runtime.callBridgedTool(server, name, args);
+      this.assertStableBridgedRequest(runtime, runtimeEpoch, 'tool-call');
+      return result;
+    } catch (error) {
+      this.rethrowIfStaleBridgedRequest(runtime, runtimeEpoch, 'tool-call');
+      throw error;
+    }
+  }
+
+  public async getToolDefinitions(
+    server: Server,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    await this.ensureCurrent(server);
+    this.throwIfFatalReloadFailure();
+    if (this.bindingState === 'stale') {
+      throw this.getStaleBridgedRequestError('tool-call');
+    }
+    const runtime = this.requireRuntimeForBridgedRequest('tool-call');
+    const runtimeEpoch = this.runtimeEpoch;
+    try {
+      const result = await runtime.getToolDefinitions(server, args);
       this.assertStableBridgedRequest(runtime, runtimeEpoch, 'tool-call');
       return result;
     } catch (error) {
@@ -635,7 +664,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return 'Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with lm_getToolDefinitions; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.';
+  return `Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with ${GET_TOOL_DEFINITIONS_METHOD}; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.`;
 }
 
 function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
@@ -676,6 +705,10 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
   };
 }
 
+function getToolDefinitionsToolDefinition(): WorkspaceToolDefinition {
+  return { ...getToolDefinitionsLookupDefinition() };
+}
+
 function getFallbackGuideText(): string {
   return [
     'Workspace bridge guide',
@@ -690,8 +723,8 @@ function getFallbackGuideText(): string {
     '',
     'Tool discovery and calls:',
     '- discovery.bridgedTools is names-only.',
-    '- discovery.toolDefinitionsTool describes lm_getToolDefinitions and includes its inputSchema/outputSchema.',
-    '- Before calling a bridged tool, fetch its ToolDefinition with lm_getToolDefinitions if it has not already been fetched; batch likely-needed future tool names when possible.',
+    `- discovery.toolDefinitionsTool describes ${GET_TOOL_DEFINITIONS_METHOD} and includes its inputSchema/outputSchema.`,
+    `- Before calling a bridged tool, fetch its ToolDefinition with ${GET_TOOL_DEFINITIONS_METHOD} if it has not already been fetched; batch likely-needed future tool names when possible.`,
     '- Build arguments from the returned inputSchema.',
     `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call bridged tools returned by tools/list after bind.`,
     '- If an argument is named pathScope, use the shared pathScope syntax below.',
@@ -790,7 +823,7 @@ function getDirectCallNameParamMessage(): string {
 function getDirectCallArgumentsParamMessage(): string {
   return appendNextStep(
     'Invalid params: expected arguments.arguments (object).',
-    'pass arguments.arguments as an object that matches the target tool inputSchema from lm_getToolDefinitions.',
+    `pass arguments.arguments as an object that matches the target tool inputSchema from ${GET_TOOL_DEFINITIONS_METHOD}.`,
   );
 }
 
@@ -820,6 +853,7 @@ function getHelperToolDefinitions(overrides: StdioManagerRuntimeLocalHelperOverr
   const fallbackDefinitions = [
     getRequestWorkspaceToolDefinition(),
     getDirectToolCallDefinition(),
+    getToolDefinitionsToolDefinition(),
   ];
   const overrideMap = new Map<string, WorkspaceToolDefinition>();
   for (const entry of overrides.helperToolDefinitions ?? []) {
@@ -1068,12 +1102,24 @@ function createServer(): { server: Server; cleanup: () => void } {
       return buildStructuredToolResult(payload, formatWorkspaceHandshakeSummary(payload));
     }
 
+    if (name === GET_TOOL_DEFINITIONS_METHOD) {
+      const payload = await runtimeController.getToolDefinitions(server, args);
+      return buildStructuredToolResult(
+        payload,
+        formatToolDefinitionsSummary(payload as unknown as LmGetToolDefinitionsPayload),
+      );
+    }
+
     if (name === DIRECT_TOOL_CALL_NAME) {
       const targetToolName = typeof args.name === 'string' ? args.name.trim() : '';
       if (!targetToolName) {
         throw new McpError(ErrorCode.InvalidParams, getDirectCallNameParamMessage());
       }
-      if (targetToolName === DIRECT_TOOL_CALL_NAME || targetToolName === REQUEST_WORKSPACE_METHOD) {
+      if (
+        targetToolName === DIRECT_TOOL_CALL_NAME
+        || targetToolName === REQUEST_WORKSPACE_METHOD
+        || targetToolName === GET_TOOL_DEFINITIONS_METHOD
+      ) {
         throw new McpError(ErrorCode.InvalidParams, getDirectCallForbiddenToolNameMessage());
       }
       const targetArgs = args.arguments;
@@ -1103,7 +1149,7 @@ function createServer(): { server: Server; cleanup: () => void } {
         {
           uri: TOOL_NAMES_RESOURCE_URI,
           name: 'Bridged tool names',
-          description: `Read bridged tool names after bind. This is names-only discovery; call lm_getToolDefinitions after bind for full definitions. Before bind, call ${REQUEST_WORKSPACE_METHOD} first.`,
+          description: `Read bridged tool names after bind. This is names-only discovery; call ${GET_TOOL_DEFINITIONS_METHOD} after bind for full definitions. Before bind, call ${REQUEST_WORKSPACE_METHOD} first.`,
           mimeType: 'application/json',
         },
       ],

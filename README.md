@@ -52,7 +52,7 @@ The PowerShell wrapper is recommended because many MCP clients do not expand env
    - the project path
    - the `.code-workspace` path
    - relative paths are invalid
-5. After bind succeeds, use bridged workspace tools from `tools/list`, or call `lmToolsBridge.callBridgedTool`.
+5. After bind succeeds, fetch needed ToolDefinitions with `lmToolsBridge.getToolDefinitions`, then use bridged workspace tools from `tools/list`, or call `lmToolsBridge.callBridgedTool`.
 
 Notes:
 - Handshake is required before using bridged workspace tools.
@@ -60,7 +60,7 @@ Notes:
 - Read `lm-tools://guide` for the concise bind, tool-discovery, routing, and recovery guide. It is guide-only and does not embed live status snapshots or example payloads.
 - VS Code-sourced workspace tools are exposed with an `lm_` prefix. For example, `copilot_searchCodebase` is exposed as `lm_copilot_searchCodebase`.
 - `lm_formatFiles` is exposed by default but disabled by default. It formats the files selected by `pathScope` through VS Code's document-format command so the configured formatter selection, including `editor.defaultFormatter`, is honored, then saves changed files after you enable it.
-- Handshake `discovery.bridgedTools` returns tool names only. `discovery.toolDefinitionsTool` includes the `lm_getToolDefinitions` usage description plus input/output schemas; before calling a bridged tool, call it if that ToolDefinition has not already been fetched, batching likely-needed future tool names when possible.
+- Handshake `discovery.bridgedTools` returns tool names only. `discovery.toolDefinitionsTool` describes the local `lmToolsBridge.getToolDefinitions` helper plus input/output schemas; before calling a bridged tool, call that helper if the ToolDefinition has not already been fetched, batching likely-needed future tool names when possible. It is available only after `lmToolsBridge.bindWorkspace` succeeds and is not callable through `lmToolsBridge.callBridgedTool`.
 - The direct `lmToolsBridge.callBridgedTool` helper is documented in `lm-tools://guide`; the names-only discovery resource is `lm-tools://tool-names`, and it returns an actionable bind/rebind error until the workspace is actively bound.
 - If a tool argument uses `pathScope`, use the pathScope syntax already included in `lm-tools://guide`.
 - When a new stdio manager runtime generation is published, the stdio transport stays connected. A successful runtime reload keeps the manager alive but invalidates the current workspace bind until the client binds again. A failed runtime reload makes that stdio manager unavailable and returns a fatal MCP error until VS Code creates a fresh manager.
@@ -123,7 +123,7 @@ enabled = true
    - 项目路径
    - `.code-workspace` 路径
    - 相对路径无效
-5. 绑定成功后,通过 `tools/list` 使用桥接后的 workspace tools,或继续调用 `lmToolsBridge.callBridgedTool`.
+5. 绑定成功后,先用 `lmToolsBridge.getToolDefinitions` 获取需要的 ToolDefinition,再通过 `tools/list` 使用桥接后的 workspace tools,或继续调用 `lmToolsBridge.callBridgedTool`.
 
 说明:
 - 使用桥接 workspace tools 之前,必须先完成握手.
@@ -131,7 +131,7 @@ enabled = true
 - 读取 `lm-tools://guide`,里面包含精简后的 bind、tool discovery、routing 和 recovery 指南,不会内嵌 live status snapshot 或 example payload.
 - 来自 VS Code 的 workspace tool 对外统一带 `lm_` 前缀. 例如 `copilot_searchCodebase` 会暴露为 `lm_copilot_searchCodebase`.
 - `lm_formatFiles` 默认已暴露但默认禁用,启用后会按 `pathScope` 选择文件,通过 VS Code 的 document format 命令执行格式化,从而遵循已配置的 formatter 选择(包括 `editor.defaultFormatter`),然后保存实际发生变更的文件.
-- 握手里的 `discovery.bridgedTools` 只返回 tool name. `discovery.toolDefinitionsTool` 会包含 `lm_getToolDefinitions` 的用法说明和 input/output schema; 调用某个 bridged tool 前,如果还没获取过它的 ToolDefinition,先调用 `lm_getToolDefinitions`,并尽量把未来可能需要的 tool name 合并到同一批次里预取.
+- 握手里的 `discovery.bridgedTools` 只返回 tool name. `discovery.toolDefinitionsTool` 会包含本地 helper `lmToolsBridge.getToolDefinitions` 的用法说明和 input/output schema; 调用某个 bridged tool 前,如果还没获取过它的 ToolDefinition,先调用这个 helper,并尽量把未来可能需要的 tool name 合并到同一批次里预取. 它只能在 `lmToolsBridge.bindWorkspace` 成功后调用,且不能通过 `lmToolsBridge.callBridgedTool` 包装调用.
 - `lmToolsBridge.callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools://guide`; names-only discovery resource 是 `lm-tools://tool-names`,它在未绑定或绑定失效时会返回可执行的 bind/rebind 提示.
 - 如果某个工具参数使用了 `pathScope`,直接使用 `lm-tools://guide` 中已经包含的 pathScope 语法即可.
 - 当新的 stdio manager runtime generation 发布后,stdio transport 会保持连接. 如果 runtime reload 成功,当前 workspace bind 会失效,需要重新执行 `lmToolsBridge.bindWorkspace`. 如果 runtime reload 失败,当前 stdio manager 会直接不可用,并持续返回 fatal MCP 错误,直到 VS Code 创建新的 manager.

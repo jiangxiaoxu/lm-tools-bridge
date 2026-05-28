@@ -27,6 +27,7 @@ import {
 
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const QGREP_STATUS_TOOL_NAME = 'lm_qgrepGetStatus';
 const QGREP_TEXT_TOOL_NAME = 'lm_qgrepSearchText';
@@ -590,7 +591,11 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     ));
     assert.deepEqual(
       toolsBeforeHandshake,
-      [DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD].sort((left, right) => left.localeCompare(right)),
+      [
+        DIRECT_TOOL_CALL_NAME,
+        GET_TOOL_DEFINITIONS_METHOD,
+        REQUEST_WORKSPACE_METHOD,
+      ].sort((left, right) => left.localeCompare(right)),
     );
 
     const handshake = await withTimeout('binding workspace for qgrep integration', manager.client.callTool({
@@ -606,6 +611,9 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
       };
       discovery?: {
         bridgedTools?: Array<{ name?: unknown }>;
+        toolDefinitionsTool?: {
+          name?: unknown;
+        };
       };
     } | undefined;
     assert.equal(handshakePayload?.ok, true);
@@ -614,6 +622,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
       normalizeWindowsComparablePath(workspace.workspaceFile),
     );
     assert.ok(handshakePayload?.discovery, 'Expected handshake to include discovery metadata.');
+    assert.equal(handshakePayload.discovery.toolDefinitionsTool?.name, GET_TOOL_DEFINITIONS_METHOD);
 
     launchedPid = await waitForPidFile(wrapper.pidFile, 30_000);
     assert.ok(launchedPid, `Expected VS Code wrapper to record a PID. Wrapper log:\n${await readOptionalFile(wrapper.logFile)}`);
@@ -947,7 +956,11 @@ test('stdio manager applies notified and lazy runtime generations without reconn
     ));
     assert.deepEqual(
       toolsAfterNotify,
-      [DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD].sort((left, right) => left.localeCompare(right)),
+      [
+        DIRECT_TOOL_CALL_NAME,
+        GET_TOOL_DEFINITIONS_METHOD,
+        REQUEST_WORKSPACE_METHOD,
+      ].sort((left, right) => left.localeCompare(right)),
     );
 
     const lazyRuntimeText = notifiedRuntimeText.replace(

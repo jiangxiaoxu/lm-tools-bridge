@@ -13,6 +13,7 @@ import {
 
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const ECHO_TOOL_NAME = 'lm_testEcho';
 
 async function makeTempDir(prefix: string): Promise<string> {
@@ -232,9 +233,14 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   });
 
   const beforeTools = await manager.client.listTools();
-  assert.deepEqual(getToolNames(beforeTools), [REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME].sort((left, right) => left.localeCompare(right)));
+  assert.deepEqual(
+    getToolNames(beforeTools),
+    [REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME, GET_TOOL_DEFINITIONS_METHOD]
+      .sort((left, right) => left.localeCompare(right)),
+  );
   const requestWorkspaceTool = beforeTools.tools.find((tool) => tool.name === REQUEST_WORKSPACE_METHOD);
   const directCallTool = beforeTools.tools.find((tool) => tool.name === DIRECT_TOOL_CALL_NAME);
+  const toolDefinitionsTool = beforeTools.tools.find((tool) => tool.name === GET_TOOL_DEFINITIONS_METHOD);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions/u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /Read lm-tools:\/\/guide before first use\./u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /rebind only when the workspace target changes/u);
@@ -244,6 +250,15 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     'Absolute workspace path to resolve. Use the absolute project root path or the absolute .code-workspace path. Relative paths are invalid.',
   );
   assert.match(String(directCallTool?.description ?? ''), /call a bridged workspace tool only after its ToolDefinition has been fetched/u);
+  assert.match(String(toolDefinitionsTool?.description ?? ''), /Read full definitions for multiple bound bridged workspace tools/u);
+  assert.deepEqual(
+    (toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['names'],
+  );
+  assert.deepEqual(
+    (toolDefinitionsTool?.outputSchema as { required?: unknown } | undefined)?.required,
+    ['requested', 'tools', 'missing', 'count', 'missingCount'],
+  );
   assert.equal(
     (
       directCallTool?.inputSchema as {
@@ -273,6 +288,16 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     [],
   );
 
+  await assert.rejects(
+    () => manager.client.callTool({
+      name: GET_TOOL_DEFINITIONS_METHOD,
+      arguments: {
+        names: [ECHO_TOOL_NAME],
+      },
+    }),
+    /Workspace binding required before reading bridged discovery resources/u,
+  );
+
   const handshake = await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
@@ -297,10 +322,10 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     },
   ]);
   assert.equal(handshakePayload?.discovery?.callTool?.name, DIRECT_TOOL_CALL_NAME);
-  assert.equal(handshakePayload?.discovery?.toolDefinitionsTool?.name, 'lm_getToolDefinitions');
+  assert.equal(handshakePayload?.discovery?.toolDefinitionsTool?.name, GET_TOOL_DEFINITIONS_METHOD);
   assert.match(
     String(handshakePayload?.discovery?.toolDefinitionsTool?.description ?? ''),
-    /Read full definitions for multiple enabled bridged tools/u,
+    /Read full definitions for multiple bound bridged workspace tools/u,
   );
   assert.deepEqual(
     (handshakePayload?.discovery?.toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
@@ -316,7 +341,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /only after its ToolDefinition has been fetched with lm_getToolDefinitions/u,
+    /only after its ToolDefinition has been fetched with lmToolsBridge\.getToolDefinitions/u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
@@ -338,7 +363,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /Bind:/u);
   assert.match(getResourceText(handshakeResource), /Tool discovery and calls:/u);
   assert.match(getResourceText(handshakeResource), /Routing and recovery:/u);
-  assert.match(getResourceText(handshakeResource), /fetch its ToolDefinition with lm_getToolDefinitions/u);
+  assert.match(getResourceText(handshakeResource), /fetch its ToolDefinition with lmToolsBridge\.getToolDefinitions/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
   assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);
@@ -346,7 +371,41 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const afterTools = await manager.client.listTools();
   assert.deepEqual(
     getToolNames(afterTools),
-    [ECHO_TOOL_NAME, REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME].sort((left, right) => left.localeCompare(right)),
+    [ECHO_TOOL_NAME, REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME, GET_TOOL_DEFINITIONS_METHOD]
+      .sort((left, right) => left.localeCompare(right)),
+  );
+
+  const toolDefinitions = await manager.client.callTool({
+    name: GET_TOOL_DEFINITIONS_METHOD,
+    arguments: {
+      names: [ECHO_TOOL_NAME, 'lm_missingTool'],
+    },
+  });
+  const toolDefinitionsPayload = toolDefinitions.structuredContent as {
+    requested?: unknown;
+    tools?: Array<{ name?: unknown; inputSchema?: unknown }>;
+    missing?: unknown;
+    count?: unknown;
+    missingCount?: unknown;
+  };
+  assert.deepEqual(toolDefinitionsPayload.requested, [ECHO_TOOL_NAME, 'lm_missingTool']);
+  assert.deepEqual(toolDefinitionsPayload.missing, ['lm_missingTool']);
+  assert.equal(toolDefinitionsPayload.count, 1);
+  assert.equal(toolDefinitionsPayload.missingCount, 1);
+  assert.equal(toolDefinitionsPayload.tools?.[0]?.name, ECHO_TOOL_NAME);
+  assert.deepEqual(toolDefinitionsPayload.tools?.[0]?.inputSchema, { type: 'object' });
+
+  await assert.rejects(
+    () => manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: GET_TOOL_DEFINITIONS_METHOD,
+        arguments: {
+          names: [ECHO_TOOL_NAME],
+        },
+      },
+    }),
+    /Invalid params: tool name is not allowed/u,
   );
 
   const toolNamesResource = await manager.client.readResource({
@@ -518,7 +577,11 @@ test('stdio manager clears bound tools when the workspace server goes offline', 
   );
 
   const toolsAfterOffline = await manager.client.listTools();
-  assert.deepEqual(getToolNames(toolsAfterOffline), [REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME].sort((left, right) => left.localeCompare(right)));
+  assert.deepEqual(
+    getToolNames(toolsAfterOffline),
+    [REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME, GET_TOOL_DEFINITIONS_METHOD]
+      .sort((left, right) => left.localeCompare(right)),
+  );
 });
 
 test('stdio manager auto-starts VS Code via PATH during handshake on Windows', {
@@ -678,6 +741,7 @@ process.on('SIGINT', () => { void shutdown(); });
   const toolsAfterHandshake = await manager.client.listTools();
   assert.deepEqual(
     getToolNames(toolsAfterHandshake),
-    [ECHO_TOOL_NAME, REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME].sort((left, right) => left.localeCompare(right)),
+    [ECHO_TOOL_NAME, REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME, GET_TOOL_DEFINITIONS_METHOD]
+      .sort((left, right) => left.localeCompare(right)),
   );
 });

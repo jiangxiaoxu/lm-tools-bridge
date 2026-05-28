@@ -19,6 +19,7 @@ import {
 
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
+const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const ECHO_TOOL_NAME = 'lm_testEcho';
@@ -456,7 +457,11 @@ test('stdio manager invalidates binding on control notification and requires reb
   assert.match(getResourceText(afterReload), /Workspace bridge guide reloaded/u);
 
   const toolsAfterReload = await manager.client.listTools();
-  assert.deepEqual(getToolNames(toolsAfterReload), [DIRECT_TOOL_CALL_NAME, REQUEST_WORKSPACE_METHOD].sort((left, right) => left.localeCompare(right)));
+  assert.deepEqual(getToolNames(toolsAfterReload), [
+    DIRECT_TOOL_CALL_NAME,
+    GET_TOOL_DEFINITIONS_METHOD,
+    REQUEST_WORKSPACE_METHOD,
+  ].sort((left, right) => left.localeCompare(right)));
 
   await assert.rejects(
     () => manager.client.callTool({

@@ -51,7 +51,7 @@ test('handshake payload omits redundant online and health fields', () => {
     guidance: {
       nextSteps: [
         'follow the ToolDefinition cache and lookup rules in lm-tools://guide.',
-        'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
+        'For any tool argument named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax.',
       ],
     },
   });
@@ -112,7 +112,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
     guidance: {
       nextSteps: [
         'follow the ToolDefinition cache and lookup rules in lm-tools://guide.',
-        'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
+        'For any tool argument named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax.',
       ],
     },
   });

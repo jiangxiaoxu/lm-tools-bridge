@@ -77,6 +77,7 @@ const LEGACY_REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
 const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
+const TOOL_DEFINITIONS_RESOURCE_URI = 'lm-tools://tool-definitions';
 const HEALTH_TIMEOUT_MS = 1200;
 const INSTANCE_POLL_INTERVAL_MS = 500;
 const DISCOVERY_POLL_INTERVAL_MS = 500;
@@ -259,7 +260,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.`;
+  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { name: string, arguments?: object }.`;
 }
 
 function toOfflineDurationSec(startedAt?: number): number | null {
@@ -429,6 +430,49 @@ function getRemoteResultObject(data: unknown): {
   return { result: record.result as Record<string, unknown> };
 }
 
+function parseWorkspaceToolDefinitionsResource(result: Record<string, unknown>): WorkspaceToolDefinition[] | undefined {
+  const contents = result.contents;
+  if (!Array.isArray(contents)) {
+    return undefined;
+  }
+  const first = contents[0];
+  if (!first || typeof first !== 'object' || Array.isArray(first)) {
+    return undefined;
+  }
+  const text = (first as { text?: unknown }).text;
+  if (typeof text !== 'string') {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return undefined;
+  }
+  const tools = (payload as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) {
+    return undefined;
+  }
+  const definitions = tools.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return undefined;
+    }
+    const record = entry as Record<string, unknown>;
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!name) {
+      return undefined;
+    }
+    return {
+      ...record,
+      name,
+    } satisfies WorkspaceToolDefinition;
+  });
+  return definitions.filter((entry): entry is WorkspaceToolDefinition => Boolean(entry));
+}
+
 function appendToolDefinitionRefreshHint(toolName: string, message: string): string {
   return `${message} Refresh ${toolName}'s ToolDefinition with ${GET_TOOL_DEFINITIONS_METHOD}, then retry with arguments that match the refreshed inputSchema.`;
 }
@@ -507,7 +551,7 @@ function buildHandshakeUriTemplates(): [] {
 function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): HandshakeGuidance {
   const nextSteps = [
     `Use discovery.toolDefinitionsTool for ${GET_TOOL_DEFINITIONS_METHOD} usage, inputSchema, and outputSchema; ${getToolReadHint()}`,
-    'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
+    'For any tool argument named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax.',
   ];
   if (discovery.partial || discovery.issues.length > 0) {
     nextSteps.push(`Discovery is partial or has issues: ${getDiscoveryRefreshHint()}`);
@@ -916,10 +960,29 @@ async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
       name,
     } satisfies WorkspaceToolDefinition;
   });
+  const visibleTools = tools.filter((entry): entry is WorkspaceToolDefinition => Boolean(entry));
+  const fullDefinitionsResponse = await requestTargetJson(target, {
+    jsonrpc: '2.0',
+    id: `mgr-tool-definitions-${Date.now()}`,
+    method: 'resources/read',
+    params: {
+      uri: TOOL_DEFINITIONS_RESOURCE_URI,
+    },
+  });
+  const fullDefinitionsByName = new Map<string, WorkspaceToolDefinition>();
+  if (fullDefinitionsResponse.ok) {
+    const fullDefinitionsResult = getRemoteResultObject(fullDefinitionsResponse.data);
+    if (fullDefinitionsResult.result) {
+      const fullDefinitions = parseWorkspaceToolDefinitionsResource(fullDefinitionsResult.result);
+      for (const definition of fullDefinitions ?? []) {
+        fullDefinitionsByName.set(definition.name, definition);
+      }
+    }
+  }
+  const mergedTools = visibleTools.map((tool) => fullDefinitionsByName.get(tool.name) ?? tool);
 
   return {
-    tools: tools
-      .filter((entry): entry is WorkspaceToolDefinition => Boolean(entry))
+    tools: mergedTools
       .sort((left, right) => left.name.localeCompare(right.name)),
     issues,
     partial: issues.some((issue) => issue.level === 'error'),
@@ -1114,7 +1177,7 @@ function getHandshakeResourceText(): string {
     `- Do not guess or infer ToolDefinitions or inputSchemas from tool names, prior experience, or similar tools; definitions returned by ${GET_TOOL_DEFINITIONS_METHOD} are the source of truth.`,
     '- Build arguments from the known ToolDefinition inputSchema.',
     `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call a bridged tool directly only after its ToolDefinition is known.`,
-    '- If an argument is named pathScope, use the shared pathScope syntax below.',
+    '- If an argument is named pathScope, use its parameter description for the compact syntax summary; the full pathScope syntax is below.',
     '',
     'Routing and recovery:',
     '- Prefer lmToolsBridge tools for workspace file search, text search, multi-file inspection, and VS Code IDE actions inside validated workspace roots.',

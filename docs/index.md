@@ -18,7 +18,7 @@
 ## Highest-Priority Invariants
 - Effective callable tools = exposed set intersection enabled set.
 - VS Code-sourced `vscode.lm.tools` are exposed as `lm_*`; runtime invocation still routes to the original VS Code source name.
-- Shared `pathScope` syntax is embedded in `lm-tools://guide` and applies to any tool argument named `pathScope`.
+- `pathScope` parameters include a compact syntax summary in their description; the full shared syntax remains in `lm-tools://guide`.
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown; do not guess definitions or input schemas.

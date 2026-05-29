@@ -16,13 +16,13 @@
 - Single-folder reads keep the WorkspaceFolder -> Workspace fallback.
 
 ## pathScope And Diagnostics
-- Shared `pathScope` syntax is embedded in `lm-tools://guide` and applies to any tool argument named `pathScope`.
+- `pathScope` parameters include a compact syntax summary in their description; the full shared syntax remains in `lm-tools://guide`.
 - Accepted forms include workspace-relative patterns, `WorkspaceName/...`, brace-selected workspace groups, full-branch brace globs, and absolute paths/globs inside current workspaces.
 - Bare `|` alternation is rejected in favor of brace globs.
-- `lm_getDiagnostics.pathScope` uses the shared syntax, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
+- `lm_getDiagnostics.pathScope` is optional, uses the shared syntax without schema `pattern`/`minLength` constraints, returns `scope` as `workspace+external` or `filtered`, and filtered mode ignores non-workspace/non-file diagnostics.
+- Custom `lm_` tool schemas use object-level `required` arrays to distinguish required from optional parameters; `pathScope` fields do not use schema `pattern`/`minLength` to express requiredness.
 
 ## Formatting
 - `lm_formatFiles` is default exposed but not default enabled.
 - It requires `pathScope`, formats matched workspace files through `editor.action.formatDocument`, and honors active language-scoped formatter selection.
 - It best-effort restores the previously active editor, saves only changed files, reports skipped/failure details, and treats unchanged text as `unchanged`.
-

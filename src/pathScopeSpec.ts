@@ -1,22 +1,23 @@
-export const PATH_SCOPE_SHARED_SYNTAX_ID = 'lm-tools-bridge/pathScope/v1';
-const PATH_SCOPE_SHARED_SYNTAX_KIND = 'workspace-path-or-glob-scope';
+const PATH_SCOPE_FIELD_DESCRIPTION = [
+  'Optional workspace path or glob scope.',
+  'Applies only to arguments named pathScope.',
+  'Accepted forms include workspace-relative globs such as src/**/*.ts, workspace-scoped globs such as WorkspaceA/src/**, brace workspace scopes such as {WorkspaceA,UE5}/**/*.{ts,tsx}, and absolute paths or globs inside current workspaces.',
+  'Use VS Code glob semantics with bridge rules: ** is recursive, * is not recursive, use brace globs instead of bare | alternation, and absolute patterns outside current workspaces are rejected.',
+  'Full syntax is available in lm-tools://guide.',
+].join(' ');
 
 export function getPathScopeFieldDescription(): string {
-  return 'Optional workspace path or glob scope. The shared syntax is included in lm-tools://guide.';
+  return PATH_SCOPE_FIELD_DESCRIPTION;
 }
 
 export function getPathScopeToolDescriptionSentence(): string {
-  return 'pathScope uses the shared syntax documented in lm-tools://guide.';
+  return 'pathScope includes a compact syntax summary in its parameter description; full syntax is available in lm-tools://guide.';
 }
 
 export function buildPathScopeSchema(options?: Record<string, unknown>): Record<string, unknown> {
   return {
     type: 'string',
     description: getPathScopeFieldDescription(),
-    'x-lm-tools-bridge-sharedSyntax': {
-      id: PATH_SCOPE_SHARED_SYNTAX_ID,
-      kind: PATH_SCOPE_SHARED_SYNTAX_KIND,
-    },
     ...(options ?? {}),
   };
 }

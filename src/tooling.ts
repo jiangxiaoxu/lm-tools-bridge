@@ -411,10 +411,7 @@ const LM_GET_DIAGNOSTICS_DESCRIPTION = [
 const LM_GET_DIAGNOSTICS_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    pathScope: buildPathScopeSchema({
-      minLength: 1,
-      pattern: '\\S',
-    }),
+    pathScope: buildPathScopeSchema(),
     severities: {
       type: 'array',
       uniqueItems: true,
@@ -444,10 +441,7 @@ const LM_FORMAT_FILES_DESCRIPTION = [
 const LM_FORMAT_FILES_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    pathScope: buildPathScopeSchema({
-      minLength: 1,
-      pattern: '\\S',
-    }),
+    pathScope: buildPathScopeSchema(),
   },
   required: ['pathScope'],
 };

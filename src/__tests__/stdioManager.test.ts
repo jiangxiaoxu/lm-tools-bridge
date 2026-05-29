@@ -109,6 +109,39 @@ async function startFakeWorkspaceServer(args: {
       });
       return;
     }
+    if (message?.method === 'resources/read' && message.params?.uri === 'lm-tools://tool-definitions') {
+      respondJson(res, {
+        jsonrpc: '2.0',
+        id,
+        result: {
+          contents: [
+            {
+              uri: 'lm-tools://tool-definitions',
+              mimeType: 'application/json',
+              text: JSON.stringify({
+                tools: [
+                  {
+                    name: ECHO_TOOL_NAME,
+                    description: 'Echo back the provided value.',
+                    inputSchema: {
+                      type: 'object',
+                      properties: {
+                        value: {
+                          type: 'string',
+                          description: 'Value to echo.',
+                        },
+                      },
+                      required: ['value'],
+                    },
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+      });
+      return;
+    }
     if (message?.method === 'tools/call' && message.params?.name === ECHO_TOOL_NAME) {
       const value = typeof message.params?.arguments === 'object' && message.params.arguments !== null
         ? (message.params.arguments as { value?: unknown }).value
@@ -374,7 +407,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /pathScope syntax already included in lm-tools:\/\/guide/u,
+    /pathScope, use its parameter description for the compact syntax summary/u,
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(handshakePayload?.discovery?.bridgedTools?.[0] ?? {}, 'description'),
@@ -427,7 +460,16 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal(toolDefinitionsPayload.count, 1);
   assert.equal(toolDefinitionsPayload.missingCount, 1);
   assert.equal(toolDefinitionsPayload.tools?.[0]?.name, ECHO_TOOL_NAME);
-  assert.deepEqual(toolDefinitionsPayload.tools?.[0]?.inputSchema, { type: 'object' });
+  assert.deepEqual(toolDefinitionsPayload.tools?.[0]?.inputSchema, {
+    type: 'object',
+    properties: {
+      value: {
+        type: 'string',
+        description: 'Value to echo.',
+      },
+    },
+    required: ['value'],
+  });
 
   for (const forbiddenName of [
     REQUEST_WORKSPACE_METHOD,

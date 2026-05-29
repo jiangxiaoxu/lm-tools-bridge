@@ -567,6 +567,16 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   registerExposedTools(server);
 
   server.registerResource(
+    'lmToolsDefinitions',
+    'lm-tools://tool-definitions',
+    { description: 'Full bridged workspace tool definitions.' },
+    async () => {
+      logDebugDetail('Resource read: lm-tools://tool-definitions');
+      return resourceJson('lm-tools://tool-definitions', listToolsPayload(getEnabledExposedToolsSnapshot(), 'full'));
+    },
+  );
+
+  server.registerResource(
     'lmToolsNames',
     'lm-tools://tool-names',
     { description: 'Bridged workspace tool names.' },

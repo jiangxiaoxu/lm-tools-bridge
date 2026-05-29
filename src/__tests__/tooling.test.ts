@@ -154,18 +154,48 @@ test('formatToolInfoText omits toolUri and usageHint lines', async () => {
   assert.doesNotMatch(text, /^usageHint:/mu);
 });
 
-test('lm_formatFiles is exposed with required shared pathScope schema', async () => {
+test('pathScope tools expose compact syntax guidance in parameter descriptions', async () => {
   const { getExposedToolsSnapshot } = await loadToolingModule();
-  const tool = getExposedToolsSnapshot().find((entry) => entry.name === 'lm_formatFiles');
+  const tools = getExposedToolsSnapshot();
+  const pathScopeToolNames = [
+    'lm_findTextInFiles',
+    'lm_getDiagnostics',
+    'lm_formatFiles',
+    'lm_qgrepSearchText',
+  ];
 
-  assert.ok(tool);
-  const schema = tool.inputSchema as {
+  for (const toolName of pathScopeToolNames) {
+    const tool = tools.find((entry) => entry.name === toolName);
+    assert.ok(tool, `Expected ${toolName} to be exposed.`);
+    const schema = tool.inputSchema as {
+      required?: unknown;
+      properties?: { pathScope?: Record<string, unknown> };
+    };
+    const pathScope = schema.properties?.pathScope;
+    assert.ok(pathScope, `Expected ${toolName}.pathScope schema.`);
+    assert.equal(Object.prototype.hasOwnProperty.call(pathScope, 'x-lm-tools-bridge-sharedSyntax'), false);
+    assert.match(String(pathScope.description ?? ''), /Applies only to arguments named pathScope/u);
+    assert.match(String(pathScope.description ?? ''), /WorkspaceA\/src\/\*\*/u);
+    assert.match(String(pathScope.description ?? ''), /Full syntax is available in lm-tools:\/\/guide/u);
+  }
+
+  const formatFiles = tools.find((entry) => entry.name === 'lm_formatFiles');
+  const formatFilesSchema = formatFiles?.inputSchema as {
     required?: unknown;
-    properties?: { pathScope?: { description?: string; ['x-lm-tools-bridge-sharedSyntax']?: { uri?: string } } };
-  };
-  assert.deepEqual(schema.required, ['pathScope']);
-  assert.match(schema.properties?.pathScope?.description ?? '', /lm-tools:\/\/guide/u);
-  assert.equal(Object.prototype.hasOwnProperty.call(schema.properties?.pathScope?.['x-lm-tools-bridge-sharedSyntax'] ?? {}, 'uri'), false);
+    properties?: { pathScope?: Record<string, unknown> };
+  } | undefined;
+  assert.deepEqual(formatFilesSchema?.required, ['pathScope']);
+  assert.equal(Object.prototype.hasOwnProperty.call(formatFilesSchema?.properties?.pathScope ?? {}, 'minLength'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(formatFilesSchema?.properties?.pathScope ?? {}, 'pattern'), false);
+
+  const diagnostics = tools.find((entry) => entry.name === 'lm_getDiagnostics');
+  const diagnosticsSchema = diagnostics?.inputSchema as {
+    required?: unknown;
+    properties?: { pathScope?: Record<string, unknown> };
+  } | undefined;
+  assert.equal(Object.prototype.hasOwnProperty.call(diagnosticsSchema ?? {}, 'required'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(diagnosticsSchema?.properties?.pathScope ?? {}, 'minLength'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(diagnosticsSchema?.properties?.pathScope ?? {}, 'pattern'), false);
 });
 
 test('lm_formatFiles is exposed by default but not enabled by default', async () => {

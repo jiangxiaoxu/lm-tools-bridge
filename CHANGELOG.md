@@ -6,6 +6,24 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.172] - 2026-05-29
+
+### English
+
+#### Changed
+- Returned full bridged ToolDefinitions through the stdio manager using the workspace `lm-tools://tool-definitions` resource.
+- Inlined compact `pathScope` syntax guidance into parameter descriptions and kept the full reference in `lm-tools://guide`.
+- Updated custom `lm_` tool schemas to express required and optional parameters through object-level `required` arrays instead of field-level non-empty constraints.
+- Reworked smoke coverage to control the workspace through the stdio MCP manager.
+
+### 中文
+
+#### 变更
+- 通过 workspace `lm-tools://tool-definitions` resource, 让 stdio manager 返回完整 bridged ToolDefinition.
+- 将精简版 `pathScope` 语法说明内联到参数 description, 完整参考继续保留在 `lm-tools://guide`.
+- 更新 custom `lm_` 工具 schema, 使用 object 顶层 `required` 数组表达 required/optional, 不再用字段级非空约束表达必填.
+- 将 smoke 覆盖改为通过 stdio MCP manager 控制 workspace.
+
 ## [1.0.171] - 2026-05-29
 
 ### English

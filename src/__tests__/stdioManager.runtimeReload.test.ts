@@ -24,8 +24,10 @@ const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const ECHO_TOOL_NAME = 'lm_testEcho';
 const RELOAD_BIND_INVALIDATED_PATTERN = /Stdio runtime reloaded; the previous workspace binding was invalidated\..*Next step: call lmToolsBridge_bindWorkspace with a cwd inside the target workspace, wait for success, then retry once\./u;
-const RELOAD_RESOURCE_REBIND_PATTERN = /Stdio runtime reloaded; bridged discovery resources require a new workspace bind\..*Next step: call lmToolsBridge_bindWorkspace with params\.cwd, wait for ok=true, then retry once\./u;
 const FATAL_RELOAD_FAILURE_PATTERN = /MCP stdio runtime reload failed and this stdio manager is no longer available \(broken runtime module\)\. Next step: reactivate the VS Code extension to start a fresh stdio manager, then retry from bind\./u;
+const RUNTIME_UPDATE_BIND_PATTERN = /MCP internal error: stdio runtime update is in progress\. Wait up to 3 seconds, then retry lmToolsBridge_bindWorkspace once\./u;
+const RUNTIME_UPDATE_TOOL_CALL_PATTERN = /MCP internal error: stdio runtime update is in progress\. Wait up to 3 seconds, then retry the bridged tool call once\./u;
+const RUNTIME_UPDATE_RESOURCE_READ_PATTERN = /MCP internal error: stdio runtime update is in progress\. Wait up to 3 seconds, then retry the bridged resource read once\./u;
 
 interface ManagerRegistryEntry {
   protocolVersion: 1;
@@ -133,6 +135,35 @@ async function startFakeWorkspaceServer(args: {
                   value: { type: 'string' },
                 },
               },
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (message?.method === 'resources/read' && message.params?.uri === 'lm-tools://tool-definitions') {
+      respondJson(res, {
+        jsonrpc: '2.0',
+        id,
+        result: {
+          contents: [
+            {
+              uri: 'lm-tools://tool-definitions',
+              mimeType: 'application/json',
+              text: JSON.stringify({
+                tools: [
+                  {
+                    name: ECHO_TOOL_NAME,
+                    description: 'Echo back the provided value.',
+                    inputSchema: {
+                      type: 'object',
+                      properties: {
+                        value: { type: 'string' },
+                      },
+                    },
+                  },
+                ],
+              }),
             },
           ],
         },
@@ -555,7 +586,7 @@ test('stdio manager rejects a bind that races with a generation cutover', async 
 
   await assert.rejects(
     async () => bindPromise,
-    RELOAD_BIND_INVALIDATED_PATTERN,
+    RUNTIME_UPDATE_BIND_PATTERN,
   );
 
   await manager.client.callTool({
@@ -646,7 +677,7 @@ test('stdio manager rejects a bridged tool call that races with a generation cut
 
   await assert.rejects(
     () => toolCallPromise,
-    RELOAD_BIND_INVALIDATED_PATTERN,
+    RUNTIME_UPDATE_TOOL_CALL_PATTERN,
   );
 
   await manager.client.callTool({
@@ -734,7 +765,7 @@ test('stdio manager rejects a bridged resource read that races with a generation
 
   await assert.rejects(
     () => resourceReadPromise,
-    RELOAD_RESOURCE_REBIND_PATTERN,
+    RUNTIME_UPDATE_RESOURCE_READ_PATTERN,
   );
 
   await manager.client.callTool({
@@ -807,27 +838,26 @@ test('stdio manager retries the same generation after a runtime load failure', a
   assert.equal(failedResponse.bindingInvalidated, false);
   await waitForMissingFile(registry.filePath);
 
-  await assert.rejects(
-    () => manager.client.listTools(),
-    FATAL_RELOAD_FAILURE_PATTERN,
-  );
+  const toolsAfterFatalReload = await manager.client.listTools();
+  assert.deepEqual(getToolNames(toolsAfterFatalReload), [
+    DIRECT_TOOL_CALL_NAME,
+    GET_TOOL_DEFINITIONS_METHOD,
+    REQUEST_WORKSPACE_METHOD,
+  ].sort((left, right) => left.localeCompare(right)));
 
-  await assert.rejects(
-    () => manager.client.listResources(),
-    FATAL_RELOAD_FAILURE_PATTERN,
-  );
+  const resourcesAfterFatalReload = await manager.client.listResources();
+  assert.deepEqual(resourcesAfterFatalReload.resources.map((resource) => resource.uri), [
+    GUIDE_RESOURCE_URI,
+    TOOL_NAMES_RESOURCE_URI,
+  ]);
 
-  await assert.rejects(
-    () => manager.client.listResourceTemplates(),
-    FATAL_RELOAD_FAILURE_PATTERN,
-  );
+  const resourceTemplatesAfterFatalReload = await manager.client.listResourceTemplates();
+  assert.deepEqual(resourceTemplatesAfterFatalReload.resourceTemplates, []);
 
-  await assert.rejects(
-    () => manager.client.readResource({
-      uri: GUIDE_RESOURCE_URI,
-    }),
-    FATAL_RELOAD_FAILURE_PATTERN,
-  );
+  const guideAfterFatalReload = await manager.client.readResource({
+    uri: GUIDE_RESOURCE_URI,
+  });
+  assert.match(getResourceText(guideAfterFatalReload), /Workspace bridge guide/u);
 
   await assert.rejects(
     () => manager.client.readResource({
@@ -927,10 +957,11 @@ test('stdio manager lazily applies generation changes and cleans up registry on 
     generation: 2,
   });
 
-  const guideAfterLazyReload = await manager.client.readResource({
+  const guideBeforeLazyReload = await manager.client.readResource({
     uri: GUIDE_RESOURCE_URI,
   });
-  assert.match(getResourceText(guideAfterLazyReload), /Workspace bridge guide lazy-reloaded/u);
+  assert.match(getResourceText(guideBeforeLazyReload), /Workspace bridge guide/u);
+  assert.doesNotMatch(getResourceText(guideBeforeLazyReload), /Workspace bridge guide lazy-reloaded/u);
 
   await assert.rejects(
     () => manager.client.callTool({
@@ -939,7 +970,7 @@ test('stdio manager lazily applies generation changes and cleans up registry on 
         value: 'needs-rebind',
       },
     }),
-    RELOAD_BIND_INVALIDATED_PATTERN,
+    RUNTIME_UPDATE_TOOL_CALL_PATTERN,
   );
 
   await manager.close();

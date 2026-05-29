@@ -210,6 +210,17 @@ function getMcpOfflineMessage(): string {
   );
 }
 
+function getToolDefinitionsUnavailableMessage(reason: string): string {
+  return appendNextStep(
+    `MCP internal error: full ToolDefinitions are unavailable from workspace MCP server (${reason})`,
+    `wait up to 3 seconds, then retry ${REQUEST_WORKSPACE_METHOD} once.`,
+  );
+}
+
+function throwToolDefinitionsUnavailable(reason: string): never {
+  throw new McpError(ErrorCode.InternalError, getToolDefinitionsUnavailableMessage(reason));
+}
+
 function getInvalidRequestWorkspaceParamsMessage(): string {
   return appendNextStep(
     'Invalid params: expected params.cwd (string).',
@@ -961,6 +972,14 @@ async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
     } satisfies WorkspaceToolDefinition;
   });
   const visibleTools = tools.filter((entry): entry is WorkspaceToolDefinition => Boolean(entry));
+  if (visibleTools.length === 0) {
+    return {
+      tools: [],
+      issues,
+      partial: issues.some((issue) => issue.level === 'error'),
+    };
+  }
+
   const fullDefinitionsResponse = await requestTargetJson(target, {
     jsonrpc: '2.0',
     id: `mgr-tool-definitions-${Date.now()}`,
@@ -969,17 +988,30 @@ async function fetchWorkspaceTools(target: ManagerMatch): Promise<{
       uri: TOOL_DEFINITIONS_RESOURCE_URI,
     },
   });
-  const fullDefinitionsByName = new Map<string, WorkspaceToolDefinition>();
-  if (fullDefinitionsResponse.ok) {
-    const fullDefinitionsResult = getRemoteResultObject(fullDefinitionsResponse.data);
-    if (fullDefinitionsResult.result) {
-      const fullDefinitions = parseWorkspaceToolDefinitionsResource(fullDefinitionsResult.result);
-      for (const definition of fullDefinitions ?? []) {
-        fullDefinitionsByName.set(definition.name, definition);
-      }
-    }
+  if (!fullDefinitionsResponse.ok) {
+    throwToolDefinitionsUnavailable(`failed to read ${TOOL_DEFINITIONS_RESOURCE_URI}`);
   }
-  const mergedTools = visibleTools.map((tool) => fullDefinitionsByName.get(tool.name) ?? tool);
+  const fullDefinitionsByName = new Map<string, WorkspaceToolDefinition>();
+  const fullDefinitionsResult = getRemoteResultObject(fullDefinitionsResponse.data);
+  if (!fullDefinitionsResult.result) {
+    throwToolDefinitionsUnavailable(
+      fullDefinitionsResult.errorMessage ?? `invalid ${TOOL_DEFINITIONS_RESOURCE_URI} response`,
+    );
+  }
+  const fullDefinitions = parseWorkspaceToolDefinitionsResource(fullDefinitionsResult.result);
+  if (!fullDefinitions) {
+    throwToolDefinitionsUnavailable(`invalid ${TOOL_DEFINITIONS_RESOURCE_URI} payload`);
+  }
+  for (const definition of fullDefinitions) {
+    fullDefinitionsByName.set(definition.name, definition);
+  }
+  const missingDefinitions = visibleTools
+    .map((tool) => tool.name)
+    .filter((name) => !fullDefinitionsByName.has(name));
+  if (missingDefinitions.length > 0) {
+    throwToolDefinitionsUnavailable(`missing full definitions for ${missingDefinitions.join(', ')}`);
+  }
+  const mergedTools = visibleTools.map((tool) => fullDefinitionsByName.get(tool.name)!);
 
   return {
     tools: mergedTools

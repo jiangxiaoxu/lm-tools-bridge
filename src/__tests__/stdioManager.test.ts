@@ -751,6 +751,32 @@ const server = http.createServer(async (req, res) => {
     }));
     return;
   }
+  if (message.method === 'resources/read' && message.params?.uri === 'lm-tools://tool-definitions') {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        contents: [
+          {
+            uri: 'lm-tools://tool-definitions',
+            mimeType: 'application/json',
+            text: JSON.stringify({
+              tools: [
+                {
+                  name: toolName,
+                  description: 'Echo back the provided value.',
+                  inputSchema: { type: 'object' },
+                },
+              ],
+            }),
+          },
+        ],
+      },
+    }));
+    return;
+  }
   if (message.method === 'tools/call' && message.params?.name === toolName) {
     const value = message.params?.arguments?.value;
     res.statusCode = 200;

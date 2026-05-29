@@ -42,6 +42,8 @@ const TEXT_FALLBACK_PIPE_QUERY = 'BrokenPipe||Literal';
 const TEXT_PATH_SCOPE = 'Game/Source/GameRuntime/**/*.{h,cpp}';
 const TEXT_CONTEXT_CLAMP_BEFORE = 80;
 const TEXT_CONTEXT_CLAMP_AFTER = 8;
+const RUNTIME_UPDATE_BIND_PATTERN = /MCP internal error: stdio runtime update is in progress\. Wait up to 3 seconds, then retry lmToolsBridge_bindWorkspace once\./u;
+const FATAL_RELOAD_FAILURE_PATTERN = /MCP stdio runtime reload failed and this stdio manager is no longer available \(broken runtime module\)\. Next step: reactivate the VS Code extension to start a fresh stdio manager, then retry from bind\./u;
 
 interface ManagerConnection {
   client: Client;
@@ -963,6 +965,8 @@ test('stdio manager applies notified and lazy runtime generations without reconn
       ].sort((left, right) => left.localeCompare(right)),
     );
 
+    const connectedManager = manager;
+    assert.ok(connectedManager, 'Expected manager connection to stay alive.');
     const lazyRuntimeText = notifiedRuntimeText.replace(
       'Workspace bridge guide manager integration',
       'Workspace bridge guide manager integration lazy',
@@ -979,7 +983,17 @@ test('stdio manager applies notified and lazy runtime generations without reconn
     const guideAfterLazyCutover = await withTimeout('reading guide after lazy cutover', manager.client.readResource({
       uri: GUIDE_RESOURCE_URI,
     }), 30_000);
-    assert.match(getResourceText(guideAfterLazyCutover), /Workspace bridge guide manager integration lazy/u);
+    assert.match(getResourceText(guideAfterLazyCutover), /Workspace bridge guide manager integration/u);
+    assert.doesNotMatch(getResourceText(guideAfterLazyCutover), /Workspace bridge guide manager integration lazy/u);
+    await assert.rejects(
+      () => withTimeout('triggering lazy generation reload with bind', connectedManager.client.callTool({
+        name: REQUEST_WORKSPACE_METHOD,
+        arguments: {
+          cwd: workspace.nestedCwd,
+        },
+      }), 180_000),
+      RUNTIME_UPDATE_BIND_PATTERN,
+    );
     await withTimeout('rebinding after lazy cutover before broken-runtime test', manager.client.callTool({
       name: REQUEST_WORKSPACE_METHOD,
       arguments: {
@@ -1005,29 +1019,21 @@ test('stdio manager applies notified and lazy runtime generations without reconn
     assert.equal(failedResponse.generationApplied, 3);
     assert.equal(failedResponse.bindingInvalidated, false);
 
-    const connectedManager = manager;
-    assert.ok(connectedManager, 'Expected manager connection to stay alive.');
     const guideWhileReloadFailed = await withTimeout('reading guide while runtime reload failed', connectedManager.client.readResource({
       uri: GUIDE_RESOURCE_URI,
     }), 30_000);
-    assert.match(getResourceText(guideWhileReloadFailed), /Workspace bridge guide manager integration lazy/u);
+    assert.match(getResourceText(guideWhileReloadFailed), /Workspace bridge guide/u);
+    assert.doesNotMatch(getResourceText(guideWhileReloadFailed), /Workspace bridge guide manager integration lazy/u);
 
-    const recoveredRuntimeText = lazyRuntimeText.replace(
-      'Workspace bridge guide manager integration lazy',
-      'Workspace bridge guide manager integration recovered',
+    await assert.rejects(
+      () => withTimeout('rebinding after fatal runtime reload failure', connectedManager.client.callTool({
+        name: REQUEST_WORKSPACE_METHOD,
+        arguments: {
+          cwd: workspace.nestedCwd,
+        },
+      }), 180_000),
+      FATAL_RELOAD_FAILURE_PATTERN,
     );
-    await fs.promises.writeFile(syncedManager.runtimePath, recoveredRuntimeText, 'utf8');
-
-    await withTimeout('rebinding after runtime recovery', manager.client.callTool({
-      name: REQUEST_WORKSPACE_METHOD,
-      arguments: {
-        cwd: workspace.nestedCwd,
-      },
-    }), 180_000);
-    const guideAfterRecovery = await withTimeout('reading guide after runtime recovery', manager.client.readResource({
-      uri: GUIDE_RESOURCE_URI,
-    }), 30_000);
-    assert.match(getResourceText(guideAfterRecovery), /Workspace bridge guide manager integration recovered/u);
   } catch (error) {
     const diagnostics = [
       manager ? `Manager stderr:\n${manager.getStderr().trim() || '<empty>'}` : '',

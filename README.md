@@ -26,7 +26,7 @@ If `node` is missing, the extension shows a startup warning with `Install with w
 4. The extension will:
    - auto-start the local MCP server
    - sync `stdioManager.js` and `stdioManagerRuntime.js` to `%LOCALAPPDATA%\lm-tools-bridge`
-5. Long-lived MCP manager processes keep using `node "%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js"`. Runtime updates no longer require manually restarting the chat thread. A successful runtime reload invalidates the current workspace bind and requires a fresh `lmToolsBridge_bindWorkspace`. If the runtime reload fails, that stdio manager becomes unavailable and the client must let VS Code create a fresh manager.
+5. Long-lived MCP manager processes keep using `node "%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js"`. Runtime updates no longer require manually restarting the chat thread. During a runtime update, stateful bind and bridged calls may return an MCP internal error; wait up to 3 seconds, then retry once. A successful runtime reload invalidates the current workspace bind and requires a fresh `lmToolsBridge_bindWorkspace`. If the runtime reload fails, that stdio manager becomes unavailable and the client must let VS Code create a fresh manager.
 
 ### MCP Client Example
 Codex example:
@@ -63,7 +63,7 @@ Notes:
 - Handshake `discovery.bridgedTools` returns tool names only. `discovery.toolDefinitionsTool` describes the local `lmToolsBridge_getToolDefinitions` helper plus input/output schemas. Before invoking a bridged tool, first use `lmToolsBridge_getToolDefinitions` to get that exact tool's full ToolDefinition; helper-returned definitions omit VS Code metadata such as `tags`. Do not guess or infer input schemas from tool names. Call `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown, then reuse known ToolDefinitions. It is available only after `lmToolsBridge_bindWorkspace` succeeds and is not callable through `lmToolsBridge_callBridgedTool`.
 - The direct `lmToolsBridge_callBridgedTool` helper is documented in `lm-tools://guide`; the names-only discovery resource is `lm-tools://tool-names`, and it returns an actionable bind/rebind error until the workspace is actively bound.
 - If a tool argument uses `pathScope`, use the compact syntax summary in that parameter's description; the full syntax is in `lm-tools://guide`.
-- When a new stdio manager runtime generation is published, the stdio transport stays connected. A successful runtime reload keeps the manager alive but invalidates the current workspace bind until the client binds again. A failed runtime reload makes that stdio manager unavailable and returns a fatal MCP error until VS Code creates a fresh manager.
+- When a new stdio manager runtime generation is published, the stdio transport stays connected and `lm-tools://guide` remains readable. During the update window, stateful bind, ToolDefinition lookup, bridged tool call, and bridged resource read operations return an MCP internal error with a wait-up-to-3-seconds retry hint. A successful runtime reload keeps the manager alive but invalidates the current workspace bind until the client binds again. A failed runtime reload makes that stdio manager unavailable and returns a fatal MCP error until VS Code creates a fresh manager.
 
 ### Workspace Settings
 - When `lmToolsBridge.useWorkspaceSettings=true`, the extension writes its own config through the current workspace scope.
@@ -96,7 +96,7 @@ LM Tools Bridge 是一个 VS Code 扩展,用于通过 MCP 向外部客户端暴�
 4. 扩展会自动:
    - 启动本地 MCP server
    - 将 `stdioManager.js` 和 `stdioManagerRuntime.js` 同步到 `%LOCALAPPDATA%\lm-tools-bridge`
-5. 长驻的 MCP manager 进程依然通过 `node "%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js"` 启动. runtime 更新现在不再需要手工重启聊天线程. 如果 runtime reload 成功,当前 workspace bind 会失效,因此 MCP 客户端需要重新调用 `lmToolsBridge_bindWorkspace`. 如果 runtime reload 失败,当前 stdio manager 会直接不可用,需要让 VS Code 创建一个新的 manager.
+5. 长驻的 MCP manager 进程依然通过 `node "%LOCALAPPDATA%\\lm-tools-bridge\\stdioManager.js"` 启动. runtime 更新现在不再需要手工重启聊天线程. runtime 更新期间,依赖状态的 bind 和 bridged 调用可能返回 MCP internal error; 最多等待 3 秒后重试一次. 如果 runtime reload 成功,当前 workspace bind 会失效,因此 MCP 客户端需要重新调用 `lmToolsBridge_bindWorkspace`. 如果 runtime reload 失败,当前 stdio manager 会直接不可用,需要让 VS Code 创建一个新的 manager.
 
 ### MCP 客户端示例
 下面是 Codex 配置示例:
@@ -134,7 +134,7 @@ enabled = true
 - 握手里的 `discovery.bridgedTools` 只返回 tool name. `discovery.toolDefinitionsTool` 会包含本地 helper `lmToolsBridge_getToolDefinitions` 的用法说明和 input/output schema. 调用某个 bridged tool 前, 必须先用 `lmToolsBridge_getToolDefinitions` 获取该 exact tool 的完整 ToolDefinition; helper 返回的 definition 会省略 `tags` 等 VS Code metadata. 不得根据 tool name 猜测或推断 input schema. 调用 `lmToolsBridge_getToolDefinitions` 时只传入 ToolDefinition 未知的 tool name, 后续复用已知 ToolDefinition. 它只能在 `lmToolsBridge_bindWorkspace` 成功后调用,且不能通过 `lmToolsBridge_callBridgedTool` 包装调用.
 - `lmToolsBridge_callBridgedTool` 的详细调用和 fallback 规则已经并入 `lm-tools://guide`; names-only discovery resource 是 `lm-tools://tool-names`,它在未绑定或绑定失效时会返回可执行的 bind/rebind 提示.
 - 如果某个工具参数使用了 `pathScope`,先看该参数 description 中的压缩语法说明; 完整语法在 `lm-tools://guide` 中.
-- 当新的 stdio manager runtime generation 发布后,stdio transport 会保持连接. 如果 runtime reload 成功,当前 workspace bind 会失效,需要重新执行 `lmToolsBridge_bindWorkspace`. 如果 runtime reload 失败,当前 stdio manager 会直接不可用,并持续返回 fatal MCP 错误,直到 VS Code 创建新的 manager.
+- 当新的 stdio manager runtime generation 发布后,stdio transport 会保持连接,且 `lm-tools://guide` 仍可读取. 更新窗口内,依赖状态的 bind、ToolDefinition lookup、bridged tool call 和 bridged resource read 会返回 MCP internal error,并提示最多等待 3 秒后重试. 如果 runtime reload 成功,当前 workspace bind 会失效,需要重新执行 `lmToolsBridge_bindWorkspace`. 如果 runtime reload 失败,当前 stdio manager 会直接不可用,并持续返回 fatal MCP 错误,直到 VS Code 创建新的 manager.
 
 ### 工作区设置
 - 当 `lmToolsBridge.useWorkspaceSettings=true` 时,扩展会按当前 workspace scope 写入自己的配置.

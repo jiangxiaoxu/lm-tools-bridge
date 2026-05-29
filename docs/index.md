@@ -25,8 +25,10 @@
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Helper-returned ToolDefinitions omit VS Code metadata such as `tags`.
 - `lm-tools://tool-definitions` is an internal workspace read path for the stdio manager, not a client-facing MCP resource.
+- The stdio manager must not silently fall back from full ToolDefinitions to `tools/list`; missing full definitions are MCP internal errors.
 - qgrep tools are default enabled, text-only, and return absolute-path output.
 - Successful runtime generation changes invalidate the current stdio manager bind without dropping the stdio transport.
+- Runtime-update windows fail stateful bind/bridged calls fast with an MCP internal error and a 3-second retry hint; `lm-tools://guide` remains readable.
 - README updates are needed only for user-facing behavior changes; changelog updates are needed on version bumps.
 
 ## Maintenance Rules

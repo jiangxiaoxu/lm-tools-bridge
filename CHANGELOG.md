@@ -6,6 +6,22 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.175] - 2026-05-29
+
+### English
+
+#### Changed
+- Made stdio runtime update windows fail stateful bind and bridged calls fast with MCP internal errors and a 3-second retry hint.
+- Kept `lm-tools://guide` readable during runtime updates and fatal reload failures.
+- Removed silent fallback from full ToolDefinition reads to `tools/list` entries during stdio bind.
+
+### 中文
+
+#### Changed
+- stdio runtime 更新窗口内, 依赖状态的 bind 和 bridged 调用会快速返回 MCP internal error, 并提示 3 秒后重试.
+- runtime 更新和 fatal reload failure 期间保持 `lm-tools://guide` 可读.
+- 移除 stdio bind 期间从完整 ToolDefinition 读取失败静默回退到 `tools/list` 条目的行为.
+
 ## [1.0.174] - 2026-05-29
 
 ### English

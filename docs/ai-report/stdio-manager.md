@@ -19,6 +19,7 @@
 - Helper-returned ToolDefinitions include `name`, `description`, `inputSchema`, and optional `outputSchema`; they omit VS Code metadata such as `tags`.
 - For arguments named `pathScope`, use the compact syntax summary in the parameter description and the full syntax in `lm-tools://guide`.
 - During bind, the manager reads the workspace-internal `lm-tools://tool-definitions` resource for full ToolDefinitions, but the stdio MCP frontend exposes only `lm-tools://guide` and `lm-tools://tool-names` as resources.
+- If full ToolDefinitions cannot be read, parsed, or matched to visible bridged tools, bind fails with an MCP internal error; the manager must not silently fall back to `tools/list` entries as full definitions.
 - `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target.
 - Tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
 
@@ -26,6 +27,8 @@
 - Successful bind payloads omit redundant top-level `online`, `health`, and `mcpSessionId`.
 - Successful bind payload `target` is workspace identity only: `workspaceFolders` and `workspaceFile`.
 - Successful runtime generation changes invalidate the current workspace bind without dropping the stdio transport.
+- While a runtime generation update is in progress, stateful bind, ToolDefinition lookup, bridged tool call, and bridged resource read operations fail fast with MCP `InternalError` and a wait-up-to-3-seconds retry hint.
+- `lm-tools://guide` stays readable during runtime updates and does not trigger lazy reload; after a successful reload, it naturally reflects the loaded runtime guide.
 - Fatal runtime reload failures make the stdio manager unavailable until VS Code creates a fresh manager.
 - If the bound workspace goes offline after handshake, the stdio manager clears binding and returns offline/rebind errors.
 - Workspace mismatch, unreachable, offline, and invalid direct-call errors include actionable `Next step:` guidance.

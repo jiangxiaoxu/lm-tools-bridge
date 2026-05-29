@@ -138,6 +138,8 @@ class RuntimeController {
 
   private visibilityNotificationTail: Promise<void> = Promise.resolve();
 
+  private runtimeUpdateInProgress = false;
+
   private fatalReloadFailure?: FatalReloadFailureState;
 
   private bindingState: 'never-bound' | 'bound' | 'stale' = 'never-bound';
@@ -193,14 +195,18 @@ class RuntimeController {
 
   public async bindWorkspace(server: Server, cwd: unknown): Promise<WorkspaceHandshakePayload> {
     this.validateBindWorkspaceParams(cwd);
+    const runtimeEpoch = this.runtimeEpoch;
+    const loadedGeneration = this.loadedGeneration;
+    this.throwIfRuntimeUpdateInProgress(REQUEST_WORKSPACE_METHOD);
     await this.ensureCurrent(server);
     this.throwIfFatalReloadFailure();
+    this.throwIfRuntimeChangedDuringOperation(runtimeEpoch, loadedGeneration, REQUEST_WORKSPACE_METHOD);
     const runtime = this.requireRuntimeForBind();
-    const runtimeEpoch = this.runtimeEpoch;
+    const bindRuntimeEpoch = this.runtimeEpoch;
     const payload = await runtime.bindWorkspace(server, cwd);
-    if (this.runtime !== runtime || this.runtimeEpoch !== runtimeEpoch) {
+    if (this.runtime !== runtime || this.runtimeEpoch !== bindRuntimeEpoch) {
       this.throwIfFatalReloadFailure();
-      throw new McpError(ErrorCode.InvalidRequest, getReloadedWorkspaceBindingInvalidatedMessage());
+      throw getRuntimeUpdateInProgressError(REQUEST_WORKSPACE_METHOD);
     }
     this.bindingState = 'bound';
     return payload;
@@ -211,19 +217,23 @@ class RuntimeController {
     name: string,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    const runtimeEpoch = this.runtimeEpoch;
+    const loadedGeneration = this.loadedGeneration;
+    this.throwIfRuntimeUpdateInProgress('the bridged tool call');
     await this.ensureCurrent(server);
     this.throwIfFatalReloadFailure();
+    this.throwIfRuntimeChangedDuringOperation(runtimeEpoch, loadedGeneration, 'the bridged tool call');
     if (this.bindingState === 'stale') {
       throw this.getStaleBridgedRequestError('tool-call');
     }
     const runtime = this.requireRuntimeForBridgedRequest('tool-call');
-    const runtimeEpoch = this.runtimeEpoch;
+    const requestRuntimeEpoch = this.runtimeEpoch;
     try {
       const result = await runtime.callBridgedTool(server, name, args);
-      this.assertStableBridgedRequest(runtime, runtimeEpoch, 'tool-call');
+      this.assertStableBridgedRequest(runtime, requestRuntimeEpoch, 'tool-call');
       return result;
     } catch (error) {
-      this.rethrowIfStaleBridgedRequest(runtime, runtimeEpoch, 'tool-call');
+      this.rethrowIfStaleBridgedRequest(runtime, requestRuntimeEpoch, 'tool-call');
       throw error;
     }
   }
@@ -232,37 +242,45 @@ class RuntimeController {
     server: Server,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    const runtimeEpoch = this.runtimeEpoch;
+    const loadedGeneration = this.loadedGeneration;
+    this.throwIfRuntimeUpdateInProgress(GET_TOOL_DEFINITIONS_METHOD);
     await this.ensureCurrent(server);
     this.throwIfFatalReloadFailure();
+    this.throwIfRuntimeChangedDuringOperation(runtimeEpoch, loadedGeneration, GET_TOOL_DEFINITIONS_METHOD);
     if (this.bindingState === 'stale') {
       throw this.getStaleBridgedRequestError('tool-call');
     }
     const runtime = this.requireRuntimeForBridgedRequest('tool-call');
-    const runtimeEpoch = this.runtimeEpoch;
+    const requestRuntimeEpoch = this.runtimeEpoch;
     try {
       const result = await runtime.getToolDefinitions(server, args);
-      this.assertStableBridgedRequest(runtime, runtimeEpoch, 'tool-call');
+      this.assertStableBridgedRequest(runtime, requestRuntimeEpoch, 'tool-call');
       return result;
     } catch (error) {
-      this.rethrowIfStaleBridgedRequest(runtime, runtimeEpoch, 'tool-call');
+      this.rethrowIfStaleBridgedRequest(runtime, requestRuntimeEpoch, 'tool-call');
       throw error;
     }
   }
 
   public async readBridgedResource(server: Server, uri: string): Promise<Record<string, unknown>> {
+    const runtimeEpoch = this.runtimeEpoch;
+    const loadedGeneration = this.loadedGeneration;
+    this.throwIfRuntimeUpdateInProgress('the bridged resource read');
     await this.ensureCurrent(server);
     this.throwIfFatalReloadFailure();
+    this.throwIfRuntimeChangedDuringOperation(runtimeEpoch, loadedGeneration, 'the bridged resource read');
     if (this.bindingState === 'stale') {
       throw this.getStaleBridgedRequestError('resource-read');
     }
     const runtime = this.requireRuntimeForBridgedRequest('resource-read');
-    const runtimeEpoch = this.runtimeEpoch;
+    const requestRuntimeEpoch = this.runtimeEpoch;
     try {
       const result = await runtime.readBridgedResource(server, uri);
-      this.assertStableBridgedRequest(runtime, runtimeEpoch, 'resource-read');
+      this.assertStableBridgedRequest(runtime, requestRuntimeEpoch, 'resource-read');
       return result;
     } catch (error) {
-      this.rethrowIfStaleBridgedRequest(runtime, runtimeEpoch, 'resource-read');
+      this.rethrowIfStaleBridgedRequest(runtime, requestRuntimeEpoch, 'resource-read');
       throw error;
     }
   }
@@ -435,7 +453,26 @@ class RuntimeController {
   ): void {
     this.throwIfFatalReloadFailure();
     if (this.runtime !== runtime || this.runtimeEpoch !== runtimeEpoch) {
-      throw this.getStaleBridgedRequestError(kind);
+      throw getRuntimeUpdateInProgressError(
+        kind === 'resource-read' ? 'the bridged resource read' : 'the bridged tool call',
+      );
+    }
+  }
+
+  private throwIfRuntimeUpdateInProgress(operation: string): void {
+    if (this.runtimeUpdateInProgress) {
+      throw getRuntimeUpdateInProgressError(operation);
+    }
+  }
+
+  private throwIfRuntimeChangedDuringOperation(
+    runtimeEpoch: number,
+    loadedGeneration: number,
+    operation: string,
+  ): void {
+    this.throwIfRuntimeUpdateInProgress(operation);
+    if (this.runtimeEpoch !== runtimeEpoch || this.loadedGeneration !== loadedGeneration) {
+      throw getRuntimeUpdateInProgressError(operation);
     }
   }
 
@@ -500,7 +537,15 @@ class RuntimeController {
   }
 
   private async enqueueGenerationTransition<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.generationTransitionTail.then(operation, operation);
+    const trackedOperation = async () => {
+      this.runtimeUpdateInProgress = true;
+      try {
+        return await operation();
+      } finally {
+        this.runtimeUpdateInProgress = false;
+      }
+    };
+    const next = this.generationTransitionTail.then(trackedOperation, trackedOperation);
     this.generationTransitionTail = next.then(
       () => undefined,
       () => undefined,
@@ -762,6 +807,13 @@ function appendNextStep(message: string, nextStep: string): string {
 
 function getRebindRetryHint(): string {
   return `call ${REQUEST_WORKSPACE_METHOD} with params.cwd, wait for ok=true, then retry once.`;
+}
+
+function getRuntimeUpdateInProgressError(operation: string): McpError {
+  return new McpError(
+    ErrorCode.InternalError,
+    `MCP internal error: stdio runtime update is in progress. Wait up to 3 seconds, then retry ${operation} once.`,
+  );
 }
 
 function getWorkspaceNotSetMessage(): string {
@@ -1097,7 +1149,6 @@ function createServer(): { server: Server; cleanup: () => void } {
   })();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    await runtimeController.ensureAvailable(server);
     return {
       tools: [
         ...getHelperToolDefinitions(runtimeController.getHelperOverrides()),
@@ -1107,7 +1158,6 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    await runtimeController.ensureAvailable(server);
     const name = request.params.name;
     const rawArgs = request.params.arguments;
     const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
@@ -1150,7 +1200,6 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    await runtimeController.ensureAvailable(server);
     return {
       resources: [
         {
@@ -1170,19 +1219,18 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    await runtimeController.ensureAvailable(server);
     return {
       resourceTemplates: [],
     };
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    await runtimeController.ensureAvailable(server);
     const uri = request.params.uri;
-    const overrides = runtimeController.getHelperOverrides();
     if (uri === GUIDE_RESOURCE_URI) {
+      const overrides = runtimeController.getHelperOverrides();
       return resourceJson(uri, getGuideText(overrides), 'text/plain');
     }
+    await runtimeController.ensureAvailable(server);
     if (uri === TOOL_NAMES_RESOURCE_URI) {
       return await runtimeController.readBridgedResource(server, uri);
     }

@@ -17,7 +17,7 @@
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Do not guess or infer ToolDefinitions or input schemas; definitions returned by the helper are the source of truth.
 - For arguments named `pathScope`, use the compact syntax summary in the parameter description and the full syntax in `lm-tools://guide`.
-- During bind, the manager prefers workspace-published full ToolDefinitions over workspace `tools/list` schemas, which may be wrapper-level open schemas.
+- During bind, the manager reads the workspace-internal `lm-tools://tool-definitions` resource for full ToolDefinitions, but the stdio MCP frontend exposes only `lm-tools://guide` and `lm-tools://tool-names` as resources.
 - `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target.
 - Tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
 

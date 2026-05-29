@@ -2,7 +2,7 @@
 
 ## Session bootstrap
 
-- At the beginning of each conversation, read `face-ai-report.md` first to preload project-specific context before making code decisions.
+- At the beginning of each conversation, read `docs/index.md` first to preload project-specific context before making code decisions.
 
 ## Version bump
 
@@ -32,11 +32,11 @@ npm version patch --no-git-tag-version
 
 ## Documentation maintenance
 
-- After modifying code implementation, update face-ai-report.md to keep behavior, settings, flows, and AI report constraints in sync (task-driven, concise, no inline tool lists, update flows/index/matrix/invariants/failures/seeds when behavior changes).
-- Keep face-ai-report.md concise and deduplicated: prefer merged entries over repeated lists, keep task-routing information compact, and avoid verbose narrative that increases context load.
+- After modifying code implementation, update `docs/index.md` and the relevant `docs/ai-report/*` topic document to keep behavior, settings, flows, and AI report constraints in sync (task-driven, concise, no inline tool lists, update flows/index/matrix/invariants/failures/seeds when behavior changes).
+- Keep `docs/index.md` concise and deduplicated: prefer merged entries over repeated lists, keep task-routing information compact, and avoid verbose narrative that increases context load.
 - Update README.md only when user-facing behavior changes (for example: commands, settings semantics, endpoints, output contract, workflow steps, troubleshooting guidance, or compatibility notes).
 - For internal-only changes (for example refactors, code cleanup, internal module moves, non-user-facing test/tooling updates), README.md update is not required.
-- If a change includes code implementation updates and a version bump: always update face-ai-report.md; update README.md only if user-facing behavior changed; update CHANGELOG.md for version history.
+- If a change includes code implementation updates and a version bump: always update `docs/index.md` and the relevant `docs/ai-report/*` topic document; update README.md only if user-facing behavior changed; update CHANGELOG.md for version history.
 
 ## Language requirements
 

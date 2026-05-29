@@ -23,8 +23,9 @@
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown; do not guess definitions or input schemas.
 - Reuse known ToolDefinitions; do not request the same known tool again.
-- Helper-returned ToolDefinitions omit VS Code metadata such as `tags`.
+- Helper-returned ToolDefinitions include MCP display/UI metadata such as `title`, `_meta`, `annotations`, and `outputSchema`; they omit VS Code metadata such as `tags`.
 - `lm-tools://tool-definitions` is an internal workspace read path for the stdio manager, not a client-facing MCP resource.
+- The shared Apps UI resource is `ui://lm-tools-bridge/tool-result-card.html`; tool results still include text fallback content.
 - The stdio manager must not silently fall back from full ToolDefinitions to `tools/list`; missing full definitions are MCP internal errors.
 - qgrep tools are default enabled, text-only, and return absolute-path output.
 - Successful runtime generation changes invalidate the current stdio manager bind without dropping the stdio transport.

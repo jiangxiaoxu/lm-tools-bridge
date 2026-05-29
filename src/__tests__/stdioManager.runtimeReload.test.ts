@@ -22,6 +22,7 @@ const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
 const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge_getToolDefinitions';
 const GUIDE_RESOURCE_URI = 'lm-tools://guide';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
+const TOOL_RESULT_CARD_RESOURCE_URI = 'ui://lm-tools-bridge/tool-result-card.html';
 const ECHO_TOOL_NAME = 'lm_testEcho';
 const RELOAD_BIND_INVALIDATED_PATTERN = /Stdio runtime reloaded; the previous workspace binding was invalidated\..*Next step: call lmToolsBridge_bindWorkspace with a cwd inside the target workspace, wait for success, then retry once\./u;
 const FATAL_RELOAD_FAILURE_PATTERN = /MCP stdio runtime reload failed and this stdio manager is no longer available \(broken runtime module\)\. Next step: reactivate the VS Code extension to start a fresh stdio manager, then retry from bind\./u;
@@ -849,6 +850,7 @@ test('stdio manager retries the same generation after a runtime load failure', a
   assert.deepEqual(resourcesAfterFatalReload.resources.map((resource) => resource.uri), [
     GUIDE_RESOURCE_URI,
     TOOL_NAMES_RESOURCE_URI,
+    TOOL_RESULT_CARD_RESOURCE_URI,
   ]);
 
   const resourceTemplatesAfterFatalReload = await manager.client.listResourceTemplates();

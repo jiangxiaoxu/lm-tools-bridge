@@ -575,6 +575,7 @@ function buildHandshakeGuidance(discovery: HandshakeDiscoveryPayload): Handshake
 function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
   return {
     name: REQUEST_WORKSPACE_METHOD,
+    title: 'Bind Workspace',
     description: getRequestWorkspaceToolDescription(),
     inputSchema: {
       type: 'object',
@@ -589,6 +590,7 @@ function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
 function getDirectToolCallDefinition(): WorkspaceToolDefinition {
   return {
     name: DIRECT_TOOL_CALL_NAME,
+    title: 'Call Bridged Tool',
     description: getDirectToolCallDescription(),
     inputSchema: {
       type: 'object',

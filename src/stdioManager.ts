@@ -28,6 +28,13 @@ import {
   LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME,
   type LmGetToolDefinitionsPayload,
 } from './toolDefinitionsContract';
+import {
+  getToolResultCardHtml,
+  getToolResultCardResourceDefinition,
+  getToolResultCardResourceMeta,
+  TOOL_RESULT_CARD_MIME_TYPE,
+  TOOL_RESULT_CARD_RESOURCE_URI,
+} from './mcpAppsMetadata';
 
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
@@ -695,7 +702,12 @@ function readMetadataStateSync(metadataPath: string): {
   }
 }
 
-function resourceJson(uri: string, payload: unknown, mimeType = 'application/json') {
+function resourceJson(
+  uri: string,
+  payload: unknown,
+  mimeType = 'application/json',
+  meta?: Record<string, unknown>,
+) {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
   return {
     contents: [
@@ -703,6 +715,7 @@ function resourceJson(uri: string, payload: unknown, mimeType = 'application/jso
         uri,
         mimeType,
         text,
+        ...(meta !== undefined ? { _meta: meta } : {}),
       },
     ],
   };
@@ -719,6 +732,7 @@ function getDirectToolCallDescription(): string {
 function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
   return {
     name: REQUEST_WORKSPACE_METHOD,
+    title: 'Bind Workspace',
     description: getRequestWorkspaceToolDescription(),
     inputSchema: {
       type: 'object',
@@ -736,6 +750,7 @@ function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
 function getDirectToolCallDefinition(): WorkspaceToolDefinition {
   return {
     name: DIRECT_TOOL_CALL_NAME,
+    title: 'Call Bridged Tool',
     description: getDirectToolCallDescription(),
     inputSchema: {
       type: 'object',
@@ -1200,6 +1215,7 @@ function createServer(): { server: Server; cleanup: () => void } {
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    const toolResultCardResource = getToolResultCardResourceDefinition();
     return {
       resources: [
         {
@@ -1214,6 +1230,7 @@ function createServer(): { server: Server; cleanup: () => void } {
           description: 'Bridged workspace tool names.',
           mimeType: 'application/json',
         },
+        toolResultCardResource,
       ],
     };
   });
@@ -1229,6 +1246,14 @@ function createServer(): { server: Server; cleanup: () => void } {
     if (uri === GUIDE_RESOURCE_URI) {
       const overrides = runtimeController.getHelperOverrides();
       return resourceJson(uri, getGuideText(overrides), 'text/plain');
+    }
+    if (uri === TOOL_RESULT_CARD_RESOURCE_URI) {
+      return resourceJson(
+        uri,
+        getToolResultCardHtml(),
+        TOOL_RESULT_CARD_MIME_TYPE,
+        getToolResultCardResourceMeta(),
+      );
     }
     await runtimeController.ensureAvailable(server);
     if (uri === TOOL_NAMES_RESOURCE_URI) {

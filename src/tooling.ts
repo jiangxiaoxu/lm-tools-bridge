@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ErrorCode, McpError, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { TextDecoder } from 'node:util';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -65,6 +65,11 @@ import {
   type NormalizedVsCodeToolCollision,
   type NormalizedVsCodeToolInfo,
 } from './toolNameNormalization';
+import {
+  buildReadableToolTitle,
+  buildToolResultBridgeMeta,
+  withToolDescriptorAppsMetadata,
+} from './mcpAppsMetadata';
 export {
   buildToolDefinitionsPayload,
   formatToolDefinitionsSummary,
@@ -730,10 +735,13 @@ export type DebugLevel = 'off' | 'simple' | 'detail';
 
 interface ToolInformationBase {
   name: string;
+  title?: string;
   description: string;
   tags: string[];
   inputSchema: unknown;
   outputSchema?: unknown;
+  annotations?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
 }
 
 interface CustomToolInformation extends ToolInformationBase {
@@ -1980,6 +1988,10 @@ export function formatToolInfoText(payload: Record<string, unknown>): string {
   if (name) {
     lines.push(`name: ${name}`);
   }
+  const title = typeof payload.title === 'string' ? payload.title : '';
+  if (title) {
+    lines.push(`title: ${title}`);
+  }
   const description = typeof payload.description === 'string' ? payload.description : '';
   if (description) {
     lines.push(`description: ${description}`);
@@ -2046,17 +2058,29 @@ export function toolInfoPayload(tool: ExposedTool, detail: ToolDetail) {
   }
   const inputSchema = buildToolInputSchema(tool);
   const outputSchema = tool.outputSchema;
+  const title = getToolTitle(tool);
+  const annotations = isPlainObject(tool.annotations) ? tool.annotations : undefined;
 
   const payload: Record<string, unknown> = {
     name: tool.name,
+    title,
     description: tool.description,
     tags: tool.tags,
     inputSchema,
+    _meta: withToolDescriptorAppsMetadata(isPlainObject(tool._meta) ? tool._meta : undefined),
   };
   if (outputSchema !== undefined) {
     payload.outputSchema = outputSchema;
   }
+  if (annotations !== undefined) {
+    payload.annotations = annotations;
+  }
   return payload;
+}
+
+function getToolTitle(tool: Pick<ExposedTool, 'name' | 'title'>): string {
+  const title = typeof tool.title === 'string' ? tool.title.trim() : '';
+  return title.length > 0 ? title : buildReadableToolTitle(tool.name);
 }
 
 export function buildToolInputSchema(tool: ExposedTool): unknown {
@@ -2195,6 +2219,13 @@ function resolveStructuredToolResultPayload(
     return structuredFromTool as Record<string, unknown>;
   }
   return undefined;
+}
+
+function resolveToolResultMeta(result: vscode.LanguageModelToolResult): Record<string, unknown> | undefined {
+  const meta = (
+    result as vscode.LanguageModelToolResult & { _meta?: unknown }
+  )._meta;
+  return isPlainObject(meta) ? meta : undefined;
 }
 
 function isLanguageModelToolResult(value: unknown): value is vscode.LanguageModelToolResult {
@@ -4220,21 +4251,45 @@ export function registerExposedTools(server: import('@modelcontextprotocol/sdk/s
     server.registerTool<z.ZodTypeAny, z.ZodTypeAny>(
       tool.name,
       {
+        title: getToolTitle(tool),
         description: tool.description ?? '',
         inputSchema: toolInputSchema,
+        ...(isPlainObject(tool.annotations) ? { annotations: tool.annotations as ToolAnnotations } : {}),
+        _meta: withToolDescriptorAppsMetadata(isPlainObject(tool._meta) ? tool._meta : undefined),
       },
       async (args: Record<string, unknown>) => invokeExposedTool(tool.name, args),
     );
   }
 }
 
-function toolErrorResult(message: string) {
-  return buildToolResult({ error: message }, true, message);
+interface ToolResultEnvelopeOptions {
+  toolName?: string;
+  toolTitle?: string;
+  meta?: Record<string, unknown>;
 }
 
-function toolErrorResultPayload(payload: unknown) {
+function buildToolResultMeta(
+  isError: boolean,
+  options?: ToolResultEnvelopeOptions,
+): Record<string, unknown> | undefined {
+  const meta = isPlainObject(options?.meta) ? { ...options.meta } : {};
+  if (options?.toolName) {
+    meta.lmToolsBridge = buildToolResultBridgeMeta(
+      options.toolName,
+      options.toolTitle ?? buildReadableToolTitle(options.toolName),
+      isError,
+    );
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
+function toolErrorResult(message: string, options?: ToolResultEnvelopeOptions) {
+  return buildToolResult({ error: message }, true, message, undefined, options);
+}
+
+function toolErrorResultPayload(payload: unknown, options?: ToolResultEnvelopeOptions) {
   const textOverride = isPlainObject(payload) ? formatToolErrorText(payload) : undefined;
-  return buildToolResult(payload, true, textOverride);
+  return buildToolResult(payload, true, textOverride, undefined, options);
 }
 
 function buildToolResult(
@@ -4242,9 +4297,11 @@ function buildToolResult(
   isError: boolean,
   textOverride?: string,
   structuredOverride?: Record<string, unknown>,
+  options?: ToolResultEnvelopeOptions,
 ) {
   const text = textOverride ?? payloadToText(payload);
   const structuredContent = structuredOverride ?? (isPlainObject(payload) ? payload : { text });
+  const meta = buildToolResultMeta(isError, options);
 
   return {
     content: [
@@ -4255,6 +4312,7 @@ function buildToolResult(
     ],
     structuredContent,
     ...(isError ? { isError: true } : {}),
+    ...(meta !== undefined ? { _meta: meta } : {}),
   };
 }
 
@@ -4263,7 +4321,9 @@ function buildPassthroughToolResult(
   hasTextPart: boolean,
   structuredContent?: Record<string, unknown>,
   isError = false,
+  options?: ToolResultEnvelopeOptions,
 ) {
+  const meta = buildToolResultMeta(isError, options);
   return {
     content: hasTextPart
       ? [
@@ -4275,6 +4335,7 @@ function buildPassthroughToolResult(
       : [],
     ...(structuredContent !== undefined ? { structuredContent } : {}),
     ...(isError ? { isError: true } : {}),
+    ...(meta !== undefined ? { _meta: meta } : {}),
   };
 }
 
@@ -4314,6 +4375,10 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     if (!tool) {
       throw new McpError(ErrorCode.MethodNotFound, `Tool not found or disabled: ${toolName}`);
     }
+    const toolResultOptions = {
+      toolName: tool.name,
+      toolTitle: getToolTitle(tool),
+    };
     const input = args ?? {};
     if (!isPlainObject(input)) {
       if (isQgrepQueryToolName(tool.name)) {
@@ -4326,7 +4391,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
         error: 'Tool input must be an object.',
         name: tool.name,
         inputSchema: tool.inputSchema ?? null,
-      });
+      }, toolResultOptions);
     }
     const normalizedInput = applyInputDefaultsToToolInput(input, tool.inputSchema, tool.name);
     debugInvokeInput = normalizedInput;
@@ -4344,6 +4409,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       }
       const structuredRequired = requiresStructuredCustomToolResult(tool.name);
       structuredOutput = resolveStructuredToolResultPayload(result, serialized);
+      const resultMeta = resolveToolResultMeta(result);
       if (structuredRequired && !structuredOutput) {
         throw new Error(`Custom tool '${tool.name}' must include structuredContent as a JSON object.`);
       }
@@ -4351,12 +4417,18 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       const passthroughStructuredOutput = structuredRequired ? structuredOutput : undefined;
       debugOutputText = outputText;
       debugStructuredOutput = passthroughStructuredOutput;
-      return buildPassthroughToolResult(outputText, true, passthroughStructuredOutput);
+      return buildPassthroughToolResult(
+        outputText,
+        true,
+        passthroughStructuredOutput,
+        false,
+        { ...toolResultOptions, meta: resultMeta },
+      );
     }
 
     const lm = getLanguageModelNamespace();
     if (!lm) {
-      return toolErrorResult('vscode.lm is not available in this VS Code version.');
+      return toolErrorResult('vscode.lm is not available in this VS Code version.', toolResultOptions);
     }
     const sourceToolName = isVsCodeTool(tool) ? tool.sourceName : tool.name;
     const result = await lm.invokeTool(sourceToolName, {
@@ -4368,6 +4440,7 @@ async function invokeExposedTool(toolName: string, args: unknown) {
     let hasOutputTextPart = textPayload.hasTextPart;
     outputText = hasOutputTextPart ? textPayload.text : undefined;
     structuredOutput = resolveStructuredToolResultPayload(result, serialized);
+    const resultMeta = resolveToolResultMeta(result);
     if (!hasOutputTextPart) {
       const serializedText = serializedToolResultToText(serialized);
       if (serializedText.length > 0) {
@@ -4387,11 +4460,17 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       const unavailablePayload = buildCopilotSearchCodebaseUnavailablePayload();
       debugOutputText = formatToolErrorText(unavailablePayload);
       debugStructuredOutput = unavailablePayload;
-      return toolErrorResultPayload(unavailablePayload);
+      return toolErrorResultPayload(unavailablePayload, toolResultOptions);
     }
     debugOutputText = outputText;
     debugStructuredOutput = structuredOutput;
-    return buildPassthroughToolResult(outputText, hasOutputTextPart, structuredOutput);
+    return buildPassthroughToolResult(
+      outputText,
+      hasOutputTextPart,
+      structuredOutput,
+      false,
+      { ...toolResultOptions, meta: resultMeta },
+    );
   } catch (error) {
     if (error instanceof McpError) {
       throw error;
@@ -4402,6 +4481,9 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       error: message,
       name: toolName,
       inputSchema: getEnabledExposedToolsSnapshot().find((tool) => tool.name === toolName)?.inputSchema ?? null,
+    }, {
+      toolName,
+      toolTitle: buildReadableToolTitle(toolName),
     });
   } finally {
     const durationMs = Date.now() - requestStartTime;

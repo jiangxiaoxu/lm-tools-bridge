@@ -16,12 +16,14 @@
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown.
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Do not guess or infer ToolDefinitions or input schemas; definitions returned by the helper are the source of truth.
-- Helper-returned ToolDefinitions include `name`, `description`, `inputSchema`, and optional `outputSchema`; they omit VS Code metadata such as `tags`.
+- Helper-returned ToolDefinitions include `name`, `title`, `description`, `inputSchema`, optional `outputSchema`, and MCP Apps metadata such as `_meta`/`annotations`; they omit VS Code metadata such as `tags`.
 - For arguments named `pathScope`, use the compact syntax summary in the parameter description and the full syntax in `lm-tools://guide`.
-- During bind, the manager reads the workspace-internal `lm-tools://tool-definitions` resource for full ToolDefinitions, but the stdio MCP frontend exposes only `lm-tools://guide` and `lm-tools://tool-names` as resources.
+- During bind, the manager reads the workspace-internal `lm-tools://tool-definitions` resource for full ToolDefinitions. The stdio MCP frontend exposes `lm-tools://guide`, `lm-tools://tool-names`, and the shared Apps UI resource `ui://lm-tools-bridge/tool-result-card.html`.
 - If full ToolDefinitions cannot be read, parsed, or matched to visible bridged tools, bind fails with an MCP internal error; the manager must not silently fall back to `tools/list` entries as full definitions.
 - `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target.
 - Tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
+- Bridged tool descriptors include `Tool.title`, `_meta.ui.resourceUri`, `_meta["ui/resourceUri"]`, `_meta["openai/outputTemplate"]`, and short `openai/toolInvocation` status strings so Apps-aware clients can identify the result card template.
+- Tool results keep natural-language `content` fallback, preserve `structuredContent`, and may include result `_meta` for component-only hydration data.
 
 ## Runtime Reload And Offline Recovery
 - Successful bind payloads omit redundant top-level `online`, `health`, and `mcpSessionId`.

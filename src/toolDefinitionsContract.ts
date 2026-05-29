@@ -43,6 +43,10 @@ export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
         type: 'object',
         properties: {
           name: { type: 'string' },
+          title: {
+            type: 'string',
+            description: 'Human-readable display name for the target tool.',
+          },
           description: { type: 'string' },
           inputSchema: {
             type: 'object',
@@ -52,8 +56,16 @@ export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
             type: 'object',
             description: 'JSON Schema object for the target tool structured output when available.',
           },
+          annotations: {
+            type: 'object',
+            description: 'MCP tool annotations when available.',
+          },
+          _meta: {
+            type: 'object',
+            description: 'MCP tool metadata, including Apps UI resource metadata when available.',
+          },
         },
-        required: ['name', 'description', 'inputSchema'],
+        required: ['name', 'title', 'description', 'inputSchema'],
       },
     },
     missing: {
@@ -77,6 +89,7 @@ export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 export interface ToolDefinitionsLookupDefinition {
   name: string;
+  title: string;
   description: string;
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
@@ -84,9 +97,12 @@ export interface ToolDefinitionsLookupDefinition {
 
 export interface LmToolDefinitionSource {
   name: string;
+  title?: unknown;
   description?: unknown;
   inputSchema?: unknown;
   outputSchema?: unknown;
+  annotations?: unknown;
+  _meta?: unknown;
 }
 
 export interface LmGetToolDefinitionsPayload {
@@ -100,6 +116,7 @@ export interface LmGetToolDefinitionsPayload {
 export function getToolDefinitionsLookupDefinition(): ToolDefinitionsLookupDefinition {
   return {
     name: LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME,
+    title: 'Get Tool Definitions',
     description: LM_GET_TOOL_DEFINITIONS_DESCRIPTION,
     inputSchema: LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA,
     outputSchema: LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA,
@@ -133,11 +150,18 @@ export function parseRequiredToolDefinitionNames(input: Record<string, unknown>)
 export function buildToolDefinitionPayload(tool: LmToolDefinitionSource): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     name: tool.name,
+    title: typeof tool.title === 'string' && tool.title.trim().length > 0 ? tool.title : tool.name,
     description: typeof tool.description === 'string' ? tool.description : '',
     inputSchema: tool.inputSchema ?? null,
   };
   if (tool.outputSchema !== undefined) {
     payload.outputSchema = tool.outputSchema;
+  }
+  if (tool.annotations !== undefined) {
+    payload.annotations = tool.annotations;
+  }
+  if (tool._meta !== undefined) {
+    payload._meta = tool._meta;
   }
   return payload;
 }

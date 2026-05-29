@@ -19,6 +19,7 @@ const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
 const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD = 'lm_getToolDefinitions';
 const ECHO_TOOL_NAME = 'lm_testEcho';
+const TOOL_RESULT_CARD_RESOURCE_URI = 'ui://lm-tools-bridge/tool-result-card.html';
 
 async function makeTempDir(prefix: string): Promise<string> {
   return fs.promises.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -92,9 +93,17 @@ async function startFakeWorkspaceServer(args: {
           tools: [
             {
               name: ECHO_TOOL_NAME,
+              title: 'Test Echo',
               description: 'Echo back the provided value.',
               inputSchema: {
                 type: 'object',
+              },
+              _meta: {
+                ui: { resourceUri: TOOL_RESULT_CARD_RESOURCE_URI },
+                'ui/resourceUri': TOOL_RESULT_CARD_RESOURCE_URI,
+                'openai/outputTemplate': TOOL_RESULT_CARD_RESOURCE_URI,
+                'openai/toolInvocation/invoking': 'Running tool...',
+                'openai/toolInvocation/invoked': 'Tool result ready',
               },
             },
             { name: REQUEST_WORKSPACE_METHOD, description: 'Local helper should be filtered.' },
@@ -122,6 +131,7 @@ async function startFakeWorkspaceServer(args: {
                 tools: [
                   {
                     name: ECHO_TOOL_NAME,
+                    title: 'Test Echo',
                     description: 'Echo back the provided value.',
                     inputSchema: {
                       type: 'object',
@@ -132,6 +142,13 @@ async function startFakeWorkspaceServer(args: {
                         },
                       },
                       required: ['value'],
+                    },
+                    _meta: {
+                      ui: { resourceUri: TOOL_RESULT_CARD_RESOURCE_URI },
+                      'ui/resourceUri': TOOL_RESULT_CARD_RESOURCE_URI,
+                      'openai/outputTemplate': TOOL_RESULT_CARD_RESOURCE_URI,
+                      'openai/toolInvocation/invoking': 'Running tool...',
+                      'openai/toolInvocation/invoked': 'Tool result ready',
                     },
                   },
                 ],
@@ -169,6 +186,9 @@ async function startFakeWorkspaceServer(args: {
           ],
           structuredContent: {
             value,
+          },
+          _meta: {
+            source: 'fake-workspace',
           },
         },
       });
@@ -349,6 +369,20 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const resources = await manager.client.listResources();
   const toolNamesResourceDefinition = resources.resources.find((entry) => entry.uri === 'lm-tools://tool-names');
   assert.equal(toolNamesResourceDefinition?.description, 'Bridged workspace tool names.');
+  const cardResourceDefinition = resources.resources.find((entry) => entry.uri === TOOL_RESULT_CARD_RESOURCE_URI);
+  assert.equal(cardResourceDefinition?.name, 'Tool result card');
+  assert.equal(cardResourceDefinition?.mimeType, 'text/html+skybridge');
+
+  const cardResource = await manager.client.readResource({
+    uri: TOOL_RESULT_CARD_RESOURCE_URI,
+  });
+  const cardContent = cardResource.contents[0] as { mimeType?: unknown; text?: unknown; _meta?: unknown };
+  const cardMeta = cardContent._meta as { ui?: { prefersBorder?: unknown; csp?: unknown }; [key: string]: unknown };
+  assert.equal(cardContent.mimeType, 'text/html+skybridge');
+  assert.match(String(cardContent.text ?? ''), /window\.openai/u);
+  assert.equal(cardMeta.ui?.prefersBorder, true);
+  assert.deepEqual(cardMeta.ui?.csp, { connectDomains: [], resourceDomains: [] });
+  assert.equal(cardMeta['openai/widgetPrefersBorder'], true);
 
   await assert.rejects(
     () => manager.client.callTool({
@@ -441,6 +475,15 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     [ECHO_TOOL_NAME, REQUEST_WORKSPACE_METHOD, DIRECT_TOOL_CALL_NAME, GET_TOOL_DEFINITIONS_METHOD]
       .sort((left, right) => left.localeCompare(right)),
   );
+  const echoTool = afterTools.tools.find((tool) => tool.name === ECHO_TOOL_NAME) as {
+    title?: unknown;
+    _meta?: { ui?: { resourceUri?: unknown }; [key: string]: unknown };
+  } | undefined;
+  assert.equal(echoTool?.title, 'Test Echo');
+  assert.equal(echoTool?._meta?.ui?.resourceUri, TOOL_RESULT_CARD_RESOURCE_URI);
+  assert.equal(echoTool?._meta?.['ui/resourceUri'], TOOL_RESULT_CARD_RESOURCE_URI);
+  assert.equal(echoTool?._meta?.['openai/outputTemplate'], TOOL_RESULT_CARD_RESOURCE_URI);
+  assert.equal(echoTool?._meta?.['openai/toolInvocation/invoking'], 'Running tool...');
 
   const toolDefinitions = await manager.client.callTool({
     name: GET_TOOL_DEFINITIONS_METHOD,
@@ -450,7 +493,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   });
   const toolDefinitionsPayload = toolDefinitions.structuredContent as {
     requested?: unknown;
-    tools?: Array<{ name?: unknown; inputSchema?: unknown }>;
+    tools?: Array<{ name?: unknown; title?: unknown; inputSchema?: unknown; _meta?: { ui?: { resourceUri?: unknown } } }>;
     missing?: unknown;
     count?: unknown;
     missingCount?: unknown;
@@ -460,6 +503,8 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal(toolDefinitionsPayload.count, 1);
   assert.equal(toolDefinitionsPayload.missingCount, 1);
   assert.equal(toolDefinitionsPayload.tools?.[0]?.name, ECHO_TOOL_NAME);
+  assert.equal(toolDefinitionsPayload.tools?.[0]?.title, 'Test Echo');
+  assert.equal(toolDefinitionsPayload.tools?.[0]?._meta?.ui?.resourceUri, TOOL_RESULT_CARD_RESOURCE_URI);
   assert.deepEqual(toolDefinitionsPayload.tools?.[0]?.inputSchema, {
     type: 'object',
     properties: {
@@ -509,6 +554,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     },
   });
   assert.equal((directCall.structuredContent as { value?: string }).value, 'hello');
+  assert.deepEqual(directCall._meta, { source: 'fake-workspace' });
 
   const bridgeCall = await manager.client.callTool({
     name: DIRECT_TOOL_CALL_NAME,

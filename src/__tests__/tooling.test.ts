@@ -127,13 +127,21 @@ async function loadToolingModule(): Promise<ToolingModule> {
   return toolingModulePromise;
 }
 
-test('toolInfoPayload omits helper metadata from full tool definitions', async () => {
+test('toolInfoPayload includes Apps metadata and omits helper-only fields from full tool definitions', async () => {
   const { toolInfoPayload } = await loadToolingModule();
   const payload = toolInfoPayload(TOOL, 'full') as Record<string, unknown>;
+  const meta = payload._meta as Record<string, unknown>;
+  const ui = meta.ui as Record<string, unknown>;
 
   assert.equal(Object.prototype.hasOwnProperty.call(payload, 'toolUri'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(payload, 'usageHint'), false);
-  assert.deepEqual(Object.keys(payload).sort(), ['description', 'inputSchema', 'name', 'tags']);
+  assert.equal(payload.title, 'Qgrep Search Text');
+  assert.equal(ui.resourceUri, 'ui://lm-tools-bridge/tool-result-card.html');
+  assert.equal(meta['ui/resourceUri'], 'ui://lm-tools-bridge/tool-result-card.html');
+  assert.equal(meta['openai/outputTemplate'], 'ui://lm-tools-bridge/tool-result-card.html');
+  assert.equal(meta['openai/toolInvocation/invoking'], 'Running tool...');
+  assert.equal(meta['openai/toolInvocation/invoked'], 'Tool result ready');
+  assert.deepEqual(Object.keys(payload).sort(), ['_meta', 'description', 'inputSchema', 'name', 'tags', 'title']);
 });
 
 test('formatToolInfoText omits toolUri and usageHint lines', async () => {
@@ -148,6 +156,7 @@ test('formatToolInfoText omits toolUri and usageHint lines', async () => {
   });
 
   assert.match(text, /^name: lm_qgrepSearchText/mu);
+  assert.match(text, /^title: Qgrep Search Text/mu);
   assert.match(text, /^description: Search indexed workspace text using qgrep\./mu);
   assert.match(text, /^inputSchema:/mu);
   assert.doesNotMatch(text, /^toolUri:/mu);
@@ -245,15 +254,16 @@ test('local tool definition lookup contract uses bridge helper name and schemas'
     };
   }).tools?.items;
   assert.equal(Object.prototype.hasOwnProperty.call(toolsSchema?.properties ?? {}, 'tags'), false);
-  assert.deepEqual(toolsSchema?.required, ['name', 'description', 'inputSchema']);
+  assert.deepEqual(toolsSchema?.required, ['name', 'title', 'description', 'inputSchema']);
 });
 
-test('tool definitions payload includes outputSchema when a tool defines it', async () => {
+test('tool definitions payload includes title and outputSchema when a tool defines it', async () => {
   const { buildToolDefinitionsPayload } = await loadToolingModule();
   const payload = buildToolDefinitionsPayload([TOOL_WITH_OUTPUT], ['lm_toolWithOutput']);
-  const definition = payload.tools[0] as { outputSchema?: unknown };
+  const definition = payload.tools[0] as { title?: unknown; outputSchema?: unknown };
 
   assert.equal(payload.count, 1);
+  assert.equal(definition.title, 'lm_toolWithOutput');
   assert.ok(definition.outputSchema);
 });
 

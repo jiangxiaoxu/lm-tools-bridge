@@ -26,6 +26,12 @@ import {
   showEnabledToolsDump,
 } from './tooling';
 import {
+  getToolResultCardHtml,
+  getToolResultCardResourceMeta,
+  TOOL_RESULT_CARD_MIME_TYPE,
+  TOOL_RESULT_CARD_RESOURCE_URI,
+} from './mcpAppsMetadata';
+import {
   activateQgrepService,
   getQgrepStatusSummary,
   runQgrepInitAllWorkspacesCommand,
@@ -586,6 +592,25 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
     },
   );
 
+  server.registerResource(
+    'lmToolsResultCard',
+    TOOL_RESULT_CARD_RESOURCE_URI,
+    {
+      title: 'Tool Result Card',
+      description: 'Renders lm-tools-bridge tool results.',
+      mimeType: TOOL_RESULT_CARD_MIME_TYPE,
+    },
+    async () => {
+      logDebugDetail(`Resource read: ${TOOL_RESULT_CARD_RESOURCE_URI}`);
+      return resourceJson(
+        TOOL_RESULT_CARD_RESOURCE_URI,
+        getToolResultCardHtml(),
+        TOOL_RESULT_CARD_MIME_TYPE,
+        getToolResultCardResourceMeta(),
+      );
+    },
+  );
+
   return server;
 }
 
@@ -668,7 +693,12 @@ function respondJson(res: http.ServerResponse, status: number, payload: Record<s
   res.end(JSON.stringify(payload));
 }
 
-function resourceJson(uri: string, payload: unknown, mimeType = 'application/json') {
+function resourceJson(
+  uri: string,
+  payload: unknown,
+  mimeType = 'application/json',
+  meta?: Record<string, unknown>,
+) {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
   return {
     contents: [
@@ -676,6 +706,7 @@ function resourceJson(uri: string, payload: unknown, mimeType = 'application/jso
         uri,
         mimeType,
         text,
+        ...(meta !== undefined ? { _meta: meta } : {}),
       },
     ],
   };

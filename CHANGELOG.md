@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.171] - 2026-05-29
+
+### English
+
+#### Changed
+- Corrected ToolDefinition lookup guidance so agents call `lmToolsBridge_getToolDefinitions` only with unknown tool names and reuse known ToolDefinitions.
+- Clarified `lm-tools://guide`, helper descriptions, README, AI preload notes, and tests around unknown-only definition lookup.
+
+### 中文
+
+#### 变更
+- 修正 ToolDefinition lookup 指引: agent 只应将未知 tool name 传给 `lmToolsBridge_getToolDefinitions`, 并复用已知 ToolDefinition.
+- 明确 `lm-tools://guide`, helper description, README, AI preload notes 和测试中的 unknown-only definition lookup 规则.
+
 ## [1.0.170] - 2026-05-29
 
 ### English

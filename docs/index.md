@@ -3,7 +3,7 @@
 ## Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.170`.
+- Version baseline: `1.0.171`.
 - Read this file first, then jump to the task-relevant document below.
 
 ## Core Reading Map

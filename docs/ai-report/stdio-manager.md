@@ -16,6 +16,7 @@
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown.
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Do not guess or infer ToolDefinitions or input schemas; definitions returned by the helper are the source of truth.
+- Helper-returned ToolDefinitions include `name`, `description`, `inputSchema`, and optional `outputSchema`; they omit VS Code metadata such as `tags`.
 - For arguments named `pathScope`, use the compact syntax summary in the parameter description and the full syntax in `lm-tools://guide`.
 - During bind, the manager reads the workspace-internal `lm-tools://tool-definitions` resource for full ToolDefinitions, but the stdio MCP frontend exposes only `lm-tools://guide` and `lm-tools://tool-names` as resources.
 - `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target.

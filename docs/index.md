@@ -3,7 +3,7 @@
 ## Preload Contract
 - Project one-liner: expose VS Code LM tools through per-workspace local MCP HTTP servers plus a per-session stdio manager that binds via deterministic workspace-discovery pipes.
 - Audience: AI agent performing code changes with minimal repo traversal.
-- Version baseline: `1.0.172`.
+- Version baseline: `1.0.173`.
 - Read this file first, then jump to the task-relevant document below.
 
 ## Core Reading Map
@@ -23,6 +23,7 @@
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown; do not guess definitions or input schemas.
 - Reuse known ToolDefinitions; do not request the same known tool again.
+- Helper-returned ToolDefinitions omit VS Code metadata such as `tags`.
 - `lm-tools://tool-definitions` is an internal workspace read path for the stdio manager, not a client-facing MCP resource.
 - qgrep tools are default enabled, text-only, and return absolute-path output.
 - Successful runtime generation changes invalidate the current stdio manager bind without dropping the stdio transport.

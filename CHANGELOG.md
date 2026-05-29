@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.173] - 2026-05-29
+
+### English
+
+#### Changed
+- Removed `tags` from `lmToolsBridge_getToolDefinitions` helper ToolDefinition payloads and output schema.
+
+### 中文
+
+#### Changed
+- 从 `lmToolsBridge_getToolDefinitions` helper 的 ToolDefinition payload 和 output schema 中移除了 `tags`.
+
 ## [1.0.172] - 2026-05-29
 
 ### English

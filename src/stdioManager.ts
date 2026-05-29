@@ -668,7 +668,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return `Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with ${GET_TOOL_DEFINITIONS_METHOD}; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.`;
+  return `Read lm-tools://guide before first use. After bind, call a bridged workspace tool only when that tool's ToolDefinition is cached; use ${GET_TOOL_DEFINITIONS_METHOD} once for that tool if no valid cached definition exists. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.`;
 }
 
 function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
@@ -728,9 +728,13 @@ function getFallbackGuideText(): string {
     'Tool discovery and calls:',
     '- discovery.bridgedTools is names-only.',
     `- discovery.toolDefinitionsTool describes ${GET_TOOL_DEFINITIONS_METHOD} and includes its inputSchema/outputSchema.`,
-    `- Before calling a bridged tool, fetch its ToolDefinition with ${GET_TOOL_DEFINITIONS_METHOD} if it has not already been fetched; batch likely-needed future tool names when possible.`,
-    '- Build arguments from the returned inputSchema.',
-    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call bridged tools returned by tools/list after bind.`,
+    '- Before invoking a bridged tool, have a valid cached ToolDefinition for that exact tool; discovery.bridgedTools names alone are not definitions.',
+    `- Use ${GET_TOOL_DEFINITIONS_METHOD} when a ToolDefinition is missing or suspected stale, such as after an input schema mismatch.`,
+    '- Request multiple tool names in one lookup when possible; prefetch likely-needed future ToolDefinitions and cache each returned definition.',
+    `- Do not request the same tool again while its cached ToolDefinition is valid, and do not call ${GET_TOOL_DEFINITIONS_METHOD} after every bind.`,
+    '- A full bridged tool definition returned by tools/list also counts as cached.',
+    '- Build arguments from the cached ToolDefinition inputSchema.',
+    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call a bridged tool directly when its ToolDefinition is cached.`,
     '- If an argument is named pathScope, use the shared pathScope syntax below.',
     '',
     'Routing and recovery:',
@@ -1159,7 +1163,7 @@ function createServer(): { server: Server; cleanup: () => void } {
         {
           uri: TOOL_NAMES_RESOURCE_URI,
           name: 'Bridged tool names',
-          description: `Read bridged tool names after bind. This is names-only discovery; call ${GET_TOOL_DEFINITIONS_METHOD} after bind for full definitions. Before bind, call ${REQUEST_WORKSPACE_METHOD} first.`,
+          description: 'Bridged workspace tool names.',
           mimeType: 'application/json',
         },
       ],

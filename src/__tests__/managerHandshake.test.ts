@@ -18,7 +18,7 @@ test('handshake payload omits redundant online and health fields', () => {
     discovery: {
       callTool: {
         name: 'lmToolsBridge_callBridgedTool',
-        description: 'Read lm-tools://guide before first use. After bind, call a bridged workspace tool only after its ToolDefinition has been fetched with lmToolsBridge_getToolDefinitions; batch likely-needed future tool names when possible. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.',
+        description: "Read lm-tools://guide before first use. After bind, call a bridged workspace tool only when that tool's ToolDefinition is cached; use lmToolsBridge_getToolDefinitions once for that tool if no valid cached definition exists. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -29,7 +29,7 @@ test('handshake payload omits redundant online and health fields', () => {
       },
       toolDefinitionsTool: {
         name: 'lmToolsBridge_getToolDefinitions',
-        description: 'Read full definitions for multiple bound bridged workspace tools in one call after workspace bind.',
+        description: 'Read ToolDefinitions for bound bridged workspace tools when they are missing or suspected stale.',
         inputSchema: {
           type: 'object',
           properties: { names: { type: 'array' } },
@@ -50,7 +50,7 @@ test('handshake payload omits redundant online and health fields', () => {
     },
     guidance: {
       nextSteps: [
-        'call lmToolsBridge_getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
+        'follow the ToolDefinition cache and lookup rules in lm-tools://guide.',
         'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
       ],
     },
@@ -99,7 +99,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
       partial: false,
       toolDefinitionsTool: {
         name: 'lmToolsBridge_getToolDefinitions',
-        description: 'Read full definitions for multiple bound bridged workspace tools in one call after workspace bind.',
+        description: 'Read ToolDefinitions for bound bridged workspace tools when they are missing or suspected stale.',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
       },
@@ -111,7 +111,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
     },
     guidance: {
       nextSteps: [
-        'call lmToolsBridge_getToolDefinitions before first use of any target bridged tool whose definition has not already been fetched, batching likely-needed future names when possible.',
+        'follow the ToolDefinition cache and lookup rules in lm-tools://guide.',
         'For any tool argument named pathScope, use the shared pathScope syntax included in lm-tools://guide.',
       ],
     },

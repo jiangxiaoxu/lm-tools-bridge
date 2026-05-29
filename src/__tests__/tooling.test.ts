@@ -187,6 +187,19 @@ test('local tool definition lookup contract uses bridge helper name and schemas'
   const tool = getToolDefinitionsLookupDefinition();
 
   assert.equal(tool.name, 'lmToolsBridge_getToolDefinitions');
+  assert.match(tool.description, /Read ToolDefinitions for bound bridged workspace tools/u);
+  assert.match(tool.description, /using this helper once when no valid cached ToolDefinition exists/u);
+  assert.match(tool.description, /Do not request the same tool again while its cached definition is valid/u);
+  assert.match(tool.description, /Request multiple tool names in one call when possible/u);
+  assert.match(tool.description, /prefetching likely-needed future ToolDefinitions/u);
+  assert.match(
+    String((tool.inputSchema.properties as { names?: { description?: unknown } }).names?.description ?? ''),
+    /Include multiple names in one request when possible/u,
+  );
+  assert.match(
+    String((tool.inputSchema.properties as { names?: { description?: unknown } }).names?.description ?? ''),
+    /cache each returned ToolDefinition before invocation/u,
+  );
   assert.deepEqual(tool.inputSchema.required, ['names']);
   assert.deepEqual(tool.outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
 });

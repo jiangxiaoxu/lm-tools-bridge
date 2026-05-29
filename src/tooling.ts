@@ -4216,7 +4216,7 @@ export function prioritizeTool(
 
 export function registerExposedTools(server: import('@modelcontextprotocol/sdk/server/mcp.js').McpServer): void {
   const toolInputSchema: z.ZodTypeAny = z.object({}).passthrough()
-    .describe('Tool input object. Use lmToolsBridge_getToolDefinitions to read the tool description and inputSchema before building arguments.');
+    .describe('Tool input object. Must match the target tool inputSchema.');
   const tools = getEnabledExposedToolsSnapshot();
   for (const tool of tools) {
     if (isToolBackedBySourceName(tool, GET_VSCODE_WORKSPACE_SOURCE_TOOL_NAME)) {
@@ -4325,11 +4325,11 @@ async function invokeExposedTool(toolName: string, args: unknown) {
       if (isQgrepQueryToolName(tool.name)) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          formatQgrepInvalidParamsMessage('tool input must be an object. Use lmToolsBridge_getToolDefinitions to read the tool description and inputSchema before building arguments.'),
+          formatQgrepInvalidParamsMessage('tool input must be an object.'),
         );
       }
       return toolErrorResultPayload({
-        error: 'Tool input must be an object. Use lmToolsBridge_getToolDefinitions to read the tool description and inputSchema before building arguments.',
+        error: 'Tool input must be an object.',
         name: tool.name,
         inputSchema: tool.inputSchema ?? null,
       });

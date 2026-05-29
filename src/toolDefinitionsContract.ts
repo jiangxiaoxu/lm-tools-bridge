@@ -4,10 +4,11 @@ export const LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lmToolsBridge_get
 export const LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lm_getToolDefinitions';
 
 export const LM_GET_TOOL_DEFINITIONS_DESCRIPTION = [
-  'Read full definitions for multiple bound bridged workspace tools in one call after workspace bind.',
-  'Before the first call to a bridged tool, use this if that tool definition has not already been fetched.',
-  'Batch likely-needed future tool names into the same request when possible.',
-  'Unknown or unavailable names are returned in missing without failing the whole request.',
+  'Read ToolDefinitions for bound bridged workspace tools when they are missing or suspected stale.',
+  "Before invoking a bridged tool, ensure that tool's ToolDefinition is cached by using this helper once when no valid cached ToolDefinition exists.",
+  'Do not request the same tool again while its cached definition is valid; call this again only if the definition is missing or an input schema mismatch suggests it is stale.',
+  'Request multiple tool names in one call when possible, and prefer prefetching likely-needed future ToolDefinitions so they can be cached and reused without another lookup.',
+  'Unknown or unavailable names are returned in missing.',
 ].join(' ');
 
 export const LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA: Record<string, unknown> = {
@@ -20,7 +21,7 @@ export const LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA: Record<string, unknown> = {
         type: 'string',
         minLength: 1,
       },
-      description: 'Exact enabled bridged tool names to read. Before calling a bridged tool, include its name if its definition has not already been fetched; batch likely-needed future names when possible.',
+      description: 'Exact enabled bridged tool names whose definitions are missing, suspected stale, or likely needed soon. Include multiple names in one request when possible; cache each returned ToolDefinition before invocation and reuse valid cached definitions instead of requesting the same tool again.',
     },
   },
   required: ['names'],

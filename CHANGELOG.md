@@ -6,6 +6,20 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.170] - 2026-05-29
+
+### English
+
+#### Changed
+- Clarified `lmToolsBridge_getToolDefinitions` guidance so agents prefetch multiple likely-needed ToolDefinitions, cache them before tool calls, and avoid repeat lookups while cached definitions remain valid.
+- Updated `lm-tools://guide`, README, AI preload notes, and tests to keep ToolDefinition cache and lookup rules consistent.
+
+### 中文
+
+#### 变更
+- 明确 `lmToolsBridge_getToolDefinitions` 指引: agent 应预取多个后续可能需要的 ToolDefinition, 在调用工具前缓存, 并在缓存有效时避免重复 lookup.
+- 同步更新 `lm-tools://guide`, README, AI preload notes 和测试, 保持 ToolDefinition 缓存与 lookup 规则一致.
+
 ## [1.0.169] - 2026-05-28
 
 ### English

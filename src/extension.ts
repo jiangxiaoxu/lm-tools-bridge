@@ -569,7 +569,7 @@ function createMcpServer(channel: vscode.OutputChannel): McpServer {
   server.registerResource(
     'lmToolsNames',
     'lm-tools://tool-names',
-    { description: 'Read enabled bridged workspace tool names. This is names-only discovery; fetch ToolDefinitions with lmToolsBridge_getToolDefinitions before calling bridged tools.' },
+    { description: 'Bridged workspace tool names.' },
     async () => {
       logDebugDetail('Resource read: lm-tools://tool-names');
       return resourceJson('lm-tools://tool-names', listToolsPayload(getEnabledExposedToolsSnapshot(), 'names'));

@@ -260,8 +260,9 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
       ?.properties?.cwd?.description,
     'Absolute workspace path to resolve. Use the absolute project root path or the absolute .code-workspace path. Relative paths are invalid.',
   );
-  assert.match(String(directCallTool?.description ?? ''), /call a bridged workspace tool only after its ToolDefinition has been fetched/u);
-  assert.match(String(toolDefinitionsTool?.description ?? ''), /Read full definitions for multiple bound bridged workspace tools/u);
+  assert.match(String(directCallTool?.description ?? ''), /call a bridged workspace tool only when that tool's ToolDefinition is cached/u);
+  assert.match(String(toolDefinitionsTool?.description ?? ''), /Read ToolDefinitions for bound bridged workspace tools/u);
+  assert.match(String(toolDefinitionsTool?.description ?? ''), /Do not request the same tool again while its cached definition is valid/u);
   assert.deepEqual(
     (toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
     ['names'],
@@ -298,6 +299,9 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     resourceTemplates.resourceTemplates.map((entry) => entry.uriTemplate),
     [],
   );
+  const resources = await manager.client.listResources();
+  const toolNamesResourceDefinition = resources.resources.find((entry) => entry.uri === 'lm-tools://tool-names');
+  assert.equal(toolNamesResourceDefinition?.description, 'Bridged workspace tool names.');
 
   await assert.rejects(
     () => manager.client.callTool({
@@ -336,7 +340,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.equal(handshakePayload?.discovery?.toolDefinitionsTool?.name, GET_TOOL_DEFINITIONS_METHOD);
   assert.match(
     String(handshakePayload?.discovery?.toolDefinitionsTool?.description ?? ''),
-    /Read full definitions for multiple bound bridged workspace tools/u,
+    /Read ToolDefinitions for bound bridged workspace tools/u,
   );
   assert.deepEqual(
     (handshakePayload?.discovery?.toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
@@ -352,7 +356,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /only after its ToolDefinition has been fetched with lmToolsBridge_getToolDefinitions/u,
+    /ToolDefinition is cached/u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
@@ -374,7 +378,14 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /Bind:/u);
   assert.match(getResourceText(handshakeResource), /Tool discovery and calls:/u);
   assert.match(getResourceText(handshakeResource), /Routing and recovery:/u);
-  assert.match(getResourceText(handshakeResource), /fetch its ToolDefinition with lmToolsBridge_getToolDefinitions/u);
+  assert.match(getResourceText(handshakeResource), /valid cached ToolDefinition for that exact tool/u);
+  assert.match(getResourceText(handshakeResource), /discovery\.bridgedTools names alone are not definitions/u);
+  assert.match(getResourceText(handshakeResource), /Use lmToolsBridge_getToolDefinitions when a ToolDefinition is missing or suspected stale/u);
+  assert.match(getResourceText(handshakeResource), /Request multiple tool names in one lookup when possible/u);
+  assert.match(getResourceText(handshakeResource), /prefetch likely-needed future ToolDefinitions/u);
+  assert.match(getResourceText(handshakeResource), /Do not request the same tool again while its cached ToolDefinition is valid/u);
+  assert.match(getResourceText(handshakeResource), /A full bridged tool definition returned by tools\/list also counts as cached/u);
+  assert.match(getResourceText(handshakeResource), /Build arguments from the cached ToolDefinition inputSchema/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
   assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);

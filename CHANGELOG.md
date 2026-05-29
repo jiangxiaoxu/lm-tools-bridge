@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.174] - 2026-05-29
+
+### English
+
+#### Changed
+- Bumped the package version to 1.0.174.
+
+### 中文
+
+#### Changed
+- 将 package version 更新到 1.0.174.
+
 ## [1.0.173] - 2026-05-29
 
 ### English

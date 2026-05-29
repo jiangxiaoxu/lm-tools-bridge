@@ -44,10 +44,6 @@ export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
         properties: {
           name: { type: 'string' },
           description: { type: 'string' },
-          tags: {
-            type: 'array',
-            items: { type: 'string' },
-          },
           inputSchema: {
             type: 'object',
             description: 'JSON Schema object for the target tool input.',
@@ -57,7 +53,7 @@ export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
             description: 'JSON Schema object for the target tool structured output when available.',
           },
         },
-        required: ['name', 'description', 'tags', 'inputSchema'],
+        required: ['name', 'description', 'inputSchema'],
       },
     },
     missing: {
@@ -89,7 +85,6 @@ export interface ToolDefinitionsLookupDefinition {
 export interface LmToolDefinitionSource {
   name: string;
   description?: unknown;
-  tags?: unknown;
   inputSchema?: unknown;
   outputSchema?: unknown;
 }
@@ -139,7 +134,6 @@ export function buildToolDefinitionPayload(tool: LmToolDefinitionSource): Record
   const payload: Record<string, unknown> = {
     name: tool.name,
     description: typeof tool.description === 'string' ? tool.description : '',
-    tags: Array.isArray(tool.tags) ? tool.tags.filter((tag): tag is string => typeof tag === 'string') : [],
     inputSchema: tool.inputSchema ?? null,
   };
   if (tool.outputSchema !== undefined) {

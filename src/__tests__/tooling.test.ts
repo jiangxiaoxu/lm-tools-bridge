@@ -236,6 +236,16 @@ test('local tool definition lookup contract uses bridge helper name and schemas'
   );
   assert.deepEqual(tool.inputSchema.required, ['names']);
   assert.deepEqual(tool.outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
+  const toolsSchema = (tool.outputSchema.properties as {
+    tools?: {
+      items?: {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+    };
+  }).tools?.items;
+  assert.equal(Object.prototype.hasOwnProperty.call(toolsSchema?.properties ?? {}, 'tags'), false);
+  assert.deepEqual(toolsSchema?.required, ['name', 'description', 'inputSchema']);
 });
 
 test('tool definitions payload includes outputSchema when a tool defines it', async () => {
@@ -259,6 +269,7 @@ test('tool definitions payload returns requested tools and missing names', async
   assert.equal(payload.count, 2);
   assert.equal(payload.missingCount, 1);
   assert.deepEqual(payload.tools.map((tool) => tool.name), ['lm_getDiagnostics', 'lm_qgrepSearchText']);
+  assert.equal(payload.tools.some((tool) => Object.prototype.hasOwnProperty.call(tool, 'tags')), false);
   assert.match(formatToolDefinitionsSummary(payload), /^returned: 2$/mu);
   assert.match(formatToolDefinitionsSummary(payload), /^  - lm_missingTool$/mu);
 });

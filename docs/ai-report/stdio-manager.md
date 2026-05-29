@@ -12,11 +12,10 @@
 ## ToolDefinition Cache Contract
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
 - `discovery.toolDefinitionsTool` describes `lmToolsBridge_getToolDefinitions` and includes input/output schemas.
-- Before invoking a bridged tool, have a valid cached ToolDefinition for that exact tool.
-- Use `lmToolsBridge_getToolDefinitions` when a ToolDefinition is missing or suspected stale, such as after an input schema mismatch.
-- Request multiple tool names in one lookup when possible; prefetch likely-needed future ToolDefinitions and cache each returned definition.
-- Do not request the same tool again while its cached ToolDefinition is valid, and do not call the helper after every bind.
-- A full bridged tool definition returned by `tools/list` also counts as cached.
+- Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
+- Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown.
+- Reuse known ToolDefinitions; do not request the same known tool again.
+- Do not guess or infer ToolDefinitions or input schemas; definitions returned by the helper are the source of truth.
 - `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target.
 - Tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
 
@@ -34,4 +33,3 @@
 - Publication is guarded by a global named-pipe lock and notifies live manager control pipes after generation changes.
 - Legacy `%LOCALAPPDATA%\\lm-tools-bridge\\instances` cleanup is best-effort and must not block activation.
 - External `node` availability is checked on activation; missing Node shows one non-blocking warning per extension-host lifetime with install/download choices.
-

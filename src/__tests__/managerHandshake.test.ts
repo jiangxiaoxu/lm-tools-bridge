@@ -18,7 +18,7 @@ test('handshake payload omits redundant online and health fields', () => {
     discovery: {
       callTool: {
         name: 'lmToolsBridge_callBridgedTool',
-        description: "Read lm-tools://guide before first use. After bind, call a bridged workspace tool only when that tool's ToolDefinition is cached; use lmToolsBridge_getToolDefinitions once for that tool if no valid cached definition exists. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.",
+        description: "Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from lmToolsBridge_getToolDefinitions. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call lmToolsBridge_getToolDefinitions with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Input: { name: string, arguments?: object }.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -29,7 +29,7 @@ test('handshake payload omits redundant online and health fields', () => {
       },
       toolDefinitionsTool: {
         name: 'lmToolsBridge_getToolDefinitions',
-        description: 'Read ToolDefinitions for bound bridged workspace tools when they are missing or suspected stale.',
+        description: 'Read ToolDefinitions for bound bridged workspace tools whose definitions are unknown.',
         inputSchema: {
           type: 'object',
           properties: { names: { type: 'array' } },
@@ -99,7 +99,7 @@ test('handshake summary keeps useful fields and omits online line', () => {
       partial: false,
       toolDefinitionsTool: {
         name: 'lmToolsBridge_getToolDefinitions',
-        description: 'Read ToolDefinitions for bound bridged workspace tools when they are missing or suspected stale.',
+        description: 'Read ToolDefinitions for bound bridged workspace tools whose definitions are unknown.',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
       },

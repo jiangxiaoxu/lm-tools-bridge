@@ -259,7 +259,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return `Read lm-tools://guide before first use. After bind, call a bridged workspace tool only when that tool's ToolDefinition is cached; use ${GET_TOOL_DEFINITIONS_METHOD} once for that tool if no valid cached definition exists. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.`;
+  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Pass arguments that match the target tool inputSchema and use the pathScope syntax already included in lm-tools://guide when needed. Input: { name: string, arguments?: object }.`;
 }
 
 function toOfflineDurationSec(startedAt?: number): number | null {
@@ -408,6 +408,7 @@ async function requestTargetJson(
 
 function getRemoteResultObject(data: unknown): {
   result?: Record<string, unknown>;
+  errorCode?: number;
   errorMessage?: string;
 } {
   if (!data || typeof data !== 'object') {
@@ -415,16 +416,21 @@ function getRemoteResultObject(data: unknown): {
   }
   const record = data as { result?: unknown; error?: unknown };
   if (record.error && typeof record.error === 'object') {
-    const errorRecord = record.error as { message?: unknown };
+    const errorRecord = record.error as { code?: unknown; message?: unknown };
+    const code = typeof errorRecord.code === 'number' ? errorRecord.code : undefined;
     const message = typeof errorRecord.message === 'string'
       ? errorRecord.message
       : 'Workspace MCP server returned a JSON-RPC error.';
-    return { errorMessage: message };
+    return { errorCode: code, errorMessage: message };
   }
   if (!record.result || typeof record.result !== 'object' || Array.isArray(record.result)) {
     return { errorMessage: 'Workspace MCP server returned an invalid JSON-RPC result object.' };
   }
   return { result: record.result as Record<string, unknown> };
+}
+
+function appendToolDefinitionRefreshHint(toolName: string, message: string): string {
+  return `${message} Refresh ${toolName}'s ToolDefinition with ${GET_TOOL_DEFINITIONS_METHOD}, then retry with arguments that match the refreshed inputSchema.`;
 }
 
 function normalizeHandshakeToolDescription(descriptionValue: unknown): string {
@@ -1069,7 +1075,11 @@ async function invokeBoundTool(
   }
   const parsed = getRemoteResultObject(remote.data);
   if (parsed.errorMessage) {
-    throw new McpError(ErrorCode.InternalError, parsed.errorMessage);
+    const isInvalidParams = parsed.errorCode === -32602;
+    throw new McpError(
+      isInvalidParams ? ErrorCode.InvalidParams : ErrorCode.InternalError,
+      isInvalidParams ? appendToolDefinitionRefreshHint(toolName, parsed.errorMessage) : parsed.errorMessage,
+    );
   }
   return parsed.result as Record<string, unknown>;
 }
@@ -1098,13 +1108,12 @@ function getHandshakeResourceText(): string {
     'Tool discovery and calls:',
     '- discovery.bridgedTools is names-only.',
     `- discovery.toolDefinitionsTool describes ${GET_TOOL_DEFINITIONS_METHOD} and includes its inputSchema/outputSchema.`,
-    '- Before invoking a bridged tool, have a valid cached ToolDefinition for that exact tool; discovery.bridgedTools names alone are not definitions.',
-    `- Use ${GET_TOOL_DEFINITIONS_METHOD} when a ToolDefinition is missing or suspected stale, such as after an input schema mismatch.`,
-    '- Request multiple tool names in one lookup when possible; prefetch likely-needed future ToolDefinitions and cache each returned definition.',
-    `- Do not request the same tool again while its cached ToolDefinition is valid, and do not call ${GET_TOOL_DEFINITIONS_METHOD} after every bind.`,
-    '- A full bridged tool definition returned by tools/list also counts as cached.',
-    '- Build arguments from the cached ToolDefinition inputSchema.',
-    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call a bridged tool directly when its ToolDefinition is cached.`,
+    `- Before invoking a bridged tool, have that exact tool's full ToolDefinition from ${GET_TOOL_DEFINITIONS_METHOD}; discovery.bridgedTools names alone are not definitions.`,
+    `- Use ${GET_TOOL_DEFINITIONS_METHOD} only with tool names whose ToolDefinitions are unknown.`,
+    '- If every needed ToolDefinition is already known, skip the definition lookup entirely and reuse the known ToolDefinition.',
+    `- Do not guess or infer ToolDefinitions or inputSchemas from tool names, prior experience, or similar tools; definitions returned by ${GET_TOOL_DEFINITIONS_METHOD} are the source of truth.`,
+    '- Build arguments from the known ToolDefinition inputSchema.',
+    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call a bridged tool directly only after its ToolDefinition is known.`,
     '- If an argument is named pathScope, use the shared pathScope syntax below.',
     '',
     'Routing and recovery:',

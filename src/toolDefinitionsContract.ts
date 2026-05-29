@@ -4,10 +4,11 @@ export const LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lmToolsBridge_get
 export const LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lm_getToolDefinitions';
 
 export const LM_GET_TOOL_DEFINITIONS_DESCRIPTION = [
-  'Read ToolDefinitions for bound bridged workspace tools when they are missing or suspected stale.',
-  "Before invoking a bridged tool, ensure that tool's ToolDefinition is cached by using this helper once when no valid cached ToolDefinition exists.",
-  'Do not request the same tool again while its cached definition is valid; call this again only if the definition is missing or an input schema mismatch suggests it is stale.',
-  'Request multiple tool names in one call when possible, and prefer prefetching likely-needed future ToolDefinitions so they can be cached and reused without another lookup.',
+  'Read ToolDefinitions for bound bridged workspace tools whose definitions are unknown.',
+  'Precondition: names contains only exact enabled bridged tool names whose full ToolDefinition is unknown.',
+  'Do not include tool names whose full ToolDefinitions are already known from this helper; reuse known ToolDefinitions instead.',
+  'For unknown bridged ToolDefinitions, use definitions returned by this helper as the only source of truth and never guess or infer a ToolDefinition or inputSchema from the tool name, prior experience, or similar tools.',
+  'If every needed ToolDefinition is already known, skip this helper entirely and invoke the bridged tool with the known ToolDefinition.',
   'Unknown or unavailable names are returned in missing.',
 ].join(' ');
 
@@ -21,7 +22,7 @@ export const LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA: Record<string, unknown> = {
         type: 'string',
         minLength: 1,
       },
-      description: 'Exact enabled bridged tool names whose definitions are missing, suspected stale, or likely needed soon. Include multiple names in one request when possible; cache each returned ToolDefinition before invocation and reuse valid cached definitions instead of requesting the same tool again.',
+      description: 'Exact enabled bridged tool names whose full ToolDefinitions are unknown. Before calling this helper, remove names whose ToolDefinitions are already known from this helper. Do not guess or infer ToolDefinitions; reuse known ToolDefinitions instead of requesting them again.',
     },
   },
   required: ['names'],
@@ -33,7 +34,7 @@ export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
     requested: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Deduplicated tool names requested by the caller, in request order.',
+      description: 'Deduplicated requested tool names, in request order.',
     },
     tools: {
       type: 'array',

@@ -113,6 +113,17 @@ async function startFakeWorkspaceServer(args: {
       const value = typeof message.params?.arguments === 'object' && message.params.arguments !== null
         ? (message.params.arguments as { value?: unknown }).value
         : undefined;
+      if (value === 'schema-error') {
+        respondJson(res, {
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32602,
+            message: 'Invalid arguments: inputSchema mismatch.',
+          },
+        });
+        return;
+      }
       respondJson(res, {
         jsonrpc: '2.0',
         id,
@@ -260,9 +271,12 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
       ?.properties?.cwd?.description,
     'Absolute workspace path to resolve. Use the absolute project root path or the absolute .code-workspace path. Relative paths are invalid.',
   );
-  assert.match(String(directCallTool?.description ?? ''), /call a bridged workspace tool only when that tool's ToolDefinition is cached/u);
+  assert.match(String(directCallTool?.description ?? ''), /full ToolDefinition must be known from lmToolsBridge_getToolDefinitions/u);
+  assert.match(String(directCallTool?.description ?? ''), /Reuse a known ToolDefinition and do not request it again/u);
+  assert.match(String(directCallTool?.description ?? ''), /with names containing only tool names whose ToolDefinitions are unknown/u);
   assert.match(String(toolDefinitionsTool?.description ?? ''), /Read ToolDefinitions for bound bridged workspace tools/u);
-  assert.match(String(toolDefinitionsTool?.description ?? ''), /Do not request the same tool again while its cached definition is valid/u);
+  assert.match(String(toolDefinitionsTool?.description ?? ''), /names contains only exact enabled bridged tool names whose full ToolDefinition is unknown/u);
+  assert.match(String(toolDefinitionsTool?.description ?? ''), /never guess or infer a ToolDefinition or inputSchema/u);
   assert.deepEqual(
     (toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
     ['names'],
@@ -356,7 +370,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
-    /ToolDefinition is cached/u,
+    /full ToolDefinition must be known from lmToolsBridge_getToolDefinitions/u,
   );
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
@@ -378,14 +392,12 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /Bind:/u);
   assert.match(getResourceText(handshakeResource), /Tool discovery and calls:/u);
   assert.match(getResourceText(handshakeResource), /Routing and recovery:/u);
-  assert.match(getResourceText(handshakeResource), /valid cached ToolDefinition for that exact tool/u);
+  assert.match(getResourceText(handshakeResource), /full ToolDefinition from lmToolsBridge_getToolDefinitions/u);
   assert.match(getResourceText(handshakeResource), /discovery\.bridgedTools names alone are not definitions/u);
-  assert.match(getResourceText(handshakeResource), /Use lmToolsBridge_getToolDefinitions when a ToolDefinition is missing or suspected stale/u);
-  assert.match(getResourceText(handshakeResource), /Request multiple tool names in one lookup when possible/u);
-  assert.match(getResourceText(handshakeResource), /prefetch likely-needed future ToolDefinitions/u);
-  assert.match(getResourceText(handshakeResource), /Do not request the same tool again while its cached ToolDefinition is valid/u);
-  assert.match(getResourceText(handshakeResource), /A full bridged tool definition returned by tools\/list also counts as cached/u);
-  assert.match(getResourceText(handshakeResource), /Build arguments from the cached ToolDefinition inputSchema/u);
+  assert.match(getResourceText(handshakeResource), /Use lmToolsBridge_getToolDefinitions only with tool names whose ToolDefinitions are unknown/u);
+  assert.match(getResourceText(handshakeResource), /skip the definition lookup entirely/u);
+  assert.match(getResourceText(handshakeResource), /Do not guess or infer ToolDefinitions or inputSchemas/u);
+  assert.match(getResourceText(handshakeResource), /Build arguments from the known ToolDefinition inputSchema/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
   assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);
@@ -466,6 +478,19 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     },
   });
   assert.equal((bridgeCall.structuredContent as { value?: string }).value, 'world');
+
+  await assert.rejects(
+    () => manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: ECHO_TOOL_NAME,
+        arguments: {
+          value: 'schema-error',
+        },
+      },
+    }),
+    /Refresh lm_testEcho's ToolDefinition with lmToolsBridge_getToolDefinitions/u,
+  );
 });
 
 test('stdio manager requires bind before bridged discovery resources are readable', async (t) => {

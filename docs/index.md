@@ -20,9 +20,9 @@
 - VS Code-sourced `vscode.lm.tools` are exposed as `lm_*`; runtime invocation still routes to the original VS Code source name.
 - Shared `pathScope` syntax is embedded in `lm-tools://guide` and applies to any tool argument named `pathScope`.
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
-- Before invoking a bridged tool, have a valid cached ToolDefinition for that exact tool.
-- Use `lmToolsBridge_getToolDefinitions` for missing or suspected-stale definitions; batch and prefetch likely-needed definitions when possible.
-- Full bridged definitions returned by `tools/list` also count as cached definitions.
+- Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
+- Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown; do not guess definitions or input schemas.
+- Reuse known ToolDefinitions; do not request the same known tool again.
 - qgrep tools are default enabled, text-only, and return absolute-path output.
 - Successful runtime generation changes invalidate the current stdio manager bind without dropping the stdio transport.
 - README updates are needed only for user-facing behavior changes; changelog updates are needed on version bumps.

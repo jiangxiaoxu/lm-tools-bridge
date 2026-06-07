@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.178] - 2026-06-07
+
+### English
+
+#### Changed
+- Bumped the package version after moving the bridged tool wrapper `title` parameter to the first schema position.
+
+### 中文
+
+#### Changed
+- 在将 bridged tool wrapper 的 `title` 参数移到 schema 第一位后递增 package version.
+
 ## [1.0.177] - 2026-06-07
 
 ### English

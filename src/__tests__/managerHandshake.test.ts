@@ -18,14 +18,14 @@ test('handshake payload omits redundant online and health fields', () => {
     discovery: {
       callTool: {
         name: 'lmToolsBridge_callBridgedTool',
-        description: "Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from lmToolsBridge_getToolDefinitions. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call lmToolsBridge_getToolDefinitions with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Set title to a short user-facing description of what this call is doing so the tool call is readable in the UI. Input: { name: string, title: string, arguments?: object }.",
+        description: "Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from lmToolsBridge_getToolDefinitions. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call lmToolsBridge_getToolDefinitions with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Set title to a short user-facing description of what this call is doing so the tool call is readable in the UI. Input: { title: string, name: string, arguments?: object }.",
         inputSchema: {
           type: 'object',
           properties: {
-            name: { type: 'string' },
             title: { type: 'string' },
+            name: { type: 'string' },
           },
-          required: ['name', 'title'],
+          required: ['title', 'name'],
         },
       },
       toolDefinitionsTool: {

@@ -341,7 +341,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.deepEqual(
     (directCallTool?.inputSchema as { required?: unknown } | undefined)?.required,
-    ['name', 'title'],
+    ['title', 'name'],
   );
   assert.equal(
     (
@@ -449,7 +449,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.deepEqual(
     (handshakePayload?.discovery?.callTool?.inputSchema as { required?: unknown } | undefined)?.required,
-    ['name', 'title'],
+    ['title', 'name'],
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(handshakePayload?.discovery?.bridgedTools?.[0] ?? {}, 'description'),

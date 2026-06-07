@@ -238,7 +238,7 @@ function getInvalidWindowsCwdMessage(): string {
 function getDirectCallNameParamMessage(): string {
   return appendNextStep(
     'Invalid params: expected arguments.name (string).',
-    `call ${DIRECT_TOOL_CALL_NAME} with { name: string, title: string, arguments?: object } and set arguments.name to a bridged tool name.`,
+    `call ${DIRECT_TOOL_CALL_NAME} with { title: string, name: string, arguments?: object } and set arguments.name to a bridged tool name.`,
   );
 }
 
@@ -271,7 +271,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Set title to a short user-facing description of what this call is doing so the tool call is readable in the UI. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { name: string, title: string, arguments?: object }.`;
+  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Set title to a short user-facing description of what this call is doing so the tool call is readable in the UI. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { title: string, name: string, arguments?: object }.`;
 }
 
 function toOfflineDurationSec(startedAt?: number): number | null {
@@ -593,21 +593,21 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        name: {
-          type: 'string',
-          description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
-        },
         title: {
           type: 'string',
           minLength: 1,
           description: 'Required short user-facing description of what this call is doing. Use it as a readable UI title for this bridged tool call.',
+        },
+        name: {
+          type: 'string',
+          description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
         },
         arguments: {
           type: 'object',
           description: 'Optional arguments object for the bridged tool call. Must match the target tool inputSchema.',
         },
       },
-      required: ['name', 'title'],
+      required: ['title', 'name'],
     },
   };
 }

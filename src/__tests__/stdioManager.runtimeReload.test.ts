@@ -881,6 +881,7 @@ test('stdio manager retries the same generation after a runtime load failure', a
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
         name: ECHO_TOOL_NAME,
+        title: 'Call after fatal reload',
         arguments: {
           value: 'still-dead',
         },

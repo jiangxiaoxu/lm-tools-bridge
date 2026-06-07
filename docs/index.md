@@ -21,6 +21,7 @@
 - `pathScope` parameters include a compact syntax summary in their description; the full shared syntax remains in `lm-tools://guide`.
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
+- `lmToolsBridge_callBridgedTool` requires `title` as a wrapper UI label; it is not passed to the bridged tool.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown; do not guess definitions or input schemas.
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Helper-returned ToolDefinitions omit VS Code metadata such as `tags`.

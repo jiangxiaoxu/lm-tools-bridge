@@ -713,7 +713,7 @@ function getRequestWorkspaceToolDescription(): string {
 }
 
 function getDirectToolCallDescription(): string {
-  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { name: string, arguments?: object }.`;
+  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Set title to a short user-facing description of what this call is doing so the tool call is readable in the UI. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { name: string, title: string, arguments?: object }.`;
 }
 
 function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
@@ -744,12 +744,17 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
           type: 'string',
           description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
         },
+        title: {
+          type: 'string',
+          minLength: 1,
+          description: 'Required short user-facing description of what this call is doing. Use it as a readable UI title for this bridged tool call.',
+        },
         arguments: {
           type: 'object',
           description: 'Optional arguments object for the bridged tool call. Must match the target tool inputSchema.',
         },
       },
-      required: ['name'],
+      required: ['name', 'title'],
     },
   };
 }
@@ -778,7 +783,7 @@ function getFallbackGuideText(): string {
     '- If every needed ToolDefinition is already known, skip the definition lookup entirely and reuse the known ToolDefinition.',
     `- Do not guess or infer ToolDefinitions or inputSchemas from tool names, prior experience, or similar tools; definitions returned by ${GET_TOOL_DEFINITIONS_METHOD} are the source of truth.`,
     '- Build arguments from the known ToolDefinition inputSchema.',
-    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call a bridged tool directly only after its ToolDefinition is known.`,
+    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name, a short user-facing title, and the arguments object; title is for the wrapper UI and is not passed to the bridged tool.`,
     '- If an argument is named pathScope, use its parameter description for the compact syntax summary; the full pathScope syntax is below.',
     '',
     'Routing and recovery:',
@@ -875,7 +880,14 @@ function getInvalidWindowsCwdMessage(): string {
 function getDirectCallNameParamMessage(): string {
   return appendNextStep(
     'Invalid params: expected arguments.name (string).',
-    `call ${DIRECT_TOOL_CALL_NAME} with { name: string, arguments?: object } and set arguments.name to a bridged tool name.`,
+    `call ${DIRECT_TOOL_CALL_NAME} with { name: string, title: string, arguments?: object } and set arguments.name to a bridged tool name.`,
+  );
+}
+
+function getDirectCallTitleParamMessage(): string {
+  return appendNextStep(
+    'Invalid params: expected arguments.title (non-empty string).',
+    `call ${DIRECT_TOOL_CALL_NAME} with a short user-facing title describing what the bridged tool call is doing.`,
   );
 }
 
@@ -1181,6 +1193,10 @@ function createServer(): { server: Server; cleanup: () => void } {
       const targetToolName = typeof args.name === 'string' ? args.name.trim() : '';
       if (!targetToolName) {
         throw new McpError(ErrorCode.InvalidParams, getDirectCallNameParamMessage());
+      }
+      const title = typeof args.title === 'string' ? args.title.trim() : '';
+      if (!title) {
+        throw new McpError(ErrorCode.InvalidParams, getDirectCallTitleParamMessage());
       }
       if (isBridgeHelperToolName(targetToolName)) {
         throw new McpError(ErrorCode.InvalidParams, getDirectCallForbiddenToolNameMessage());

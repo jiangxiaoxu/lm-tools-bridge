@@ -13,6 +13,7 @@
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
 - `discovery.toolDefinitionsTool` describes `lmToolsBridge_getToolDefinitions` and includes input/output schemas.
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
+- `lmToolsBridge_callBridgedTool` requires a non-empty `title` wrapper parameter for a short user-facing UI label; the manager does not pass it to the target bridged tool.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown.
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Do not guess or infer ToolDefinitions or input schemas; definitions returned by the helper are the source of truth.

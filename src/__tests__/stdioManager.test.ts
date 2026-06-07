@@ -65,6 +65,7 @@ async function startFakeWorkspaceServer(args: {
   workspaceFolders: string[];
   workspaceFile?: string;
 }) {
+  const bridgedCallArguments: Array<Record<string, unknown>> = [];
   const target = resolveWorkspaceDiscoveryTargetFromWindow(
     args.workspaceFolders,
     args.workspaceFile,
@@ -143,8 +144,12 @@ async function startFakeWorkspaceServer(args: {
       return;
     }
     if (message?.method === 'tools/call' && message.params?.name === ECHO_TOOL_NAME) {
-      const value = typeof message.params?.arguments === 'object' && message.params.arguments !== null
-        ? (message.params.arguments as { value?: unknown }).value
+      const toolArgs = typeof message.params?.arguments === 'object' && message.params.arguments !== null
+        ? message.params.arguments as Record<string, unknown>
+        : {};
+      bridgedCallArguments.push(toolArgs);
+      const value = typeof toolArgs === 'object'
+        ? (toolArgs as { value?: unknown }).value
         : undefined;
       if (value === 'schema-error') {
         respondJson(res, {
@@ -205,6 +210,9 @@ async function startFakeWorkspaceServer(args: {
   return {
     host: '127.0.0.1',
     port: address.port,
+    getBridgedCallArguments() {
+      return bridgedCallArguments.map((entry) => ({ ...entry }));
+    },
     async stop() {
       await publisher.stop();
       await new Promise<void>((resolve) => {
@@ -323,11 +331,37 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
       directCallTool?.inputSchema as {
         properties?: {
           name?: { description?: unknown };
+          title?: { description?: unknown; minLength?: unknown };
           arguments?: { description?: unknown };
         };
+        required?: unknown;
       } | undefined
     )?.properties?.name?.description,
     'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
+  );
+  assert.deepEqual(
+    (directCallTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['name', 'title'],
+  );
+  assert.equal(
+    (
+      directCallTool?.inputSchema as {
+        properties?: {
+          title?: { description?: unknown; minLength?: unknown };
+        };
+      } | undefined
+    )?.properties?.title?.description,
+    'Required short user-facing description of what this call is doing. Use it as a readable UI title for this bridged tool call.',
+  );
+  assert.equal(
+    (
+      directCallTool?.inputSchema as {
+        properties?: {
+          title?: { description?: unknown; minLength?: unknown };
+        };
+      } | undefined
+    )?.properties?.title?.minLength,
+    1,
   );
   assert.equal(
     (
@@ -409,6 +443,14 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
     /pathScope, use its parameter description for the compact syntax summary/u,
   );
+  assert.match(
+    String(handshakePayload?.discovery?.callTool?.description ?? ''),
+    /Set title to a short user-facing description/u,
+  );
+  assert.deepEqual(
+    (handshakePayload?.discovery?.callTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['name', 'title'],
+  );
   assert.equal(
     Object.prototype.hasOwnProperty.call(handshakePayload?.discovery?.bridgedTools?.[0] ?? {}, 'description'),
     false,
@@ -431,6 +473,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /skip the definition lookup entirely/u);
   assert.match(getResourceText(handshakeResource), /Do not guess or infer ToolDefinitions or inputSchemas/u);
   assert.match(getResourceText(handshakeResource), /Build arguments from the known ToolDefinition inputSchema/u);
+  assert.match(getResourceText(handshakeResource), /title is for the wrapper UI and is not passed to the bridged tool/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
   assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);
@@ -485,6 +528,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
         name: DIRECT_TOOL_CALL_NAME,
         arguments: {
           name: forbiddenName,
+          title: 'Call forbidden bridged tool',
           arguments: {
             names: [ECHO_TOOL_NAME],
           },
@@ -514,18 +558,34 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     name: DIRECT_TOOL_CALL_NAME,
     arguments: {
       name: ECHO_TOOL_NAME,
+      title: 'Echo world',
       arguments: {
         value: 'world',
       },
     },
   });
   assert.equal((bridgeCall.structuredContent as { value?: string }).value, 'world');
+  assert.deepEqual(workspace.getBridgedCallArguments().at(-1), { value: 'world' });
 
   await assert.rejects(
     () => manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
         name: ECHO_TOOL_NAME,
+        arguments: {
+          value: 'missing-title',
+        },
+      },
+    }),
+    /Invalid params: expected arguments\.title/u,
+  );
+
+  await assert.rejects(
+    () => manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: ECHO_TOOL_NAME,
+        title: 'Trigger schema error',
         arguments: {
           value: 'schema-error',
         },

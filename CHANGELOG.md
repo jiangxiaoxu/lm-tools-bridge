@@ -6,6 +6,18 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.177] - 2026-06-07
+
+### English
+
+#### Changed
+- Bumped the package version for the bridged tool wrapper title contract release.
+
+### 中文
+
+#### Changed
+- 为 bridged tool wrapper title 契约发布递增 package version.
+
 ## [1.0.176] - 2026-06-07
 
 ### English

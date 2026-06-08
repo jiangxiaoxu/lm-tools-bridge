@@ -20,7 +20,9 @@
 - VS Code-sourced `vscode.lm.tools` are exposed as `lm_*`; runtime invocation still routes to the original VS Code source name.
 - `pathScope` parameters include a compact syntax summary in their description; the full shared syntax remains in `lm-tools://guide`.
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
+- `lmToolsBridge_bindWorkspace`, `lmToolsBridge_getToolDefinitions`, and `lmToolsBridge_callBridgedTool` require non-empty wrapper `title` labels for readable MCP UI calls.
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
+- `lmToolsBridge_callBridgedTool` does not pass its wrapper `title` to the bridged tool.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown; do not guess definitions or input schemas.
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Helper-returned ToolDefinitions include MCP display/UI metadata such as `title`, `_meta`, `annotations`, and `outputSchema`; they omit VS Code metadata such as `tags`.

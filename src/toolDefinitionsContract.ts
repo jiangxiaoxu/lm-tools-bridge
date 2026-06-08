@@ -1,10 +1,10 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
 export const LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lmToolsBridge_getToolDefinitions';
-export const LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME = 'lm_getToolDefinitions';
 
 export const LM_GET_TOOL_DEFINITIONS_DESCRIPTION = [
   'Read ToolDefinitions for bound bridged workspace tools whose definitions are unknown.',
+  'Set title to a short user-facing description of this lookup so the tool call is readable in the UI.',
   'Precondition: names contains only exact enabled bridged tool names whose full ToolDefinition is unknown.',
   'Do not include tool names whose full ToolDefinitions are already known from this helper; reuse known ToolDefinitions instead.',
   'For unknown bridged ToolDefinitions, use definitions returned by this helper as the only source of truth and never guess or infer a ToolDefinition or inputSchema from the tool name, prior experience, or similar tools.',
@@ -15,6 +15,11 @@ export const LM_GET_TOOL_DEFINITIONS_DESCRIPTION = [
 export const LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
+    title: {
+      type: 'string',
+      minLength: 1,
+      description: 'Required short user-facing description of this ToolDefinition lookup. Use it as a readable UI title for this helper call.',
+    },
     names: {
       type: 'array',
       minItems: 1,
@@ -25,7 +30,7 @@ export const LM_GET_TOOL_DEFINITIONS_INPUT_SCHEMA: Record<string, unknown> = {
       description: 'Exact enabled bridged tool names whose full ToolDefinitions are unknown. Before calling this helper, remove names whose ToolDefinitions are already known from this helper. Do not guess or infer ToolDefinitions; reuse known ToolDefinitions instead of requesting them again.',
     },
   },
-  required: ['names'],
+  required: ['title', 'names'],
 };
 
 export const LM_GET_TOOL_DEFINITIONS_OUTPUT_SCHEMA: Record<string, unknown> = {
@@ -124,6 +129,11 @@ export function getToolDefinitionsLookupDefinition(): ToolDefinitionsLookupDefin
 }
 
 export function parseRequiredToolDefinitionNames(input: Record<string, unknown>): string[] {
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  if (title.length === 0) {
+    throw new McpError(ErrorCode.InvalidParams, 'title must be a non-empty string.');
+  }
+
   const value = input.names;
   if (!Array.isArray(value) || value.length === 0) {
     throw new McpError(ErrorCode.InvalidParams, 'names must be a non-empty array of tool name strings.');

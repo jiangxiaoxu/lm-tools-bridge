@@ -14,10 +14,6 @@ import {
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
 const GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge_getToolDefinitions';
-const LEGACY_REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
-const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
-const LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD = 'lm_getToolDefinitions';
 const ECHO_TOOL_NAME = 'lm_testEcho';
 const TOOL_RESULT_CARD_RESOURCE_URI = 'ui://lm-tools-bridge/tool-result-card.html';
 
@@ -66,6 +62,7 @@ async function startFakeWorkspaceServer(args: {
   workspaceFolders: string[];
   workspaceFile?: string;
 }) {
+  const bridgedCallArguments: Array<Record<string, unknown>> = [];
   const target = resolveWorkspaceDiscoveryTargetFromWindow(
     args.workspaceFolders,
     args.workspaceFile,
@@ -109,10 +106,6 @@ async function startFakeWorkspaceServer(args: {
             { name: REQUEST_WORKSPACE_METHOD, description: 'Local helper should be filtered.' },
             { name: DIRECT_TOOL_CALL_NAME, description: 'Local helper should be filtered.' },
             { name: GET_TOOL_DEFINITIONS_METHOD, description: 'Local helper should be filtered.' },
-            { name: LEGACY_REQUEST_WORKSPACE_METHOD, description: 'Legacy helper should be filtered.' },
-            { name: LEGACY_DIRECT_TOOL_CALL_NAME, description: 'Legacy helper should be filtered.' },
-            { name: LEGACY_GET_TOOL_DEFINITIONS_METHOD, description: 'Legacy helper should be filtered.' },
-            { name: LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD, description: 'Legacy helper should be filtered.' },
           ],
         },
       });
@@ -160,8 +153,12 @@ async function startFakeWorkspaceServer(args: {
       return;
     }
     if (message?.method === 'tools/call' && message.params?.name === ECHO_TOOL_NAME) {
-      const value = typeof message.params?.arguments === 'object' && message.params.arguments !== null
-        ? (message.params.arguments as { value?: unknown }).value
+      const toolArgs = typeof message.params?.arguments === 'object' && message.params.arguments !== null
+        ? message.params.arguments as Record<string, unknown>
+        : {};
+      bridgedCallArguments.push(toolArgs);
+      const value = typeof toolArgs === 'object'
+        ? (toolArgs as { value?: unknown }).value
         : undefined;
       if (value === 'schema-error') {
         respondJson(res, {
@@ -225,6 +222,9 @@ async function startFakeWorkspaceServer(args: {
   return {
     host: '127.0.0.1',
     port: address.port,
+    getBridgedCallArguments() {
+      return bridgedCallArguments.map((entry) => ({ ...entry }));
+    },
     async stop() {
       await publisher.stop();
       await new Promise<void>((resolve) => {
@@ -319,6 +319,31 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(String(requestWorkspaceTool?.description ?? ''), /vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions/u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /Read lm-tools:\/\/guide before first use\./u);
   assert.match(String(requestWorkspaceTool?.description ?? ''), /rebind only when the workspace target changes/u);
+  assert.match(String(requestWorkspaceTool?.description ?? ''), /Set title to a short user-facing description/u);
+  assert.deepEqual(
+    (requestWorkspaceTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['title', 'cwd'],
+  );
+  assert.equal(
+    (
+      requestWorkspaceTool?.inputSchema as {
+        properties?: {
+          title?: { description?: unknown; minLength?: unknown };
+        };
+      } | undefined
+    )?.properties?.title?.description,
+    'Required short user-facing description of this workspace bind. Use it as a readable UI title for this helper call.',
+  );
+  assert.equal(
+    (
+      requestWorkspaceTool?.inputSchema as {
+        properties?: {
+          title?: { minLength?: unknown };
+        };
+      } | undefined
+    )?.properties?.title?.minLength,
+    1,
+  );
   assert.equal(
     (requestWorkspaceTool?.inputSchema as { properties?: { cwd?: { description?: unknown } } } | undefined)
       ?.properties?.cwd?.description,
@@ -328,11 +353,12 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(String(directCallTool?.description ?? ''), /Reuse a known ToolDefinition and do not request it again/u);
   assert.match(String(directCallTool?.description ?? ''), /with names containing only tool names whose ToolDefinitions are unknown/u);
   assert.match(String(toolDefinitionsTool?.description ?? ''), /Read ToolDefinitions for bound bridged workspace tools/u);
+  assert.match(String(toolDefinitionsTool?.description ?? ''), /Set title to a short user-facing description/u);
   assert.match(String(toolDefinitionsTool?.description ?? ''), /names contains only exact enabled bridged tool names whose full ToolDefinition is unknown/u);
   assert.match(String(toolDefinitionsTool?.description ?? ''), /never guess or infer a ToolDefinition or inputSchema/u);
   assert.deepEqual(
     (toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
-    ['names'],
+    ['title', 'names'],
   );
   assert.deepEqual(
     (toolDefinitionsTool?.outputSchema as { required?: unknown } | undefined)?.required,
@@ -343,11 +369,37 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
       directCallTool?.inputSchema as {
         properties?: {
           name?: { description?: unknown };
+          title?: { description?: unknown; minLength?: unknown };
           arguments?: { description?: unknown };
         };
+        required?: unknown;
       } | undefined
     )?.properties?.name?.description,
     'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
+  );
+  assert.deepEqual(
+    (directCallTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['title', 'name'],
+  );
+  assert.equal(
+    (
+      directCallTool?.inputSchema as {
+        properties?: {
+          title?: { description?: unknown; minLength?: unknown };
+        };
+      } | undefined
+    )?.properties?.title?.description,
+    'Required short user-facing description of what this call is doing. Use it as a readable UI title for this bridged tool call.',
+  );
+  assert.equal(
+    (
+      directCallTool?.inputSchema as {
+        properties?: {
+          title?: { description?: unknown; minLength?: unknown };
+        };
+      } | undefined
+    )?.properties?.title?.minLength,
+    1,
   );
   assert.equal(
     (
@@ -386,8 +438,29 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
 
   await assert.rejects(
     () => manager.client.callTool({
+      name: REQUEST_WORKSPACE_METHOD,
+      arguments: {
+        cwd: nestedPath,
+      },
+    }),
+    /Invalid params: expected params\.title/u,
+  );
+
+  await assert.rejects(
+    () => manager.client.callTool({
       name: GET_TOOL_DEFINITIONS_METHOD,
       arguments: {
+        names: [ECHO_TOOL_NAME],
+      },
+    }),
+    /title must be a non-empty string/u,
+  );
+
+  await assert.rejects(
+    () => manager.client.callTool({
+      name: GET_TOOL_DEFINITIONS_METHOD,
+      arguments: {
+        title: 'Get tool definitions',
         names: [ECHO_TOOL_NAME],
       },
     }),
@@ -397,6 +470,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const handshake = await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -425,7 +499,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   );
   assert.deepEqual(
     (handshakePayload?.discovery?.toolDefinitionsTool?.inputSchema as { required?: unknown } | undefined)?.required,
-    ['names'],
+    ['title', 'names'],
   );
   assert.deepEqual(
     (handshakePayload?.discovery?.toolDefinitionsTool?.outputSchema as { required?: unknown } | undefined)?.required,
@@ -442,6 +516,14 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(
     String(handshakePayload?.discovery?.callTool?.description ?? ''),
     /pathScope, use its parameter description for the compact syntax summary/u,
+  );
+  assert.match(
+    String(handshakePayload?.discovery?.callTool?.description ?? ''),
+    /Set title to a short user-facing description/u,
+  );
+  assert.deepEqual(
+    (handshakePayload?.discovery?.callTool?.inputSchema as { required?: unknown } | undefined)?.required,
+    ['title', 'name'],
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(handshakePayload?.discovery?.bridgedTools?.[0] ?? {}, 'description'),
@@ -465,6 +547,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   assert.match(getResourceText(handshakeResource), /skip the definition lookup entirely/u);
   assert.match(getResourceText(handshakeResource), /Do not guess or infer ToolDefinitions or inputSchemas/u);
   assert.match(getResourceText(handshakeResource), /Build arguments from the known ToolDefinition inputSchema/u);
+  assert.match(getResourceText(handshakeResource), /title is for the wrapper UI and is not passed to the bridged tool/u);
   assert.match(getResourceText(handshakeResource), /Never perform silent fallback\./u);
   assert.match(getResourceText(handshakeResource), /Shared pathScope syntax/u);
   assert.match(getResourceText(handshakeResource), /Use brace globs, not bare `\|` alternation/u);
@@ -488,6 +571,7 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
   const toolDefinitions = await manager.client.callTool({
     name: GET_TOOL_DEFINITIONS_METHOD,
     arguments: {
+      title: 'Get tool definitions',
       names: [ECHO_TOOL_NAME, 'lm_missingTool'],
     },
   });
@@ -520,16 +604,13 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     REQUEST_WORKSPACE_METHOD,
     DIRECT_TOOL_CALL_NAME,
     GET_TOOL_DEFINITIONS_METHOD,
-    LEGACY_REQUEST_WORKSPACE_METHOD,
-    LEGACY_DIRECT_TOOL_CALL_NAME,
-    LEGACY_GET_TOOL_DEFINITIONS_METHOD,
-    LEGACY_LM_GET_TOOL_DEFINITIONS_METHOD,
   ]) {
     await assert.rejects(
       () => manager.client.callTool({
         name: DIRECT_TOOL_CALL_NAME,
         arguments: {
           name: forbiddenName,
+          title: 'Call forbidden bridged tool',
           arguments: {
             names: [ECHO_TOOL_NAME],
           },
@@ -560,18 +641,34 @@ test('stdio manager handshakes to a running workspace and proxies workspace tool
     name: DIRECT_TOOL_CALL_NAME,
     arguments: {
       name: ECHO_TOOL_NAME,
+      title: 'Echo world',
       arguments: {
         value: 'world',
       },
     },
   });
   assert.equal((bridgeCall.structuredContent as { value?: string }).value, 'world');
+  assert.deepEqual(workspace.getBridgedCallArguments().at(-1), { value: 'world' });
 
   await assert.rejects(
     () => manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
         name: ECHO_TOOL_NAME,
+        arguments: {
+          value: 'missing-title',
+        },
+      },
+    }),
+    /Invalid params: expected arguments\.title/u,
+  );
+
+  await assert.rejects(
+    () => manager.client.callTool({
+      name: DIRECT_TOOL_CALL_NAME,
+      arguments: {
+        name: ECHO_TOOL_NAME,
+        title: 'Trigger schema error',
         arguments: {
           value: 'schema-error',
         },
@@ -624,6 +721,7 @@ test('stdio manager requires rebind for bridged discovery resources after the wo
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: workspaceRoot,
     },
   });
@@ -674,6 +772,7 @@ test('stdio manager keeps tool definition resources removed after bind', async (
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: workspaceRoot,
     },
   });
@@ -706,6 +805,7 @@ test('stdio manager clears bound tools when the workspace server goes offline', 
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: workspaceRoot,
     },
   });
@@ -899,6 +999,7 @@ process.on('SIGINT', () => { void shutdown(); });
   const handshake = await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });

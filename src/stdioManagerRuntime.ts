@@ -37,7 +37,6 @@ import { getPathScopeSpecText } from './pathScopeSpec';
 import {
   buildToolDefinitionsPayload,
   getToolDefinitionsLookupDefinition,
-  LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME,
   LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME,
   parseRequiredToolDefinitionNames,
 } from './toolDefinitionsContract';
@@ -73,9 +72,6 @@ const HEALTH_PATH = '/mcp/health';
 const REQUEST_WORKSPACE_METHOD = 'lmToolsBridge_bindWorkspace';
 const DIRECT_TOOL_CALL_NAME = 'lmToolsBridge_callBridgedTool';
 const GET_TOOL_DEFINITIONS_METHOD = LM_TOOLS_BRIDGE_GET_TOOL_DEFINITIONS_TOOL_NAME;
-const LEGACY_REQUEST_WORKSPACE_METHOD = 'lmToolsBridge.bindWorkspace';
-const LEGACY_DIRECT_TOOL_CALL_NAME = 'lmToolsBridge.callBridgedTool';
-const LEGACY_GET_TOOL_DEFINITIONS_METHOD = 'lmToolsBridge.getToolDefinitions';
 const TOOL_NAMES_RESOURCE_URI = 'lm-tools://tool-names';
 const TOOL_DEFINITIONS_RESOURCE_URI = 'lm-tools://tool-definitions';
 const HEALTH_TIMEOUT_MS = 1200;
@@ -238,7 +234,7 @@ function getInvalidWindowsCwdMessage(): string {
 function getDirectCallNameParamMessage(): string {
   return appendNextStep(
     'Invalid params: expected arguments.name (string).',
-    `call ${DIRECT_TOOL_CALL_NAME} with { name: string, arguments?: object } and set arguments.name to a bridged tool name.`,
+    `call ${DIRECT_TOOL_CALL_NAME} with { title: string, name: string, arguments?: object } and set arguments.name to a bridged tool name.`,
   );
 }
 
@@ -259,19 +255,15 @@ function getDirectCallForbiddenToolNameMessage(): string {
 function isBridgeHelperToolName(name: string): boolean {
   return name === REQUEST_WORKSPACE_METHOD
     || name === DIRECT_TOOL_CALL_NAME
-    || name === GET_TOOL_DEFINITIONS_METHOD
-    || name === LEGACY_REQUEST_WORKSPACE_METHOD
-    || name === LEGACY_DIRECT_TOOL_CALL_NAME
-    || name === LEGACY_GET_TOOL_DEFINITIONS_METHOD
-    || name === LEGACY_LM_GET_TOOL_DEFINITIONS_TOOL_NAME;
+    || name === GET_TOOL_DEFINITIONS_METHOD;
 }
 
 function getRequestWorkspaceToolDescription(): string {
-  return 'If the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`, start here. Read lm-tools://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Input: { cwd: string }.';
+  return 'If the task calls for vscode-tools-like workspace search, code navigation, diagnostics, or VS Code IDE actions, or explicitly includes phrases like `vscode-tools` or `use vscode`, start here. Read lm-tools://guide before first use. Then bind this session to the workspace resolved from an absolute project path or absolute .code-workspace path, and rebind only when the workspace target changes. Set title to a short user-facing description so the tool call is readable in the UI. Input: { title: string, cwd: string }.';
 }
 
 function getDirectToolCallDescription(): string {
-  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { name: string, arguments?: object }.`;
+  return `Read lm-tools://guide before first use. Before calling this bridged tool wrapper, this exact tool's full ToolDefinition must be known from ${GET_TOOL_DEFINITIONS_METHOD}. Reuse a known ToolDefinition and do not request it again. For an unknown ToolDefinition, call ${GET_TOOL_DEFINITIONS_METHOD} with names containing only tool names whose ToolDefinitions are unknown; never guess or infer the inputSchema. Set title to a short user-facing description of what this call is doing so the tool call is readable in the UI. Pass arguments that match the target tool inputSchema. When an argument is named pathScope, use its parameter description for the compact syntax summary and lm-tools://guide for the full syntax. Input: { title: string, name: string, arguments?: object }.`;
 }
 
 function toOfflineDurationSec(startedAt?: number): number | null {
@@ -580,9 +572,14 @@ function getRequestWorkspaceToolDefinition(): WorkspaceToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
+        title: {
+          type: 'string',
+          minLength: 1,
+          description: 'Required short user-facing description of this workspace bind. Use it as a readable UI title for this helper call.',
+        },
         cwd: { type: 'string', description: 'Absolute workspace path to resolve. Use the absolute project root path or the absolute .code-workspace path. Relative paths are invalid.' },
       },
-      required: ['cwd'],
+      required: ['title', 'cwd'],
     },
   };
 }
@@ -595,6 +592,11 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
+        title: {
+          type: 'string',
+          minLength: 1,
+          description: 'Required short user-facing description of what this call is doing. Use it as a readable UI title for this bridged tool call.',
+        },
         name: {
           type: 'string',
           description: 'Bridged tool name to call. Resolve it from discovery.bridgedTools, tools/list, or lm-tools://tool-names.',
@@ -604,7 +606,7 @@ function getDirectToolCallDefinition(): WorkspaceToolDefinition {
           description: 'Optional arguments object for the bridged tool call. Must match the target tool inputSchema.',
         },
       },
-      required: ['name'],
+      required: ['title', 'name'],
     },
   };
 }
@@ -1185,8 +1187,8 @@ async function runGetToolDefinitions(
   server: Server,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  await ensureBridgedDiscoveryResourceReadable(server);
   const names = parseRequiredToolDefinitionNames(args);
+  await ensureBridgedDiscoveryResourceReadable(server);
   return buildToolDefinitionsPayload(session.boundTools, names) as unknown as Record<string, unknown>;
 }
 
@@ -1197,7 +1199,7 @@ function getHandshakeResourceText(): string {
     'This MCP manager requires an explicit workspace binding before workspace tools can be used.',
     '',
     'Bind:',
-    `- Call ${REQUEST_WORKSPACE_METHOD} once per client session with params.cwd set to an absolute project path or .code-workspace path.`,
+    `- Call ${REQUEST_WORKSPACE_METHOD} once per client session with a short user-facing title and params.cwd set to an absolute project path or .code-workspace path.`,
     '- Reuse the current bind; rebind only when the workspace target changes or the bound workspace goes offline.',
     '- Treat returned workspaceFolders/workspaceFile as the validated lmToolsBridge scope.',
     '- Follow guidance.nextSteps from the handshake response.',
@@ -1210,7 +1212,7 @@ function getHandshakeResourceText(): string {
     '- If every needed ToolDefinition is already known, skip the definition lookup entirely and reuse the known ToolDefinition.',
     `- Do not guess or infer ToolDefinitions or inputSchemas from tool names, prior experience, or similar tools; definitions returned by ${GET_TOOL_DEFINITIONS_METHOD} are the source of truth.`,
     '- Build arguments from the known ToolDefinition inputSchema.',
-    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name and arguments object, or call a bridged tool directly only after its ToolDefinition is known.`,
+    `- Call ${DIRECT_TOOL_CALL_NAME} with the bridged tool name, a short user-facing title, and the arguments object; title is for the wrapper UI and is not passed to the bridged tool.`,
     '- If an argument is named pathScope, use its parameter description for the compact syntax summary; the full pathScope syntax is below.',
     '',
     'Routing and recovery:',

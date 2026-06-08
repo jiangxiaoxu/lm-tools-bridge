@@ -6,6 +6,60 @@ Maintenance rule:
 - For each release, keep both `### English` and `### 中文` sections.
 - Keep section order aligned to reduce translation drift.
 
+## [1.0.179] - 2026-06-08
+
+### English
+
+#### Changed
+- Bumped the package version for the helper wrapper title contract update.
+- Required wrapper `title` parameters on `lmToolsBridge_bindWorkspace` and `lmToolsBridge_getToolDefinitions`.
+- Removed legacy helper-name reserved handling so only current underscore `lmToolsBridge_*` helpers are treated as local helper targets.
+
+### 中文
+
+#### Changed
+- 为 helper wrapper title 契约更新递增 package version.
+- 要求 `lmToolsBridge_bindWorkspace` 和 `lmToolsBridge_getToolDefinitions` 也传入 wrapper `title` 参数.
+- 移除旧 helper name 的 reserved handling, 仅当前下划线格式 `lmToolsBridge_*` helper 会被视为本地 helper target.
+
+## [1.0.178] - 2026-06-07
+
+### English
+
+#### Changed
+- Bumped the package version after moving the bridged tool wrapper `title` parameter to the first schema position.
+
+### 中文
+
+#### Changed
+- 在将 bridged tool wrapper 的 `title` 参数移到 schema 第一位后递增 package version.
+
+## [1.0.177] - 2026-06-07
+
+### English
+
+#### Changed
+- Bumped the package version for the bridged tool wrapper title contract release.
+
+### 中文
+
+#### Changed
+- 为 bridged tool wrapper title 契约发布递增 package version.
+
+## [1.0.176] - 2026-06-07
+
+### English
+
+#### Changed
+- Required `lmToolsBridge_callBridgedTool` calls to include a short `title` wrapper parameter for user-facing tool call UI labels.
+- Kept the wrapper `title` separate from target bridged tool arguments so it is not forwarded to workspace tools.
+
+### 中文
+
+#### Changed
+- 要求 `lmToolsBridge_callBridgedTool` 调用包含简短的 `title` wrapper 参数,用于面向用户的工具调用 UI 标题.
+- 保持 wrapper `title` 与目标 bridged tool 参数分离,不会转发给 workspace tools.
+
 ## [1.0.175] - 2026-05-29
 
 ### English

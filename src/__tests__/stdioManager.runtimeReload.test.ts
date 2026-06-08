@@ -457,6 +457,7 @@ test('stdio manager invalidates binding on control notification and requires reb
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -508,6 +509,7 @@ test('stdio manager invalidates binding on control notification and requires reb
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -563,6 +565,7 @@ test('stdio manager rejects a bind that races with a generation cutover', async 
   const bindPromise = manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -593,6 +596,7 @@ test('stdio manager rejects a bind that races with a generation cutover', async 
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -647,6 +651,7 @@ test('stdio manager rejects a bridged tool call that races with a generation cut
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -684,6 +689,7 @@ test('stdio manager rejects a bridged tool call that races with a generation cut
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -738,6 +744,7 @@ test('stdio manager rejects a bridged resource read that races with a generation
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -772,6 +779,7 @@ test('stdio manager rejects a bridged resource read that races with a generation
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -822,6 +830,7 @@ test('stdio manager retries the same generation after a runtime load failure', a
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });
@@ -872,6 +881,7 @@ test('stdio manager retries the same generation after a runtime load failure', a
     () => manager.client.callTool({
       name: REQUEST_WORKSPACE_METHOD,
       arguments: {
+        title: 'Bind workspace',
         cwd: nestedPath,
       },
     }),
@@ -883,6 +893,7 @@ test('stdio manager retries the same generation after a runtime load failure', a
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
         name: ECHO_TOOL_NAME,
+        title: 'Call after fatal reload',
         arguments: {
           value: 'still-dead',
         },
@@ -943,6 +954,7 @@ test('stdio manager lazily applies generation changes and cleans up registry on 
   await manager.client.callTool({
     name: REQUEST_WORKSPACE_METHOD,
     arguments: {
+      title: 'Bind workspace',
       cwd: nestedPath,
     },
   });

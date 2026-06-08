@@ -227,6 +227,7 @@ test('local tool definition lookup contract uses bridge helper name and schemas'
 
   assert.equal(tool.name, 'lmToolsBridge_getToolDefinitions');
   assert.match(tool.description, /Read ToolDefinitions for bound bridged workspace tools/u);
+  assert.match(tool.description, /Set title to a short user-facing description/u);
   assert.match(tool.description, /definitions are unknown/u);
   assert.match(tool.description, /names contains only exact enabled bridged tool names whose full ToolDefinition is unknown/u);
   assert.match(tool.description, /reuse known ToolDefinitions instead/u);
@@ -243,7 +244,23 @@ test('local tool definition lookup contract uses bridge helper name and schemas'
     String((tool.inputSchema.properties as { names?: { description?: unknown } }).names?.description ?? ''),
     /Do not guess or infer ToolDefinitions/u,
   );
-  assert.deepEqual(tool.inputSchema.required, ['names']);
+  assert.equal(
+    (
+      tool.inputSchema.properties as {
+        title?: { description?: unknown; minLength?: unknown };
+      }
+    ).title?.description,
+    'Required short user-facing description of this ToolDefinition lookup. Use it as a readable UI title for this helper call.',
+  );
+  assert.equal(
+    (
+      tool.inputSchema.properties as {
+        title?: { minLength?: unknown };
+      }
+    ).title?.minLength,
+    1,
+  );
+  assert.deepEqual(tool.inputSchema.required, ['title', 'names']);
   assert.deepEqual(tool.outputSchema.required, ['requested', 'tools', 'missing', 'count', 'missingCount']);
   const toolsSchema = (tool.outputSchema.properties as {
     tools?: {
@@ -288,19 +305,26 @@ test('tool definition names parser trims and rejects invalid entries', async () 
   const { parseRequiredToolDefinitionNames } = await loadToolingModule();
 
   assert.deepEqual(
-    parseRequiredToolDefinitionNames({ names: [' lm_getDiagnostics ', 'lm_getDiagnostics', 'lm_qgrepSearchText'] }),
+    parseRequiredToolDefinitionNames({
+      title: 'Get tool definitions',
+      names: [' lm_getDiagnostics ', 'lm_getDiagnostics', 'lm_qgrepSearchText'],
+    }),
     ['lm_getDiagnostics', 'lm_qgrepSearchText'],
   );
   assert.throws(
-    () => parseRequiredToolDefinitionNames({ names: [] }),
+    () => parseRequiredToolDefinitionNames({ names: ['lm_getDiagnostics'] }),
+    /title must be a non-empty string/u,
+  );
+  assert.throws(
+    () => parseRequiredToolDefinitionNames({ title: 'Get tool definitions', names: [] }),
     /names must be a non-empty array of tool name strings/u,
   );
   assert.throws(
-    () => parseRequiredToolDefinitionNames({ names: ['lm_getDiagnostics', ''] }),
+    () => parseRequiredToolDefinitionNames({ title: 'Get tool definitions', names: ['lm_getDiagnostics', ''] }),
     /names\[1\] must be a non-empty string/u,
   );
   assert.throws(
-    () => parseRequiredToolDefinitionNames({ names: ['lm_getDiagnostics', 12] }),
+    () => parseRequiredToolDefinitionNames({ title: 'Get tool definitions', names: ['lm_getDiagnostics', 12] }),
     /names\[1\] must be a string/u,
   );
 });

@@ -1,8 +1,8 @@
 # Stdio Manager And Bridge Flow
 
 ## Bind And Discovery
-- `lmToolsBridge_bindWorkspace` is the session-binding entrypoint.
-- Agents should read `lm-tools://guide` before first use, bind with an absolute project path or `.code-workspace` path, and rebind only when the workspace target changes or the bound workspace goes offline.
+- `lmToolsBridge_bindWorkspace` is the session-binding entrypoint and requires a non-empty wrapper `title` plus an absolute `cwd`.
+- Agents should read `lm-tools://guide` before first use, bind with a short user-facing title plus an absolute project path or `.code-workspace` path, and rebind only when the workspace target changes or the bound workspace goes offline.
 - Workspace instances publish deterministic discovery pipes derived from normalized `folder|...` or `workspace-file|...` identities.
 - Discovery candidate order is upward and exact; `.code-workspace` candidates are checked before folder candidates at the same level.
 - Unsaved untitled multi-root workspaces are not published for manager discovery; users must save them as a real `.code-workspace` file first.
@@ -13,6 +13,8 @@
 - `discovery.bridgedTools` is names-only; names alone are not ToolDefinitions.
 - `discovery.toolDefinitionsTool` describes `lmToolsBridge_getToolDefinitions` and includes input/output schemas.
 - Before invoking a bridged tool, have that exact tool's full ToolDefinition from `lmToolsBridge_getToolDefinitions`.
+- `lmToolsBridge_getToolDefinitions` requires a non-empty wrapper `title` plus unknown bridged tool `names`.
+- `lmToolsBridge_callBridgedTool` requires a non-empty `title` wrapper parameter for a short user-facing UI label; the manager does not pass it to the target bridged tool.
 - Use `lmToolsBridge_getToolDefinitions` only with tool names whose ToolDefinitions are unknown.
 - Reuse known ToolDefinitions; do not request the same known tool again.
 - Do not guess or infer ToolDefinitions or input schemas; definitions returned by the helper are the source of truth.
@@ -20,7 +22,7 @@
 - For arguments named `pathScope`, use the compact syntax summary in the parameter description and the full syntax in `lm-tools://guide`.
 - During bind, the manager reads the workspace-internal `lm-tools://tool-definitions` resource for full ToolDefinitions. The stdio MCP frontend exposes `lm-tools://guide`, `lm-tools://tool-names`, and the shared Apps UI resource `ui://lm-tools-bridge/tool-result-card.html`.
 - If full ToolDefinitions cannot be read, parsed, or matched to visible bridged tools, bind fails with an MCP internal error; the manager must not silently fall back to `tools/list` entries as full definitions.
-- `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target.
+- `lmToolsBridge_getToolDefinitions` requires an active workspace bind and is rejected as a `lmToolsBridge_callBridgedTool` target; only current underscore helper names are reserved helper targets.
 - Tool-definition payloads do not include helper metadata like `toolUri` or `usageHint`.
 - Bridged tool descriptors include `Tool.title`, `_meta.ui.resourceUri`, `_meta["ui/resourceUri"]`, `_meta["openai/outputTemplate"]`, and short `openai/toolInvocation` status strings so Apps-aware clients can identify the result card template.
 - Tool results keep natural-language `content` fallback, preserve `structuredContent`, and may include result `_meta` for component-only hydration data.

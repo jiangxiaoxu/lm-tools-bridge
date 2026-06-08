@@ -100,6 +100,7 @@ export async function run(): Promise<void> {
           const handshake = await client.callTool({
             name: 'lmToolsBridge_bindWorkspace',
             arguments: {
+              title: 'Bind workspace',
               cwd: workspaceTarget,
             },
           });
@@ -127,6 +128,7 @@ export async function run(): Promise<void> {
           const definitions = await client.callTool({
             name: 'lmToolsBridge_getToolDefinitions',
             arguments: {
+              title: 'Get tool definitions',
               names: ['lm_getDiagnostics'],
             },
           });

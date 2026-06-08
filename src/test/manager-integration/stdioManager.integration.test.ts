@@ -603,6 +603,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const handshake = await withTimeout('binding workspace for qgrep integration', manager.client.callTool({
       name: REQUEST_WORKSPACE_METHOD,
       arguments: {
+        title: 'Bind workspace',
         cwd: workspace.nestedCwd,
       },
     }), 180_000);
@@ -632,6 +633,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const filesResult = await withTimeout('calling qgrep files through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_FILES_TOOL_NAME,
         arguments: {
           query: FILE_QUERY,
@@ -650,6 +652,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const statusResult = await withTimeout('calling qgrep status through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_STATUS_TOOL_NAME,
         arguments: {},
       },
@@ -665,6 +668,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const textResult = await withTimeout('calling literal qgrep search through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_QUERY,
@@ -694,6 +698,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const pipeTextResult = await withTimeout('calling union qgrep search through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_PIPE_QUERY,
@@ -728,6 +733,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const spacePipeTextResult = await withTimeout('calling whitespace union qgrep search through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_SPACE_PIPE_QUERY,
@@ -762,6 +768,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const droppedSpacePipeTextResult = await withTimeout('calling dropped-branch qgrep search through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_DROPPED_SPACE_PIPE_QUERY,
@@ -796,6 +803,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const fallbackPipeTextResult = await withTimeout('calling fallback qgrep search through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_FALLBACK_PIPE_QUERY,
@@ -830,6 +838,7 @@ test('stdio manager auto-starts real VS Code and proxies qgrep tools', {
     const contextClampTextResult = await withTimeout('calling context-clamped qgrep search through bridged tool', manager.client.callTool({
       name: DIRECT_TOOL_CALL_NAME,
       arguments: {
+        title: 'Call bridged tool',
         name: QGREP_TEXT_TOOL_NAME,
         arguments: {
           query: TEXT_QUERY,
@@ -904,6 +913,7 @@ test('stdio manager applies notified and lazy runtime generations without reconn
     await withTimeout('binding workspace before generation cutover test', manager.client.callTool({
       name: REQUEST_WORKSPACE_METHOD,
       arguments: {
+        title: 'Bind workspace',
         cwd: workspace.nestedCwd,
       },
     }), 180_000);
@@ -989,6 +999,7 @@ test('stdio manager applies notified and lazy runtime generations without reconn
       () => withTimeout('triggering lazy generation reload with bind', connectedManager.client.callTool({
         name: REQUEST_WORKSPACE_METHOD,
         arguments: {
+          title: 'Bind workspace',
           cwd: workspace.nestedCwd,
         },
       }), 180_000),
@@ -997,6 +1008,7 @@ test('stdio manager applies notified and lazy runtime generations without reconn
     await withTimeout('rebinding after lazy cutover before broken-runtime test', manager.client.callTool({
       name: REQUEST_WORKSPACE_METHOD,
       arguments: {
+        title: 'Bind workspace',
         cwd: workspace.nestedCwd,
       },
     }), 180_000);
@@ -1029,6 +1041,7 @@ test('stdio manager applies notified and lazy runtime generations without reconn
       () => withTimeout('rebinding after fatal runtime reload failure', connectedManager.client.callTool({
         name: REQUEST_WORKSPACE_METHOD,
         arguments: {
+          title: 'Bind workspace',
           cwd: workspace.nestedCwd,
         },
       }), 180_000),
